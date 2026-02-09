@@ -29,7 +29,22 @@ class CompareInput(BaseModel):
     company1: str = Field(..., description="First company to compare")
     company2: str = Field(..., description="Second company to compare")
     company3: Optional[str] = Field(None, description="Optional third company")
+    user_id: str = Field(..., description="User identifier")
     thread_id: Optional[str] = Field(None, description="Optional thread_id for conversation continuity")
+
+
+class HealthStatusResponse(BaseModel):
+    status: str
+    agent_initialized: bool
+    cache_initialized: bool
+    timestamp: str
+
+
+class CapabilitiesResponse(BaseModel):
+    document_qa: List[str]
+    company_comparison: List[str]
+    data_sources: List[str]
+    intelligent_features: List[str]
 
 
 # Global references (set by main app)
@@ -257,9 +272,12 @@ async def ask_agent(
 
 
 @router.post("/compare")
-async def compare_companies(payload: CompareInput):
+async def compare_companies(
+    payload: CompareInput,
+    db: Session = Depends(get_db_session)
+):
     """
-    Handle company comparison queries.
+    Handle company comparison queries with chat persistence.
     Creates a TEMPORARY Vector DB instance with specified companies.
     Does NOT affect portfolio-scoped DB instances.
     """
@@ -270,6 +288,7 @@ async def compare_companies(payload: CompareInput):
         company1 = payload.company1
         company2 = payload.company2
         company3 = payload.company3
+        user_id = payload.user_id
         
         # Validate input
         if not company1 or not company2:
@@ -283,16 +302,18 @@ async def compare_companies(payload: CompareInput):
             companies.append(company3.lower())
             comparison_str += f" vs {company3}"
         
-        # This does NOT affect any portfolio DB instances!
-        # Use provided thread_id or generate a new one
-        thread_id = payload.thread_id or f"comparison_{uuid.uuid4()}"
-
-        vectordb_mgr = get_vectordb_manager()
-        db_instance, company_filter = vectordb_mgr.create_temporary(thread_id, companies)
+        # Generate session ID if not provided
+        thread_id = payload.thread_id or f"comparison_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        print(f"Compare mode: Using temporary Vector DB")
-        print(f"   Companies: {companies}")
-        print(f"   Portfolio DB instances unaffected")
+        # Create or get chat session for persistence
+        chat_session = ChatService.create_or_get_chat_session(
+            db=db,
+            session_id=thread_id,
+            user_id=user_id,
+            agent_type=AgentType.RAG,
+            portfolio_id=None,  # Comparisons are not portfolio-linked
+            title=f"Comparison: {comparison_str}"
+        )
         
         # Predefined comparison prompt
         query = f"""
@@ -302,6 +323,22 @@ Compare {comparison_str} 2024:
 - Financial position (total assets, total debts)
 - Business fundamentals (profit drivers, risk factors)
 """
+        
+        # Save user message
+        ChatService.add_message(
+            db=db,
+            session_id=thread_id,
+            role=MessageRole.USER,
+            content=f"Compare {comparison_str}"
+        )
+
+        vectordb_mgr = get_vectordb_manager()
+        db_instance, company_filter = vectordb_mgr.create_temporary(thread_id, companies)
+        
+        print(f"Compare mode: Using temporary Vector DB")
+        print(f"   Companies: {companies}")
+        print(f"   Portfolio DB instances unaffected")
+        print(f"   Session ID: {thread_id}")
         
         # Use provided thread_id or generate a new one - MOVED UP
         # thread_id = payload.thread_id or f"comparison_{uuid.uuid4()}"
@@ -340,10 +377,31 @@ Compare {comparison_str} 2024:
         chart_url = result.get("chart_url")
         chart_filename = result.get("chart_filename")
         
+        # Save assistant message with metadata
+        ChatService.add_message(
+            db=db,
+            session_id=thread_id,
+            role=MessageRole.ASSISTANT,
+            content=answer,
+            metadata={
+                "comparison_companies": companies,
+                "company1": company1,
+                "company2": company2,
+                "company3": company3,
+                "chart_url": chart_url,
+                "chart_filename": chart_filename,
+                "vectorstore_searched": result.get("vectorstore_searched", False),
+                "web_searched": result.get("web_searched", False),
+                "document_count": len(result.get("documents", [])),
+                "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5]
+            }
+        )
+        
         print(f"Comparison Query: {comparison_str}")
         print(f"Thread ID: {thread_id}")
         print(f"Chart URL: {chart_url}")
         print(f"Answer: {answer[:200]}...")
+        print(f"Chat persisted to database")
         
         # Prepare response
         response_data = {
@@ -396,3 +454,162 @@ Compare {comparison_str} 2024:
     except Exception as e:
         print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/health", response_model=HealthStatusResponse)
+async def health_check():
+    """
+    Health check for RAG system.
+    
+    Checks:
+    - RAG agent is initialized
+    - Semantic cache is initialized
+    - System is ready to handle queries
+    """
+    overall_healthy = agent is not None and semantic_cache is not None
+    status = "healthy" if overall_healthy else "unhealthy"
+    
+    return HealthStatusResponse(
+        status=status,
+        agent_initialized=agent is not None,
+        cache_initialized=semantic_cache is not None,
+        timestamp=datetime.datetime.now().isoformat()
+    )
+
+
+@router.get("/capabilities", response_model=CapabilitiesResponse)
+async def get_capabilities():
+    """Get information about available RAG capabilities"""
+    return CapabilitiesResponse(
+        document_qa=[
+            "Portfolio-based document filtering",
+            "Financial report Q&A (10-Ks, earnings calls, annual reports)",
+            "Multi-document context synthesis",
+            "Source citations and document references",
+            "Web search fallback for missing information",
+            "Semantic caching for faster responses",
+            "Human-in-the-loop clarification requests",
+            "Sub-query decomposition for complex questions"
+        ],
+        company_comparison=[
+            "Multi-company financial comparison (2-3 companies)",
+            "Revenue and earnings growth analysis",
+            "R&D investment comparison",
+            "Financial position analysis (assets, debts)",
+            "Risk factor identification",
+            "Visual chart generation for comparisons",
+            "Side-by-side metric analysis"
+        ],
+        data_sources=[
+            "Financial documents (PDF, DOCX)",
+            "10-K annual reports",
+            "10-Q quarterly reports",
+            "Earnings call transcripts",
+            "Annual reports",
+            "Web search results (fallback)",
+            "Chroma vector database"
+        ],
+        intelligent_features=[
+            "Portfolio-scoped vector database filtering",
+            "Context-aware conversation memory (LangGraph)",
+            "Automatic quality assessment of retrieved documents",
+            "Intelligent web fallback when documents insufficient",
+            "Citation extraction and source tracking",
+            "Session-based conversation persistence",
+            "Semantic similarity caching",
+            "Multi-document summarization strategies"
+        ]
+    )
+
+
+@router.get("/sessions/{session_id}")
+async def get_session_history(session_id: str):
+    """
+    Get conversation history for a specific RAG session.
+    
+    Returns the LangGraph conversation state including all messages
+    and intermediate states for this session.
+    """
+    if not agent:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG agent not initialized."
+        )
+    
+    try:
+        state = await agent.aget_state(
+            config={"configurable": {"thread_id": session_id}}
+        )
+        messages = state.values.get('messages', []) if state.values else []
+        
+        # Serialize messages
+        serialized_messages = []
+        for msg in messages:
+            serialized_messages.append({
+                "type": msg.type,
+                "content": msg.content,
+                "name": getattr(msg, 'name', None),
+                "id": getattr(msg, 'id', None)
+            })
+        
+        return {
+            "session_id": session_id,
+            "message_count": len(serialized_messages),
+            "messages": serialized_messages,
+            "vectorstore_searched": state.values.get("vectorstore_searched", False) if state.values else False,
+            "web_searched": state.values.get("web_searched", False) if state.values else False,
+            "company_filter": state.values.get("company_filter", []) if state.values else []
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving session: {str(e)}"
+        )
+
+
+@router.get("/portfolio/{portfolio_id}/sessions")
+async def get_portfolio_rag_sessions(
+    portfolio_id: int,
+    db: Session = Depends(get_db_session)
+):
+    """
+    Get all RAG sessions (ask + compare) linked to a portfolio.
+    
+    Returns all chat sessions where agent_type='rag' and 
+    portfolio_id matches the requested portfolio.
+    """
+    # Verify portfolio exists
+    portfolio = PortfolioService.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    
+    # Get all RAG sessions for this portfolio
+    sessions = ChatService.get_portfolio_sessions(
+        db=db,
+        portfolio_id=portfolio_id,
+        agent_type=AgentType.RAG
+    )
+    
+    # Build response with message counts
+    result = []
+    for session in sessions:
+        message_count = len(session.messages)
+        result.append({
+            "session_id": session.session_id,
+            "user_id": session.user_id,
+            "agent_type": session.agent_type.value,
+            "portfolio_id": session.portfolio_id,
+            "title": session.title,
+            "is_active": session.is_active,
+            "message_count": message_count,
+            "created_at": session.created_at.isoformat(),
+            "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None
+        })
+    
+    return {
+        "portfolio_id": portfolio_id,
+        "portfolio_name": portfolio.name,
+        "companies": portfolio.company_names,
+        "session_count": len(result),
+        "sessions": result
+    }
