@@ -1,0 +1,10 @@
+/.env
+/__pycache__
+/data
+/venv
+service_account.json
+logs/
+output/
+*.db
+.DS_Store
+*.png

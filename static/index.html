@@ -1,0 +1,1195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic RAG - Portfolio Manager</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 1200px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+
+        .btn-secondary:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #f56565;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #e53e3e;
+        }
+
+        .btn-success {
+            background: #48bb78;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #38a169;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .view {
+            display: none;
+        }
+
+        .view.active {
+            display: block;
+        }
+
+        /* Login View */
+        .login-view {
+            max-width: 400px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .login-view h2 {
+            color: #2d3748;
+            margin-bottom: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #4a5568;
+            font-weight: 500;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        /* Portfolio View */
+        .portfolio-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .portfolio-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .portfolio-card {
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .portfolio-card:hover {
+            border-color: #667eea;
+            transform: translateY(-4px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+        }
+
+        .portfolio-card.active {
+            border-color: #667eea;
+            background: #f7fafc;
+        }
+
+        .portfolio-card h3 {
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+
+        .portfolio-card .companies {
+            color: #718096;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .portfolio-card .badge {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-right: 8px;
+            margin-top: 8px;
+        }
+
+        .portfolio-actions {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .portfolio-actions button {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        /* Chat View */
+        .chat-container {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            height: 600px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: #f7fafc;
+            padding: 15px 20px;
+            border-bottom: 2px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chat-info {
+            font-size: 14px;
+            color: #4a5568;
+        }
+
+        .chat-messages {
+            padding: 20px;
+            overflow-y: auto;
+            background: #fafafa;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            text-align: right;
+        }
+
+        .message-content {
+            display: inline-block;
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            text-align: left;
+        }
+
+        .message.user .message-content {
+            background: #667eea;
+            color: white;
+        }
+
+        .message.assistant .message-content {
+            background: white;
+            color: #2d3748;
+            border: 2px solid #e2e8f0;
+        }
+
+        .message-meta {
+            font-size: 12px;
+            color: #a0aec0;
+            margin-top: 5px;
+        }
+
+        .chat-input {
+            padding: 20px;
+            background: white;
+            border-top: 2px solid #e2e8f0;
+            display: flex;
+            gap: 10px;
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        /* Compare View */
+        .compare-form {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .compare-result {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f7fafc;
+            border-radius: 12px;
+            border: 2px solid #e2e8f0;
+        }
+
+        .compare-result img {
+            max-width: 100%;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-header h2 {
+            color: #2d3748;
+        }
+
+        .close-modal {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #a0aec0;
+        }
+
+        .close-modal:hover {
+            color: #2d3748;
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255,255,255,0.9);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+
+        .loading-overlay.active {
+            display: flex;
+        }
+
+        .loading-content {
+            text-align: center;
+        }
+
+        .loading-text {
+            margin-top: 10px;
+            color: #4a5568;
+            font-weight: 500;
+        }
+
+        /* Navigation Tabs */
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 0;
+        }
+
+        .nav-tab {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: #718096;
+            transition: all 0.3s;
+        }
+
+        .nav-tab:hover {
+            color: #667eea;
+        }
+
+        .nav-tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        /* Alerts */
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            animation: slideIn 0.3s;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateY(-20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .alert-success {
+            background: #c6f6d5;
+            color: #22543d;
+            border: 1px solid #9ae6b4;
+        }
+
+        .alert-error {
+            background: #fed7d7;
+            color: #742a2a;
+            border: 1px solid #fc8181;
+        }
+
+        .alert-info {
+            background: #bee3f8;
+            color: #2c5282;
+            border: 1px solid #90cdf4;
+        }
+
+        /* Settings Link */
+        .settings-link {
+            margin-top: 20px;
+            text-align: center;
+            padding: 15px;
+            background: #f7fafc;
+            border-radius: 8px;
+        }
+
+        .settings-link label {
+            margin-right: 10px;
+            color: #4a5568;
+            font-weight: 500;
+        }
+
+        .settings-link input {
+            padding: 8px 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🚀 Agentic RAG Portfolio Manager</h1>
+            <div class="user-info">
+                <span id="userDisplay" style="display: none;"></span>
+                <button id="logoutBtn" class="btn btn-secondary" style="display: none;">Logout</button>
+            </div>
+        </div>
+
+        <div class="content">
+            <!-- Login View -->
+            <div id="loginView" class="view active">
+                <div class="login-view">
+                    <h2>👋 Welcome</h2>
+                    <div class="form-group">
+                        <label for="userId">User ID</label>
+                        <input type="text" id="userId" placeholder="Enter your user ID" required>
+                    </div>
+                    <div class="settings-link">
+                        <label for="apiUrl">API URL:</label>
+                        <input type="text" id="apiUrl" value="http://localhost:8000" placeholder="http://localhost:8000 or localhost:8000">
+                        <div style="font-size: 12px; color: #718096; margin-top: 5px;">
+                            ✓ You can use: localhost:8000 or http://localhost:8000
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="app.login()" style="width: 100%; margin-top: 20px;">Login</button>
+                </div>
+            </div>
+
+            <!-- Main App View -->
+            <div id="appView" class="view">
+                <div class="nav-tabs">
+                    <button class="nav-tab active" onclick="app.switchTab('portfolios', this)">📁 Portfolios</button>
+                    <button class="nav-tab" onclick="app.switchTab('chat', this)">💬 Chat</button>
+                    <button class="nav-tab" onclick="app.switchTab('compare', this)">📊 Compare</button>
+                </div>
+
+                <!-- Portfolios Tab -->
+                <div id="portfoliosTab" class="tab-content active">
+                    <div class="portfolio-header">
+                        <h2>Your Portfolios</h2>
+                        <button class="btn btn-primary" onclick="app.showCreatePortfolio()">+ Create Portfolio</button>
+                    </div>
+                    <div id="alertContainer"></div>
+                    <div id="portfolioGrid" class="portfolio-grid">
+                        <!-- Portfolios will be loaded here -->
+                    </div>
+                </div>
+
+                <!-- Chat Tab -->
+                <div id="chatTab" class="tab-content" style="display: none;">
+                    <div id="chatAlert"></div>
+                    <div class="chat-container">
+                        <div class="chat-header">
+                            <div class="chat-info">
+                                <strong id="activePortfolioName">No portfolio selected</strong>
+                                <div style="font-size: 12px; color: #a0aec0;" id="activeCompanies">
+                                    Select a portfolio to start chatting
+                                </div>
+                            </div>
+                            <button class="btn btn-danger" onclick="app.clearChat()" style="padding: 8px 16px; font-size: 12px;">Clear Chat</button>
+                        </div>
+                        <div id="chatMessages" class="chat-messages">
+                            <!-- Messages will appear here -->
+                        </div>
+                        <div class="chat-input">
+                            <input type="text" id="chatInput" placeholder="Type your question..." onkeypress="if(event.key==='Enter') app.sendMessage()">
+                            <button class="btn btn-primary" onclick="app.sendMessage()">Send</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Compare Tab -->
+                <div id="compareTab" class="tab-content" style="display: none;">
+                    <div class="compare-form">
+                        <h2>Compare Companies</h2>
+                        <div class="form-group">
+                            <label for="company1">Company 1 *</label>
+                            <input type="text" id="company1" placeholder="e.g., Apple">
+                        </div>
+                        <div class="form-group">
+                            <label for="company2">Company 2 *</label>
+                            <input type="text" id="company2" placeholder="e.g., Microsoft">
+                        </div>
+                        <div class="form-group">
+                            <label for="company3">Company 3 (Optional)</label>
+                            <input type="text" id="company3" placeholder="e.g., Google">
+                        </div>
+                        <button class="btn btn-success" onclick="app.compareCompanies()" style="width: 100%;">Compare</button>
+                        <div id="compareResult" class="compare-result" style="display: none;">
+                            <!-- Comparison results will appear here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create/Edit Portfolio Modal -->
+    <div id="portfolioModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Create Portfolio</h2>
+                <button class="close-modal" onclick="app.closeModal()">&times;</button>
+            </div>
+            <div class="form-group">
+                <label for="portfolioName">Portfolio Name *</label>
+                <input type="text" id="portfolioName" placeholder="e.g., Tech Giants">
+            </div>
+            <div class="form-group">
+                <label for="portfolioCompanies">Companies (comma-separated) *</label>
+                <input type="text" id="portfolioCompanies" placeholder="e.g., Apple, Microsoft, Google">
+            </div>
+            <div class="form-group">
+                <label for="portfolioDescription">Description</label>
+                <textarea id="portfolioDescription" rows="3" placeholder="Optional description"></textarea>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="btn btn-primary" onclick="app.savePortfolio()" style="flex: 1;">Save</button>
+                <button class="btn btn-secondary" onclick="app.closeModal()" style="flex: 1;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <div class="loading-text">Processing...</div>
+        </div>
+    </div>
+
+    <script>
+        const app = {
+            state: {
+                userId: null,
+                apiUrl: window.location.protocol + '//' + window.location.hostname + ':8000',
+                portfolios: [],
+                activePortfolio: null,
+                activeSession: null,
+                editingPortfolio: null
+            },
+
+            init() {
+                // Load saved state from localStorage
+                const savedState = localStorage.getItem('ragAppState');
+                if (savedState) {
+                    const parsed = JSON.parse(savedState);
+                    this.state.userId = parsed.userId;
+                    this.state.apiUrl = parsed.apiUrl || 'http://localhost:8000';
+                    
+                    // Ensure API URL has protocol
+                    if (!this.state.apiUrl.startsWith('http://') && !this.state.apiUrl.startsWith('https://')) {
+                        this.state.apiUrl = 'http://' + this.state.apiUrl;
+                    }
+                    
+                    this.state.activePortfolio = parsed.activePortfolio;
+                    this.state.activeSession = parsed.activeSession;
+                    
+                    // Auto-login if user was logged in
+                    if (this.state.userId) {
+                        document.getElementById('userId').value = this.state.userId;
+                        document.getElementById('apiUrl').value = this.state.apiUrl;
+                        this.login(true);
+                    }
+                } else {
+                    // Default to localhost:8000
+                    this.state.apiUrl = 'http://localhost:8000';
+                    document.getElementById('apiUrl').value = this.state.apiUrl;
+                }
+
+                // Load chat history
+                this.loadChatHistory();
+            },
+
+            saveState() {
+                localStorage.setItem('ragAppState', JSON.stringify({
+                    userId: this.state.userId,
+                    apiUrl: this.state.apiUrl,
+                    activePortfolio: this.state.activePortfolio,
+                    activeSession: this.state.activeSession
+                }));
+            },
+
+            async login(silent = false) {
+                const userIdInput = document.getElementById('userId');
+                const apiUrlInput = document.getElementById('apiUrl');
+                
+                const userId = userIdInput.value.trim();
+                let apiUrl = apiUrlInput.value.trim();
+                
+                if (!userId) {
+                    this.showAlert('Please enter a user ID', 'error');
+                    return;
+                }
+
+                // Ensure API URL has protocol
+                if (apiUrl && !apiUrl.startsWith('http://') && !apiUrl.startsWith('https://')) {
+                    apiUrl = 'http://' + apiUrl;
+                }
+                
+                // Default to localhost if empty
+                if (!apiUrl) {
+                    apiUrl = 'http://localhost:8000';
+                }
+
+                this.state.userId = userId;
+                this.state.apiUrl = apiUrl;
+                this.saveState();
+
+                // Show app view
+                document.getElementById('loginView').classList.remove('active');
+                document.getElementById('appView').classList.add('active');
+                document.getElementById('userDisplay').textContent = `👤 ${userId}`;
+                document.getElementById('userDisplay').style.display = 'inline';
+                document.getElementById('logoutBtn').style.display = 'inline';
+
+                if (!silent) {
+                    this.showAlert('Logged in successfully!', 'success');
+                }
+
+                // Load portfolios
+                await this.loadPortfolios();
+
+                // If there's an active session, restore it
+                if (this.state.activeSession) {
+                    await this.restoreSession();
+                }
+            },
+
+            logout() {
+                localStorage.removeItem('ragAppState');
+                localStorage.removeItem('chatHistory');
+                this.state = {
+                    userId: null,
+                    apiUrl: 'http://localhost:8000',
+                    portfolios: [],
+                    activePortfolio: null,
+                    activeSession: null,
+                    editingPortfolio: null
+                };
+                document.getElementById('loginView').classList.add('active');
+                document.getElementById('appView').classList.remove('active');
+                document.getElementById('userDisplay').style.display = 'none';
+                document.getElementById('logoutBtn').style.display = 'none';
+                location.reload();
+            },
+
+            showLoading(show = true) {
+                document.getElementById('loadingOverlay').classList.toggle('active', show);
+            },
+
+            showAlert(message, type = 'info', container = 'alertContainer') {
+                const alertDiv = document.createElement('div');
+                alertDiv.className = `alert alert-${type}`;
+                alertDiv.textContent = message;
+                
+                const alertContainer = document.getElementById(container);
+                alertContainer.innerHTML = '';
+                alertContainer.appendChild(alertDiv);
+                
+                setTimeout(() => alertDiv.remove(), 5000);
+            },
+
+            switchTab(tab, sourceElement = null) {
+                // Update tab buttons
+                document.querySelectorAll('.nav-tab').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                
+                // If called from event, use event.target, otherwise find by tab name
+                if (sourceElement) {
+                    sourceElement.classList.add('active');
+                } else {
+                    const tabButtons = document.querySelectorAll('.nav-tab');
+                    if (tab === 'portfolios') tabButtons[0]?.classList.add('active');
+                    else if (tab === 'chat') tabButtons[1]?.classList.add('active');
+                    else if (tab === 'compare') tabButtons[2]?.classList.add('active');
+                }
+
+                // Update tab content
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.style.display = 'none';
+                });
+
+                if (tab === 'portfolios') {
+                    document.getElementById('portfoliosTab').style.display = 'block';
+                } else if (tab === 'chat') {
+                    document.getElementById('chatTab').style.display = 'block';
+                    // Update chat header when switching to chat tab
+                    this.updateChatHeader();
+                } else if (tab === 'compare') {
+                    document.getElementById('compareTab').style.display = 'block';
+                }
+            },
+
+            async apiCall(endpoint, options = {}) {
+                try {
+                    // Ensure API URL has protocol
+                    let apiUrl = this.state.apiUrl;
+                    if (!apiUrl.startsWith('http://') && !apiUrl.startsWith('https://')) {
+                        apiUrl = 'http://' + apiUrl;
+                    }
+                    
+                    const url = `${apiUrl}${endpoint}`;
+                    console.log('🌐 API Call:', url);
+                    console.log('📤 Method:', options.method || 'GET');
+                    if (options.body) {
+                        console.log('📦 Payload:', options.body);
+                    }
+                    
+                    const response = await fetch(url, {
+                        ...options,
+                        mode: 'cors', // Explicitly set CORS mode
+                        headers: {
+                            'Content-Type': 'application/json',
+                            ...options.headers
+                        }
+                    });
+
+                    console.log('📥 Response status:', response.status);
+
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+                        console.error('❌ API Error:', error);
+                        throw new Error(error.detail || 'API request failed');
+                    }
+
+                    const data = await response.json();
+                    console.log('✅ API Success:', data);
+                    return data;
+                } catch (error) {
+                    console.error('❌ API Error Details:', {
+                        message: error.message,
+                        stack: error.stack,
+                        url: `${this.state.apiUrl}${endpoint}`
+                    });
+                    throw error;
+                }
+            },
+
+            async loadPortfolios() {
+                try {
+                    this.showLoading();
+                    const portfolios = await this.apiCall(`/portfolios/user/${this.state.userId}`);
+                    this.state.portfolios = portfolios;
+                    this.renderPortfolios();
+                } catch (error) {
+                    this.showAlert(`Failed to load portfolios: ${error.message}`, 'error');
+                } finally {
+                    this.showLoading(false);
+                }
+            },
+
+            renderPortfolios() {
+                const grid = document.getElementById('portfolioGrid');
+                
+                if (this.state.portfolios.length === 0) {
+                    grid.innerHTML = '<p style="text-align: center; color: #a0aec0; padding: 40px;">No portfolios yet. Create one to get started!</p>';
+                    return;
+                }
+
+                grid.innerHTML = this.state.portfolios.map(portfolio => `
+                    <div class="portfolio-card ${this.state.activePortfolio?.id === portfolio.id ? 'active' : ''}" 
+                         onclick="app.selectPortfolio(${portfolio.id})">
+                        <h3>${portfolio.name}</h3>
+                        <div class="companies">${portfolio.company_names.length} companies</div>
+                        ${portfolio.company_names.map(c => `<span class="badge">${c}</span>`).join('')}
+                        ${portfolio.description ? `<p style="margin-top: 10px; color: #718096; font-size: 14px;">${portfolio.description}</p>` : ''}
+                        <div class="portfolio-actions" onclick="event.stopPropagation()">
+                            <button class="btn btn-secondary" onclick="app.editPortfolio(${portfolio.id})">Edit</button>
+                            <button class="btn btn-danger" onclick="app.deletePortfolio(${portfolio.id})">Delete</button>
+                            ${this.state.activePortfolio?.id === portfolio.id ? 
+                                '<span style="color: #48bb78; font-size: 12px; font-weight: 600;">✓ Active</span>' : 
+                                '<button class="btn btn-success" onclick="app.activatePortfolio(${portfolio.id})">Activate</button>'}
+                        </div>
+                    </div>
+                `).join('');
+            },
+
+            showCreatePortfolio() {
+                this.state.editingPortfolio = null;
+                document.getElementById('modalTitle').textContent = 'Create Portfolio';
+                document.getElementById('portfolioName').value = '';
+                document.getElementById('portfolioCompanies').value = '';
+                document.getElementById('portfolioDescription').value = '';
+                document.getElementById('portfolioModal').classList.add('active');
+            },
+
+            editPortfolio(portfolioId) {
+                const portfolio = this.state.portfolios.find(p => p.id === portfolioId);
+                if (!portfolio) return;
+
+                this.state.editingPortfolio = portfolio;
+                document.getElementById('modalTitle').textContent = 'Edit Portfolio';
+                document.getElementById('portfolioName').value = portfolio.name;
+                document.getElementById('portfolioCompanies').value = portfolio.company_names.join(', ');
+                document.getElementById('portfolioDescription').value = portfolio.description || '';
+                document.getElementById('portfolioModal').classList.add('active');
+            },
+
+            closeModal() {
+                document.getElementById('portfolioModal').classList.remove('active');
+                this.state.editingPortfolio = null;
+            },
+
+            async savePortfolio() {
+                const name = document.getElementById('portfolioName').value.trim();
+                const companiesStr = document.getElementById('portfolioCompanies').value.trim();
+                const description = document.getElementById('portfolioDescription').value.trim();
+
+                if (!name || !companiesStr) {
+                    this.showAlert('Name and companies are required', 'error');
+                    return;
+                }
+
+                const companies = companiesStr.split(',').map(c => c.trim()).filter(c => c);
+
+                try {
+                    this.showLoading();
+
+                    if (this.state.editingPortfolio) {
+                        // Update
+                        await this.apiCall(`/portfolios/${this.state.editingPortfolio.id}`, {
+                            method: 'PUT',
+                            body: JSON.stringify({ name, company_names: companies, description })
+                        });
+                        this.showAlert('Portfolio updated successfully!', 'success');
+                    } else {
+                        // Create
+                        await this.apiCall('/portfolios/', {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                user_id: this.state.userId,
+                                name,
+                                company_names: companies,
+                                description
+                            })
+                        });
+                        this.showAlert('Portfolio created successfully!', 'success');
+                    }
+
+                    this.closeModal();
+                    await this.loadPortfolios();
+                } catch (error) {
+                    this.showAlert(`Failed to save portfolio: ${error.message}`, 'error');
+                } finally {
+                    this.showLoading(false);
+                }
+            },
+
+            async deletePortfolio(portfolioId) {
+                if (!confirm('Are you sure you want to delete this portfolio?')) return;
+
+                try {
+                    this.showLoading();
+                    await this.apiCall(`/portfolios/${portfolioId}`, { method: 'DELETE' });
+                    
+                    // If this was the active portfolio, clear it
+                    if (this.state.activePortfolio?.id === portfolioId) {
+                        this.state.activePortfolio = null;
+                        this.state.activeSession = null;
+                        this.saveState();
+                        this.updateChatHeader();
+                    }
+
+                    this.showAlert('Portfolio deleted successfully!', 'success');
+                    await this.loadPortfolios();
+                } catch (error) {
+                    this.showAlert(`Failed to delete portfolio: ${error.message}`, 'error');
+                } finally {
+                    this.showLoading(false);
+                }
+            },
+
+            selectPortfolio(portfolioId) {
+                const portfolio = this.state.portfolios.find(p => p.id === portfolioId);
+                if (portfolio) {
+                    this.showAlert(`Selected: ${portfolio.name}`, 'info');
+                }
+            },
+
+            async activatePortfolio(portfolioId) {
+                try {
+                    this.showLoading();
+                    const portfolio = this.state.portfolios.find(p => p.id === portfolioId);
+                    
+                    // Create session
+                    const session = await this.apiCall('/portfolios/sessions', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            portfolio_id: portfolioId,
+                            user_id: this.state.userId
+                        })
+                    });
+
+                    this.state.activePortfolio = portfolio;
+                    this.state.activeSession = session;
+                    this.saveState();
+                    this.renderPortfolios();
+                    
+                    this.showAlert(`Activated: ${portfolio.name}`, 'success');
+                    
+                    // Switch to chat tab and update header
+                    this.switchTab('chat');
+                } catch (error) {
+                    this.showAlert(`Failed to activate portfolio: ${error.message}`, 'error');
+                } finally {
+                    this.showLoading(false);
+                }
+            },
+
+            async restoreSession() {
+                try {
+                    const session = await this.apiCall(`/portfolios/sessions/${this.state.activeSession.thread_id}`);
+                    this.state.activeSession = session;
+                    
+                    // Find and set the portfolio from the session
+                    const portfolio = this.state.portfolios.find(p => p.id === session.portfolio_id);
+                    if (portfolio) {
+                        this.state.activePortfolio = portfolio;
+                        this.saveState();
+                        this.updateChatHeader();
+                        console.log('✅ Session restored:', session.thread_id);
+                        console.log('📁 Active portfolio:', portfolio.name);
+                    }
+                } catch (error) {
+                    console.error('Failed to restore session:', error);
+                    this.state.activeSession = null;
+                    this.state.activePortfolio = null;
+                    this.saveState();
+                }
+            },
+
+            updateChatHeader() {
+                const portfolioNameEl = document.getElementById('activePortfolioName');
+                const companiesEl = document.getElementById('activeCompanies');
+                
+                if (this.state.activePortfolio && this.state.activeSession) {
+                    portfolioNameEl.textContent = this.state.activePortfolio.name;
+                    companiesEl.textContent = `Companies: ${this.state.activePortfolio.company_names.join(', ')}`;
+                    portfolioNameEl.style.color = '#48bb78'; // Green to show active
+                    console.log('📊 Chat header updated:', this.state.activePortfolio.name);
+                } else {
+                    portfolioNameEl.textContent = 'No portfolio selected';
+                    companiesEl.textContent = 'Select a portfolio to start chatting';
+                    portfolioNameEl.style.color = '#e53e3e'; // Red to show inactive
+                }
+            },
+
+            async sendMessage() {
+                const input = document.getElementById('chatInput');
+                const query = input.value.trim();
+
+                if (!query) return;
+
+                if (!this.state.activeSession) {
+                    this.showAlert('Please activate a portfolio first!', 'error', 'chatAlert');
+                    return;
+                }
+
+                // Add user message
+                this.addMessage('user', query);
+                input.value = '';
+
+                try {
+                    this.showLoading();
+                    
+                    const response = await this.apiCall('/ask', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            query: query,
+                            thread_id: this.state.activeSession.thread_id
+                        })
+                    });
+
+                    this.addMessage('assistant', response.answer, {
+                        portfolio: response.portfolio_name,
+                        companies: response.company_filter
+                    });
+
+                    this.saveChatHistory();
+                } catch (error) {
+                    this.showAlert(`Failed to get response: ${error.message}`, 'error', 'chatAlert');
+                    this.addMessage('assistant', `❌ Error: ${error.message}`);
+                } finally {
+                    this.showLoading(false);
+                }
+            },
+
+            addMessage(role, content, meta = null) {
+                const messagesDiv = document.getElementById('chatMessages');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${role}`;
+                
+                let metaHtml = '';
+                if (meta) {
+                    metaHtml = `<div class="message-meta">Portfolio: ${meta.portfolio} | Companies: ${meta.companies.join(', ')}</div>`;
+                }
+
+                messageDiv.innerHTML = `
+                    <div class="message-content">
+                        ${content.replace(/\n/g, '<br>')}
+                    </div>
+                    ${metaHtml}
+                `;
+
+                messagesDiv.appendChild(messageDiv);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            },
+
+            clearChat() {
+                if (!confirm('Clear chat history?')) return;
+                document.getElementById('chatMessages').innerHTML = '';
+                localStorage.removeItem('chatHistory');
+            },
+
+            saveChatHistory() {
+                const messages = document.getElementById('chatMessages').innerHTML;
+                localStorage.setItem('chatHistory', messages);
+            },
+
+            loadChatHistory() {
+                const history = localStorage.getItem('chatHistory');
+                if (history) {
+                    document.getElementById('chatMessages').innerHTML = history;
+                }
+            },
+
+            async compareCompanies() {
+                const company1 = document.getElementById('company1').value.trim();
+                const company2 = document.getElementById('company2').value.trim();
+                const company3 = document.getElementById('company3').value.trim();
+
+                if (!company1 || !company2) {
+                    this.showAlert('Please enter at least two companies', 'error', 'chatAlert');
+                    return;
+                }
+
+                try {
+                    this.showLoading();
+
+                    const payload = {
+                        company1,
+                        company2
+                    };
+
+                    if (company3) {
+                        payload.company3 = company3;
+                    }
+
+                    const response = await this.apiCall('/compare', {
+                        method: 'POST',
+                        body: JSON.stringify(payload)
+                    });
+
+                    const resultDiv = document.getElementById('compareResult');
+                    resultDiv.style.display = 'block';
+                    
+                    let html = `
+                        <h3>Comparison Results</h3>
+                        <p style="white-space: pre-wrap; line-height: 1.6;">${response.answer}</p>
+                    `;
+
+                    if (response.chart_url) {
+                        html += `
+                            <h4 style="margin-top: 20px;">Comparison Chart</h4>
+                            <img src="${response.chart_url}" alt="Comparison Chart">
+                        `;
+                    }
+
+                    resultDiv.innerHTML = html;
+                } catch (error) {
+                    this.showAlert(`Failed to compare: ${error.message}`, 'error', 'chatAlert');
+                } finally {
+                    this.showLoading(false);
+                }
+            }
+        };
+
+        // Initialize app on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            app.init();
+            document.getElementById('logoutBtn').addEventListener('click', () => app.logout());
+        });
+    </script>
+</body>
+</html>

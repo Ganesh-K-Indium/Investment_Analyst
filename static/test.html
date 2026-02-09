@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Connection Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #00ff00;
+        }
+        .test { margin: 10px 0; padding: 10px; background: #2a2a2a; }
+        .success { color: #00ff00; }
+        .error { color: #ff0000; }
+        .info { color: #00aaff; }
+        button {
+            background: #00ff00;
+            color: #000;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 API Connection Diagnostics</h1>
+    
+    <button onclick="runTests()">▶️ Run All Tests</button>
+    <button onclick="location.reload()">🔄 Reload</button>
+    
+    <div id="results"></div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+        const results = document.getElementById('results');
+
+        function log(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `test ${type}`;
+            div.textContent = message;
+            results.appendChild(div);
+            console.log(message);
+        }
+
+        async function runTests() {
+            results.innerHTML = '';
+            log('Starting diagnostics...', 'info');
+            log('API URL: ' + API_URL, 'info');
+            log('', 'info');
+
+            // Test 1: Health endpoint
+            log('Test 1: Health Check', 'info');
+            try {
+                const response = await fetch(`${API_URL}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    log('✅ Health check passed', 'success');
+                    log('Response: ' + JSON.stringify(data), 'success');
+                } else {
+                    log(`❌ Health check failed: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Health check error: ${error.message}`, 'error');
+                log(`Error details: ${error.stack}`, 'error');
+            }
+            log('', 'info');
+
+            // Test 2: CORS test
+            log('Test 2: CORS Headers', 'info');
+            try {
+                const response = await fetch(`${API_URL}/health`, {
+                    method: 'OPTIONS'
+                });
+                log('✅ CORS preflight passed', 'success');
+                log('CORS Headers:', 'info');
+                for (let [key, value] of response.headers.entries()) {
+                    if (key.includes('access-control')) {
+                        log(`  ${key}: ${value}`, 'info');
+                    }
+                }
+            } catch (error) {
+                log(`❌ CORS test error: ${error.message}`, 'error');
+            }
+            log('', 'info');
+
+            // Test 3: Get portfolios
+            log('Test 3: Get Portfolios (user: testuser)', 'info');
+            try {
+                const response = await fetch(`${API_URL}/portfolios/user/testuser`);
+                if (response.ok) {
+                    const data = await response.json();
+                    log('✅ Portfolio endpoint works', 'success');
+                    log('Portfolios: ' + JSON.stringify(data), 'success');
+                } else {
+                    const error = await response.text();
+                    log(`❌ Portfolio request failed: ${response.status}`, 'error');
+                    log(`Response: ${error}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Portfolio request error: ${error.message}`, 'error');
+            }
+            log('', 'info');
+
+            // Test 4: Create portfolio
+            log('Test 4: Create Portfolio', 'info');
+            try {
+                const response = await fetch(`${API_URL}/portfolios/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: 'testuser',
+                        name: 'Test Portfolio',
+                        company_names: ['apple', 'microsoft'],
+                        description: 'Test from diagnostic tool'
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    log('✅ Portfolio created successfully', 'success');
+                    log('Portfolio ID: ' + data.id, 'success');
+                } else {
+                    const error = await response.text();
+                    log(`❌ Create portfolio failed: ${response.status}`, 'error');
+                    log(`Response: ${error}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Create portfolio error: ${error.message}`, 'error');
+            }
+            log('', 'info');
+
+            // Test 5: Network info
+            log('Test 5: Network Info', 'info');
+            log('Window location: ' + window.location.href, 'info');
+            log('Protocol: ' + window.location.protocol, 'info');
+            log('Host: ' + window.location.host, 'info');
+            log('Browser: ' + navigator.userAgent, 'info');
+
+            log('', 'info');
+            log('🏁 Diagnostics complete!', 'success');
+        }
+
+        // Auto-run on load
+        window.addEventListener('load', runTests);
+    </script>
+</body>
+</html>
