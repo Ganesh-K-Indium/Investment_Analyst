@@ -1509,7 +1509,7 @@ async def comprehensive_research(
         all_sources = []
         
         # Step 1: Search for analyst ratings
-        print(f"🔍 Searching for analyst ratings for {symbol}...")
+        print(f"Searching for analyst ratings for {symbol}...")
         ratings_search = await _search_analyst_ratings_impl(symbol, company_name)
         results["ratings_search"] = {
             "success": ratings_search.get("success"),
@@ -1530,7 +1530,7 @@ async def comprehensive_research(
                     })
         
         # Step 2: Aggregate ratings
-        print(f"📊 Aggregating ratings for {symbol}...")
+        print(f"Aggregating ratings for {symbol}...")
         if ratings_search.get("success") and ratings_search.get("results"):
             aggregated = await _aggregate_ratings_impl(symbol, ratings_search.get("results"))
             results["aggregated_ratings"] = aggregated
@@ -1538,7 +1538,7 @@ async def comprehensive_research(
             results["aggregated_ratings"] = {"success": False, "error": "No ratings found to aggregate"}
         
         # Step 3: Analyze sentiment of combined content
-        print(f"🎭 Analyzing sentiment for {symbol}...")
+        print(f" Analyzing sentiment for {symbol}...")
         if ratings_search.get("results"):
             combined_text = " ".join([r.get("content", "") for r in ratings_search.get("results", [])[:5]])
             if combined_text:
@@ -1546,7 +1546,7 @@ async def comprehensive_research(
                 results["sentiment"] = sentiment
         
         # Step 4: Generate summary
-        print(f"📝 Generating summary for {symbol}...")
+        print(f"Generating summary for {symbol}...")
         if ratings_search.get("results"):
             combined_content = "\n\n".join([r.get("content", "") for r in ratings_search.get("results", [])[:5]])
             if combined_content:
@@ -1555,7 +1555,7 @@ async def comprehensive_research(
         
         # Step 5: Generate scenarios
         if include_scenarios:
-            print(f"🎯 Generating bull/bear scenarios for {symbol}...")
+            print(f" Generating bull/bear scenarios for {symbol}...")
             news_summary = results.get("summary", {}).get("summary", "")
             # Extract source_urls for backward compatibility
             all_source_urls = [s['url'] for s in all_sources]
@@ -1600,9 +1600,9 @@ async def comprehensive_research(
 if __name__ == "__main__":
     import uvicorn
     
-    print("🚀 Starting Research MCP Server...")
+    print(" Starting Research MCP Server...")
     print("=" * 60)
-    print("📚 Available Tools:")
+    print(" Available Tools:")
     print("  • web_search - General web search via Tavily")
     print("  • search_analyst_ratings - Find analyst ratings")
     print("  • aggregate_ratings - Normalize and aggregate ratings")
