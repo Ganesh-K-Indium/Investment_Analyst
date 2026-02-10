@@ -53,6 +53,37 @@ Simple server startup (kept for backwards compatibility)
 ./scripts/start_server.sh
 ```
 
+
+## 🪟 Windows Usage
+
+Equivalent batch scripts are available for Windows users.
+
+### 1. `start_mcp_servers.bat`
+**Usage**:
+```cmd
+REM Start all servers
+.\scripts\start_mcp_servers.bat start
+
+REM Stop all servers
+.\scripts\start_mcp_servers.bat stop
+
+REM Check status
+.\scripts\start_mcp_servers.bat status
+```
+
+### 2. `start_api.bat`
+**Usage**:
+```cmd
+REM Start API only
+.\scripts\start_api.bat
+
+REM Start API + MCP Servers
+.\scripts\start_api.bat --with-mcp
+
+REM Development mode
+.\scripts\start_api.bat --dev
+```
+
 ## 🚀 Quick Start Guide
 
 ### Option 1: Full System (Recommended)
