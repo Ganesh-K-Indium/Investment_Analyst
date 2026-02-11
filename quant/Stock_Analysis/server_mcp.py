@@ -38,6 +38,7 @@ technicalanalysis_server = FastMCP(
         - `get_stock_support_resistance`: Calculate the Support and Resistance levels for a given ticker symbol, start date, and end date.
         - `get_all_technical_analysis`: Generate comprehensive technical analysis with all indicators for a single stock.
         - `get_chart_summary`: Generate AI-powered summary of a chart image.
+        - `get_stock_candlestick`: Generate candlestick chart for a single stock with volume subplot.
     
     ## Multi-Stock Comparison Tools (NEW):
         - `get_multi_stock_sma`: Compare Simple Moving Averages for multiple stocks on the same chart.
@@ -1269,6 +1270,71 @@ async def get_multi_stock_volume(tickers: list, start_date: str, end_date: str) 
                 }
         except Exception as e:
                 return {"tickers": tickers, "error": str(e), "traceback": traceback.format_exc()}
+        
+
+@technicalanalysis_server.tool(
+    name="get_stock_candlestick",
+    description="""Generate candlestick chart for SINGLE stock with volume subplot.
+    Args:
+        ticker: str
+            Ticker symbol (e.g., "AAPL")
+        start_date: str
+            Start date in format 'YYYY-MM-DD'
+        end_date: str
+            End date in format 'YYYY-MM-DD'
+    """
+)
+async def get_stock_candlestick(ticker: str, start_date: str, end_date: str) -> dict:
+    """Generate single stock candlestick chart with volume."""
+    try:
+        df = await fetch_stock_data(ticker, start_date, end_date)
+        
+        # Create subplots: main candlestick + volume bar
+        from plotly.subplots import make_subplots
+        fig = make_subplots(rows=2, cols=1,
+                          row_heights=[0.7, 0.3],
+                          subplot_titles=(f'{ticker.upper()} Candlestick', 'Volume'),
+                          vertical_spacing=0.05,
+                          shared_xaxes=True)
+        
+        # Candlestick (top subplot)
+        fig.add_trace(go.Candlestick(
+            x=df.index,
+            open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
+            name="OHLC",
+            increasing_line_color='lime', decreasing_line_color='red'
+        ), row=1, col=1)
+        
+        # Volume (bottom subplot)
+        colors = ['green' if x >= y else 'red' for x, y in zip(df['Close'], df['Open'])]
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume",
+                           marker_color=colors, opacity=0.6), row=2, col=1)
+        
+        fig.update_layout(
+            title=f"{ticker.upper()} Candlestick Chart with Volume",
+            template='plotly_dark', height=800, width=1200,
+            showlegend=False,
+            xaxis_rangeslider_visible=False
+        )
+        
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"stock_candlestick_{ticker}_{timestamp}.png"
+        result = await save_figure_as_base64(fig, filename, width=1200, height=800)
+        
+        return {
+            "ticker": ticker,
+            "chart_generated": True,
+            "image_filename": result["filename"],
+            "latest_data": {
+                "close": round(df['Close'].iloc[-1], 2),
+                "volume": int(df['Volume'].iloc[-1])
+            }
+        }
+    except Exception as e:
+        return {"ticker": ticker, "error": str(e)}
+
+
+
     
 if __name__ == "__main__":
         import asyncio

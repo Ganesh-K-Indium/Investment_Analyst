@@ -215,7 +215,7 @@ AVAILABLE AGENTS:
 CAPABILITIES:
 - ticker_finder_agent: Converts company names to ticker symbols
 - stock_information_agent: Fundamental data (prices, financials, news, statements, holders, options)
-- technical_analysis_agent: Technical charts (SMA, RSI, MACD, Bollinger, Volume, Support/Resistance)
+- technical_analysis_agent: Technical charts (SMA, RSI, MACD, Bollinger, Volume, Support/Resistance, Candlestick)
 - research_agent: Analyst ratings, web research, sentiment, bull/bear scenarios
 
 ROUTING RULES:
