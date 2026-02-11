@@ -11,12 +11,10 @@ from rag.graph.nodes import (web_search, retrieve,
                          financial_web_search, show_result, integrate_web_search,
                          evaluate_vectorstore_quality,
                          preprocess_and_analyze_query,
-                         generate_comparison_chart,
-                         request_clarification, process_clarification)
+                         generate_comparison_chart)
 from rag.graph.edges import (route_question, decide_to_generate,
                          grade_generation_v_documents_and_question,
-                         decide_after_web_integration, decide_chart_generation,
-                         should_request_clarification, route_after_clarification)
+                         decide_after_web_integration, decide_chart_generation)
 from rag.graph.benchmark import time_node, node_timer
 load_dotenv()
 os.environ["GROQ_API_KEY"]=os.getenv("GROQ_API_KEY")
@@ -61,40 +59,17 @@ class BuildingGraph:
         workflow.add_node("evaluate_vectorstore_quality", time_node("evaluate_vectorstore_quality")(evaluate_vectorstore_quality))
         workflow.add_node("generate_chart", time_node("generate_chart")(generate_comparison_chart))
         
-        # HITL nodes (no timing needed - they're lightweight)
-        workflow.add_node("request_clarification", request_clarification)
-        workflow.add_node("process_clarification", process_clarification)
-
         # START -> preprocess (always run first to analyze query)
         workflow.add_edge(START, "preprocess")
         
-        # HITL INTERRUPT FLOW: preprocess -> should_request_clarification
+        # Preprocess -> Router (Vectorstore vs WebSearch)
         workflow.add_conditional_edges(
             "preprocess",
-            should_request_clarification,
+            route_question,
             {
-                "request_clarification": "request_clarification",  # Interrupt path
-                "process_clarification": "process_clarification", # Resume path
                 "vectorstore": "retrieve",
                 "web_search": "web_search",
-                "show_result": "show_result",
                 "generate": "generate"
-            },
-        )
-        
-        # After clarification request, process user's response
-        workflow.add_edge("request_clarification", "process_clarification")
-        
-        # After processing clarification, route based on clarified intent
-        workflow.add_conditional_edges(
-            "process_clarification",
-            route_after_clarification,
-            {
-                "retrieve": "retrieve", # Legacy check if edges return 'retrieve' instead of 'vectorstore'? 
-                "vectorstore": "retrieve", # Map vectorstore to retrieve node
-                "generate": "generate",
-                "web_search": "web_search",
-                "show_result": "show_result"
             },
         )
 
@@ -158,12 +133,12 @@ class BuildingGraph:
         workflow.add_edge("show_result", END)
         
         # Compile with checkpointer for memory and HITL interrupts
+        # Compile with checkpointer for memory
         if checkpointer:
             app = workflow.compile(
-                checkpointer=checkpointer,
-                interrupt_after=["request_clarification"]
+                checkpointer=checkpointer
             )
-            print("Graph compiled successfully (WITH Checkpointer/Memory + HITL Interrupts)")
+            print("Graph compiled successfully (WITH Checkpointer/Memory)")
         else:
             app = workflow.compile()
             print("Graph compiled successfully (context-free mode)")

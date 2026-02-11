@@ -8,59 +8,7 @@ from rag.vectordb.chains import (get_question_router_chain,
                                                           get_gap_analysis_chain)
 from rag.vectordb.client import load_vector_database
 
-def should_request_clarification(state):
-    """
-    HITL EDGE: Decide if clarification is needed based on detected intent.
-    If yes, route to request_clarification.
-    If no, route using standard route_question logic.
-    """
-    # Check if we are resuming with clarification
-    if state.get("user_clarification"):
-        print("HITL: User clarification received → processing")
-        return "process_clarification"
 
-    sub_query_analysis = state.get("sub_query_analysis", {})
-    query_type = sub_query_analysis.get("query_type")
-    
-    # Only ask for clarification on follow-up queries
-    if query_type in ["summarize", "more_info", "follow_up"]:
-        print(f"HITL: {query_type} query detected → requesting clarification")
-        return "request_clarification"
-    
-    print(f"New query → skip clarification (standard routing)")
-    # Fallback to standard routing
-    return route_question(state)
-
-def route_after_clarification(state):
-    """
-    HITL EDGE: Route based on clarified intent from user feedback.
-    Handles four possible actions: retrieve_new, summarize, refine_followup, proceed_original.
-    """
-    clarified_intent = state.get("clarified_intent", {})
-    action = clarified_intent.get("action", "proceed_original")
-    
-    print(f"Routing after clarification: {action}")
-    
-    if action == "retrieve_new":
-        # User wants new specific data
-        return "vectorstore"  # Map to actual node name 'retrieve' (which is mapped to vectorstore in graph?) 
-        # Wait, in invoke_graph, 'retrieve' node is named 'retrieve'. 
-        # The key in conditional edges needs to match the return value.
-        # Standard route_question returns 'vectorstore', 'generate', 'web_search'.
-        # We should align with those keys or return explicit node names.
-        # Let's align with route_question keys: 'vectorstore' maps to 'retrieve' node in invoke_graph.
-    
-    elif action == "summarize":
-        # User wants focused summarization
-        return "generate"
-        
-    elif action == "refine_followup":
-        # User wants refined response from existing docs
-        return "generate"
-        
-    else:
-        # proceed_original or unknown - use normal routing
-        return route_question(state)
 
 def route_question(state):
     """

@@ -144,40 +144,27 @@ async def ask_agent(
                 print(f"Cache response time: {elapsed:.4f}s")
                 return response
         
-        # Check for interrupted state (HITL)
-        current_state = await agent.aget_state(config)
-        is_interrupted = bool(current_state.next)
-        
-        if is_interrupted:
-            print(f"Resuming from interrupt for thread {thread_id}")
-            await agent.aupdate_state(config, {"user_clarification": query})
-            result = await agent.ainvoke(None, config)
-        else:
-            # Standard execution
-            inputs = {
-                "messages": [HumanMessage(content=query)],
-                "vectorstore_searched": False,
-                "web_searched": False,
-                "vectorstore_quality": "none",
-                "needs_web_fallback": False,
-                "retry_count": 0,
-                "tool_calls": [],
-                "document_sources": {},
-                "citation_info": [],
-                "summary_strategy": "single_source",
-                "company_filter": company_tickers,  # Pass valid tickers for this portfolio
-                "ticker": None,  # Explicitly None, relying on company_filter
-                "sub_query_analysis": {},
-                "sub_query_results": {}
-            }
-            result = await agent.ainvoke(inputs, config)
-        
+        # Standard execution
+        inputs = {
+            "messages": [HumanMessage(content=query)],
+            "vectorstore_searched": False,
+            "web_searched": False,
+            "vectorstore_quality": "none",
+            "needs_web_fallback": False,
+            "retry_count": 0,
+            "tool_calls": [],
+            "document_sources": {},
+            "citation_info": [],
+            "summary_strategy": "single_source",
+            "company_filter": company_tickers,  # Pass valid tickers for this portfolio
+            "ticker": None,  # Explicitly None, relying on company_filter
+            "sub_query_analysis": {},
+            "sub_query_results": {}
+        }
+        result = await agent.ainvoke(inputs, config)
+    
         # Extract answer
-        if result.get("clarification_needed") and result.get("clarification_request"):
-            answer = result["clarification_request"]
-            print(f"HITL Interrupt: Asking user -> {answer}")
-        else:
-            answer = result["messages"][-1].content
+        answer = result["messages"][-1].content
         
         # Save assistant message with metadata
         ChatService.add_message(
