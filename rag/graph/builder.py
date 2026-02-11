@@ -11,10 +11,12 @@ from rag.graph.nodes import (web_search, retrieve,
                          financial_web_search, show_result, integrate_web_search,
                          evaluate_vectorstore_quality,
                          preprocess_and_analyze_query,
-                         generate_comparison_chart)
+                         generate_comparison_chart,
+                         detect_alpha_query, alpha_dimension_retrieve, alpha_generate_report)
 from rag.graph.edges import (route_question, decide_to_generate,
                          grade_generation_v_documents_and_question,
-                         decide_after_web_integration, decide_chart_generation)
+                         decide_after_web_integration, decide_chart_generation,
+                         route_alpha_workflow)
 from rag.graph.benchmark import time_node, node_timer
 load_dotenv()
 os.environ["GROQ_API_KEY"]=os.getenv("GROQ_API_KEY")
@@ -47,6 +49,11 @@ class BuildingGraph:
         # Add preprocessing node FIRST - analyzes query for sub-queries
         workflow.add_node("preprocess", time_node("preprocess")(preprocess_and_analyze_query))
         
+        # Add ALPHA Framework nodes
+        workflow.add_node("detect_alpha", time_node("detect_alpha")(detect_alpha_query))
+        workflow.add_node("alpha_retrieve", time_node("alpha_retrieve")(alpha_dimension_retrieve))
+        workflow.add_node("alpha_generate", time_node("alpha_generate")(alpha_generate_report))
+        
         # Add nodes with timing decorators
         workflow.add_node("web_search", time_node("web_search")(web_search))
         workflow.add_node("retrieve", time_node("retrieve")(retrieve))
@@ -59,8 +66,22 @@ class BuildingGraph:
         workflow.add_node("evaluate_vectorstore_quality", time_node("evaluate_vectorstore_quality")(evaluate_vectorstore_quality))
         workflow.add_node("generate_chart", time_node("generate_chart")(generate_comparison_chart))
         
-        # START -> preprocess (always run first to analyze query)
-        workflow.add_edge(START, "preprocess")
+        # START -> detect_alpha (FIRST check for ALPHA queries)
+        workflow.add_edge(START, "detect_alpha")
+        
+        # ALPHA routing: detect_alpha -> alpha_retrieve OR preprocess
+        workflow.add_conditional_edges(
+            "detect_alpha",
+            route_alpha_workflow,
+           {
+                "alpha": "alpha_retrieve",
+                "normal": "preprocess"
+            },
+        )
+        
+        # ALPHA workflow: retrieve -> generate -> show_result -> END
+        workflow.add_edge("alpha_retrieve", "alpha_generate")
+        workflow.add_edge("alpha_generate", "show_result")
         
         # Preprocess -> Router (Vectorstore vs WebSearch)
         workflow.add_conditional_edges(

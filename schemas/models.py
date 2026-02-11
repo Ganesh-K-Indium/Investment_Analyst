@@ -181,26 +181,25 @@ class StructuredFinancialData(BaseModel):
     year: str = Field(description="Fiscal year or period")
     
     # Income Statement
-    revenue: str | None = Field(default=None, description="Total revenue/sales")
-    cost_of_revenue: str | None = Field(default=None, description="Cost of goods sold/revenue")
-    gross_profit: str | None = Field(default=None, description="Gross profit")
-    operating_expenses: str | None = Field(default=None, description="Operating expenses")
+    revenue: str | None = Field(default=None, description="Total revenue")
+    net_income: str | None = Field(default=None, description="Net income/loss")
     operating_income: str | None = Field(default=None, description="Operating income")
-    net_income: str | None = Field(default=None, description="Net income/profit")
-    
-    # Balance Sheet
+    gross_profit: str | None = Field(default=None, description="Gross profit")
+    earnings_per_share: str | None = Field(default=None, description="Earnings per share (EPS)")
     total_assets: str | None = Field(default=None, description="Total assets")
-    current_assets: str | None = Field(default=None, description="Current assets")
     total_liabilities: str | None = Field(default=None, description="Total liabilities")
-    current_liabilities: str | None = Field(default=None, description="Current liabilities")
-    shareholders_equity: str | None = Field(default=None, description="Shareholders/stockholders equity")
-    
-    # Cash Flow
-    operating_cash_flow: str | None = Field(default=None, description="Operating cash flow")
+    shareholders_equity: str | None = Field(default=None, description="shareholders' equity")
+    cash_flow_operations: str | None = Field(default=None, description="Cash flow from operations")
     free_cash_flow: str | None = Field(default=None, description="Free cash flow")
-    
-    # Key Metrics
-    earnings_per_share: str | None = Field(default=None, description="EPS")
-    
-    # Other specific metrics found (optional, not in required list)
-    other_metrics: dict[str, str] | None = Field(default=None, description="Any other financial metrics found")
+    other_metrics: dict[str, str] = Field(default_factory=dict, description="Other extracted metrics")
+
+
+class AlphaDimensionOutput(BaseModel):
+    """Output for a single ALPHA Framework dimension analysis"""
+    analysis: str = Field(
+        description="Analysis summary for this dimension (max 100 words)"
+    )
+    key_points: list[str] = Field(
+        default_factory=list,
+        description="Key bullet points from the analysis (3-5 points)"
+    )

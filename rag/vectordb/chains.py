@@ -1448,3 +1448,268 @@ Extract all financial metrics you can find.""")
     
     return extractor_prompt | structured_llm
 
+
+# ============================================================================
+# ALPHA FRAMEWORK CHAINS - For Stock Buy Timing Analysis
+# ============================================================================
+
+def get_alpha_alignment_chain(llm):
+    """
+    ALPHA - Alignment: Sentiment & Governance Analysis
+    Analyzes stakeholder interests through MD&A tone and governance red flags
+    """
+    from schemas.models import AlphaDimensionOutput
+    structured_llm = llm.with_structured_output(AlphaDimensionOutput)
+    
+    SYSTEM_PROMPT = """You are a financial analyst specializing in GOVERNANCE and SENTIMENT analysis.
+
+**Your Task**: Analyze the Alignment dimension of the ALPHA Framework.
+
+**Focus Areas**:
+1. **MD&A Sentiment Analysis**:
+   - Defensive vs. Confident tone in Management Discussion & Analysis
+   - Forward-looking statements and management confidence
+   - Risk language and uncertainty indicators
+
+2. **Governance Red Flags**:
+   - Board independence issues
+   - Related-party transactions
+   - Executive compensation concerns
+   - Shareholder dilution
+   - Conflicts of interest
+
+**Output Requirements**:
+- Maximum 100 words
+- Concise bullet points
+- Flag critical red flags clearly
+- Tone: Objective, data-driven
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Company: {company}
+Ticker: {ticker}
+
+Retrieved Documents:
+{documents}
+
+Analyze the ALIGNMENT dimension focusing on governance and MD&A sentiment. Keep response under 100 words.""")
+    ])
+    
+    return prompt | structured_llm
+
+
+def get_alpha_liquidity_chain(llm):
+    """
+    ALPHA - Liquidity: Macro/Micro Environment Analysis
+    Examines sector dynamics, commodity exposure, interest rates, and competitive pressures
+    """
+    from schemas.models import AlphaDimensionOutput
+    structured_llm = llm.with_structured_output(AlphaDimensionOutput)
+    
+    SYSTEM_PROMPT = """You are a financial analyst specializing in MACRO/MICRO economic analysis.
+
+**Your Task**: Analyze the Liquidity dimension of the ALPHA Framework.
+
+**Focus Areas**:
+1. **Sector Headwinds/Tailwinds**: Industry trends from regulatory filings
+2. **Commodity/Input Cost Exposure**: Raw material prices, supply chain risks
+3. **Interest Rate Sensitivity**: Debt structure, capital costs
+4. **Competitive Pressures**: Risk factors from 10-K
+
+**Output Requirements**:
+- Maximum 100 words
+- Identify key risks and opportunities
+- Tone: Analytical, balanced
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Company: {company}
+Ticker: {ticker}
+
+Retrieved Documents:
+{documents}
+
+Analyze the LIQUIDITY dimension focusing on macro/micro environmental factors. Keep response under 100 words.""")
+    ])
+    
+    return prompt | structured_llm
+
+
+def get_alpha_performance_chain(llm):
+    """
+    ALPHA - Performance: Earnings & Fundamentals Analysis
+    Analyzes 10-year financials, calculates key metrics, detects anomalies
+    """
+    from schemas.models import AlphaDimensionOutput
+    structured_llm = llm.with_structured_output(AlphaDimensionOutput)
+    
+    SYSTEM_PROMPT = """You are a financial analyst specializing in FUNDAMENTAL ANALYSIS.
+
+**Your Task**: Analyze the Performance dimension of the ALPHA Framework.
+
+**Focus Areas**:
+1. **10-Year Financials**: Revenue, Net Income, Operating Cash Flow trends
+2. **Key Metrics**: CAGR, EBITDA margins, ROE, Free Cash Flow yield
+3. **Anomaly Detection**: Operating Cash Flow < Net Income for >2 quarters
+4. **Non-Recurring Items**: One-time gains, restructuring charges
+
+**Output Requirements**:
+- Maximum 100 words
+- Include calculated metrics where possible
+- Highlight anomalies clearly
+- Tone: Quantitative, precise
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Company: {company}
+Ticker: {ticker}
+
+Retrieved Documents:
+{documents}
+
+Analyze the PERFORMANCE dimension with focus on earnings quality and fundamental metrics. Keep response under 100 words.""")
+    ])
+    
+    return prompt | structured_llm
+
+
+def get_alpha_horizon_chain(llm):
+    """
+    ALPHA - Horizon: Structural Opportunity & Moat Analysis
+    Evaluates competitive positioning, innovation, and moat durability
+    """
+    from schemas.models import AlphaDimensionOutput
+    structured_llm = llm.with_structured_output(AlphaDimensionOutput)
+    
+    SYSTEM_PROMPT = """You are a financial analyst specializing in COMPETITIVE ANALYSIS and MOAT assessment.
+
+**Your Task**: Analyze the Horizon dimension of the ALPHA Framework.
+
+**Focus Areas**:
+1. **Operating Margins vs. Industry**: Pricing power indicator
+2. **R&D Expenditure vs. Peers**: Innovation sustainability
+3. **Market Share Trends**: Competitive positioning
+4. **Moat Durability**: Network effects, switching costs, intangible assets
+
+**Output Requirements**:
+- Maximum 100 words
+- Compare to industry benchmarks
+- Assess long-term competitive advantages
+- Tone: Strategic, forward-looking
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Company: {company}
+Ticker: {ticker}
+
+Retrieved Documents:
+{documents}
+
+Analyze the HORIZON dimension focusing on competitive moat and structural opportunities. Keep response under 100 words.""")
+    ])
+    
+    return prompt | structured_llm
+
+
+def get_alpha_action_chain(llm):
+    """
+    ALPHA - Action: Timing & Technical Context Analysis
+    Provides valuation context, sentiment, and catalysts (NOT real-time trading signals)
+    """
+    from schemas.models import AlphaDimensionOutput
+    structured_llm = llm.with_structured_output(AlphaDimensionOutput)
+    
+    SYSTEM_PROMPT = """You are a financial analyst specializing in VALUATION and TIMING analysis.
+
+**Your Task**: Analyze the Action dimension of the ALPHA Framework.
+
+**Focus Areas**:
+1. **Valuation Context**: P/E, EV/EBITDA vs. historical range
+2. **Price Action**: Recent trends relative to fundamentals
+3. **Option Chain Sentiment**: Nasdaq option positioning (if available)
+4. **Catalysts**: Upcoming earnings, product launches, regulatory decisions
+
+**IMPORTANT**: This is contextual analysis only, NOT real-time trading signals.
+
+**Output Requirements**:
+- Maximum 100 words
+- Identify timing catalysts
+- Valuation relative to historical norms
+- Tone: Measured, contextual
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Company: {company}
+Ticker: {ticker}
+
+Retrieved Documents:
+{documents}
+
+Analyze the ACTION dimension focusing on timing and valuation context. Keep response under 100 words.""")
+    ])
+    
+    return prompt | structured_llm
+
+
+def get_alpha_report_combiner_chain(llm):
+    """
+    Combines all 5 ALPHA dimensions into a final coherent report
+    """
+    SYSTEM_PROMPT = """You are a senior investment analyst creating a concise ALPHA Framework report.
+
+**Your Task**: Combine the 5 ALPHA dimensions into a clear, actionable summary.
+
+**Report Structure**:
+# ALPHA Framework Analysis: {company} ({ticker})
+
+## A - Alignment (Stakeholder Interests)
+{alignment}
+
+## L - Liquidity (Macro/Micro Environment)
+{liquidity}
+
+## P - Performance (Earnings & Fundamentals)
+{performance}
+
+## H - Horizon (Structural Opportunity & Moat)
+{horizon}
+
+## A - Action (Timing & Technical Context)
+{action}
+
+---
+**Synthesis**: [2-3 sentence summary combining key insights from all dimensions]
+
+**IMPORTANT DISCLAIMER**: This is contextual analysis for informational purposes only, not investment advice or trading signals.
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Company: {company}
+Ticker: {ticker}
+
+Alignment Analysis:
+{alignment}
+
+Liquidity Analysis:
+{liquidity}
+
+Performance Analysis:
+{performance}
+
+Horizon Analysis:
+{horizon}
+
+Action Analysis:
+{action}
+
+Create a comprehensive ALPHA Framework report combining all dimensions.""")
+    ])
+    
+    return prompt | llm | StrOutputParser()
+

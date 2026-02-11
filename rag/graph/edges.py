@@ -9,6 +9,22 @@ from rag.vectordb.chains import (get_question_router_chain,
 from rag.vectordb.client import load_vector_database
 
 
+def route_alpha_workflow(state):
+    """
+    Route to ALPHA workflow if alpha_mode is enabled.
+    
+    Returns:
+        str: "alpha" if alpha_mode is True, else "normal"
+    """
+    alpha_mode = state.get("alpha_mode", False)
+    
+    if alpha_mode:
+        print(" Routing to ALPHA Framework workflow")
+        return "alpha"
+    else:
+        print(" Routing to normal RAG workflow")
+        return "normal"
+
 
 def route_question(state):
     """

@@ -68,4 +68,8 @@ class GraphState(TypedDict):
     #vectordb_instance: Any  # REMOVED: Managed via VectorDBManager singleton
     company_filter: List[str]  # List of companies this DB instance is filtered for
     ticker: Optional[str]  # Ticker symbol for collection selection
+    # ALPHA Framework fields
+    alpha_mode: bool  # Whether this is an ALPHA Framework query (buy timing analysis)
+    alpha_dimensions: Dict[str, Any]  # Retrieved data for each ALPHA dimension
+    alpha_report: str  # Final ALPHA report combining all dimensions
     

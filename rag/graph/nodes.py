@@ -2114,3 +2114,428 @@ def generate_comparison_chart(state):
         import traceback
         traceback.print_exc()
         return {"chart_url": None, "chart_filename": None}
+
+
+# ============================================================================
+# ALPHA FRAMEWORK NODES - Stock Buy Timing Analysis
+# ============================================================================
+
+def detect_alpha_query(state):
+    """
+    Detect if the query is asking about stock buy timing (ALPHA Framework trigger).
+    
+    Patterns detected:
+    - "is it a good time to buy [company/ticker] stock?"
+    - "should i buy [company/ticker]?"
+    - "is now a good entry point for [ticker]?"
+    """
+    print("="*80)
+    print(" ALPHA QUERY DETECTION")
+    print("="*80)
+    
+    messages = state["messages"]
+    question = messages[-1].content.lower()
+    
+    # Buy timing patterns
+    alpha_patterns = [
+        "good time to buy",
+        "should i buy",
+        "should i invest in",
+        "entry point",
+        "right time to buy",
+        "buy now",
+        "time to invest",
+        "good buy",
+        "worth buying"
+    ]
+    
+    # Check if query matches ALPHA pattern
+    is_alpha_query =any(pattern in question for pattern in alpha_patterns)
+    
+    if is_alpha_query:
+        print(" ALPHA MODE ACTIVATED")
+        print(f"   Query: {question}")
+        
+        # Extract company/ticker from query
+        from app.utils.company_mapping import get_ticker
+        
+        # Try to extract ticker from state first
+        ticker = state.get("ticker")
+        company_filter = state.get("company_filter", [])
+        
+        # If we have a ticker or company_filter, use it
+        if ticker:
+            target_ticker = ticker
+        elif company_filter and len(company_filter) > 0:
+            target_ticker = company_filter[0]
+        else:
+            # Fallback: Try to extract from question
+            # Look for common ticker patterns
+            words = question.split()
+            target_ticker = None
+            for word in words:
+                cleaned = word.strip(',.?!').upper()
+                if len(cleaned) <= 5 and cleaned.isalpha():
+                    # Looks like a ticker
+                    target_ticker = cleaned
+                    break
+        
+        if not target_ticker:
+            print(" WARNING: Could not extract ticker/company")
+            target_ticker = "unknown"
+        
+        print(f"   Target: {target_ticker}")
+        print("="*80 + "\n")
+        
+        return {
+            "alpha_mode": True,
+            "ticker": target_ticker,
+            "alpha_dimensions": {},
+            "alpha_report": ""
+        }
+    else:
+        print(" Normal RAG query (not ALPHA)")
+        print("="*80 + "\n")
+        return {
+            "alpha_mode": False
+        }
+
+
+def alpha_dimension_retrieve(state):
+    """
+    Retrieve dimension-specific data for ALPHA Framework.
+    
+    Fixed retrieval strategies per dimension:
+    - Alignment: VectorDB only
+    - Liquidity: VectorDB (60%) + Web (40%)
+    - Performance: VectorDB only
+    - Horizon: Web only
+    - Action: Web only
+    """
+    print("="*80)
+    print(" ALPHA DIMENSIONAL RETRIEVAL")
+    print("="*80)
+    
+    ticker = state.get("ticker", "").upper()
+    company_filter = state.get("company_filter", [])
+    
+    if not ticker and company_filter:
+        ticker = company_filter[0].upper()
+    
+    print(f" Target: {ticker}\n")
+    
+    from app.services.vectordb_manager import get_vectordb_manager
+    from langchain_tavily import TavilySearch
+    
+    vectordb_mgr = get_vectordb_manager()
+    web_search = TavilySearch(max_results=3)
+    
+    alpha_dimensions = {}
+    
+    # -------------------------------------------------------------------------
+    # ALIGNMENT: VectorDB only (MD&A, Governance)
+    # -------------------------------------------------------------------------
+    print(" [1/5] Alignment (Stakeholder Interests) - VectorDB")
+    try:
+        db_instance = vectordb_mgr.get_instance(ticker, create_if_missing=False)
+        
+        # Query for MD&A and governance documents
+        alignment_queries = [
+            f"{ticker} management discussion analysis MD&A",
+            f"{ticker} governance board independence proxy statement",
+            f"{ticker} related party transactions"
+        ]
+        
+        alignment_docs = []
+        for query in alignment_queries:
+            results = db_instance.hybrid_search(query=query, content_type="text", limit=3)
+            for point in results:
+                if hasattr(point, 'payload'):
+                    from langchain_core.documents import Document
+                    doc = Document(
+                        page_content=point.payload.get('page_content', ''),
+                        metadata=point.payload.get('metadata', {})
+                    )
+                    alignment_docs.append(doc)
+        
+        alpha_dimensions['alignment'] = {
+            'source': 'vectordb',
+            'documents': alignment_docs[:5],  # Limit to top 5
+            'query_count': len(alignment_queries)
+        }
+        print(f"    Retrieved {len(alignment_docs[:5])} documents")
+        
+    except Exception as e:
+        print(f"    Error: {e}")
+        alpha_dimensions['alignment'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
+    
+    # -------------------------------------------------------------------------
+    # LIQUIDITY: VectorDB (risk factors) + Web (sector trends)
+    # -------------------------------------------------------------------------
+    print(" [2/5] Liquidity (Macro/Micro Environment) - VectorDB + Web")
+    try:
+        # VectorDB: Risk factors, commodity exposure
+        liquidity_docs = []
+        vdb_queries = [
+            f"{ticker} risk factors competitive pressures",
+            f"{ticker} commodity input cost exposure raw materials"
+        ]
+        
+        for query in vdb_queries:
+            results = db_instance.hybrid_search(query=query, content_type="text", limit=2)
+            for point in results:
+                if hasattr(point, 'payload'):
+                    from langchain_core.documents import Document
+                    doc = Document(
+                        page_content=point.payload.get('page_content', ''),
+                        metadata=point.payload.get('metadata', {})
+                    )
+                    liquidity_docs.append(doc)
+        
+        # Web: Sector headwinds, interest rate sensitivity
+        web_queries = [
+            f"{ticker} sector headwinds tailwinds industry trends",
+            f"{ticker} interest rate sensitivity debt structure"
+        ]
+        
+        for query in web_queries:
+            web_results = web_search.invoke({"query": query})
+            # Parse Tavily response using helper
+            sources = _parse_tavily_response(web_results, query)
+            for source in sources:
+                from langchain_core.documents import Document
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={'source': 'web_search', 'url': source['url'], 'title': source['title']}
+                )
+                liquidity_docs.append(doc)
+        
+        alpha_dimensions['liquidity'] = {
+            'source': 'vectordb+web',
+            'documents': liquidity_docs,
+            'query_count': len(vdb_queries) + len(web_queries)
+        }
+        print(f"    Retrieved {len(liquidity_docs)} documents (mixed sources)")
+        
+    except Exception as e:
+        print(f"    Error: {e}")
+        alpha_dimensions['liquidity'] = {'source': 'vectordb+web', 'documents': [], 'query_count': 0}
+    
+    # -------------------------------------------------------------------------
+    # PERFORMANCE: VectorDB only (10-year financials)
+    # -------------------------------------------------------------------------
+    print(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
+    try:
+        performance_queries = [
+            f"{ticker} revenue net income 10-year trend financial performance",
+            f"{ticker} operating cash flow free cash flow income statement",
+            f"{ticker} EBITDA margins ROE profitability metrics"
+        ]
+        
+        performance_docs = []
+        for query in performance_queries:
+            results = db_instance.hybrid_search(query=query, content_type="text", limit=3)
+            for point in results:
+                if hasattr(point, 'payload'):
+                    from langchain_core.documents import Document
+                    doc = Document(
+                        page_content=point.payload.get('page_content', ''),
+                        metadata=point.payload.get('metadata', {})
+                    )
+                    performance_docs.append(doc)
+        
+        alpha_dimensions['performance'] = {
+            'source': 'vectordb',
+            'documents': performance_docs[:6],
+            'query_count': len(performance_queries)
+        }
+        print(f"    Retrieved {len(performance_docs[:6])} documents")
+        
+    except Exception as e:
+        print(f"    Error: {e}")
+        alpha_dimensions['performance'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
+    
+    # -------------------------------------------------------------------------
+    # HORIZON: Web only (competitive positioning, moat)
+    # -------------------------------------------------------------------------
+    print(" [4/5] Horizon (Structural Opportunity & Moat) - Web")
+    try:
+        horizon_queries = [
+            f"{ticker} operating margins vs industry average pricing power",
+            f"{ticker} R&D expenditure vs peers innovation",
+            f"{ticker} market share trends competitive positioning",
+            f"{ticker} competitive moat network effects switching costs"
+        ]
+        
+        horizon_docs = []
+        for query in horizon_queries:
+            web_results = web_search.invoke({"query": query})
+            # Parse Tavily response using helper
+            sources = _parse_tavily_response(web_results, query)
+            for source in sources:
+                from langchain_core.documents import Document
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={'source': 'web_search', 'url': source['url'], 'title': source['title']}
+                )
+                horizon_docs.append(doc)
+        
+        alpha_dimensions['horizon'] = {
+            'source': 'web',
+            'documents': horizon_docs,
+            'query_count': len(horizon_queries)
+        }
+        print(f"    Retrieved {len(horizon_docs)} documents")
+        
+    except Exception as e:
+        print(f"    Error: {e}")
+        alpha_dimensions['horizon'] = {'source': 'web', 'documents': [], 'query_count': 0}
+    
+    # -------------------------------------------------------------------------
+    # ACTION: Web only (valuation, timing, catalysts)
+    # -------------------------------------------------------------------------
+    print(" [5/5] Action (Timing & Technical Context) - Web")
+    try:
+        action_queries = [
+            f"{ticker} P/E ratio EV/EBITDA valuation historical range",
+            f"{ticker} stock price action recent trends",
+            f"{ticker} option chain sentiment nasdaq",
+            f"{ticker} upcoming earnings catalysts product launches"
+        ]
+        
+        action_docs = []
+        for query in action_queries:
+            web_results = web_search.invoke({"query": query})
+            # Parse Tavily response using helper
+            sources = _parse_tavily_response(web_results, query)
+            for source in sources:
+                from langchain_core.documents import Document
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={'source': 'web_search', 'url': source['url'], 'title': source['title']}
+                )
+                action_docs.append(doc)
+        
+        alpha_dimensions['action'] = {
+            'source': 'web',
+            'documents': action_docs,
+            'query_count': len(action_queries)
+        }
+        print(f"    Retrieved {len(action_docs)} documents")
+        
+    except Exception as e:
+        print(f"    Error: {e}")
+        alpha_dimensions['action'] = {'source': 'web', 'documents': [], 'query_count': 0}
+    
+    print("\n" + "="*80)
+    print(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total documents")
+    print("="*80 + "\n")
+    
+    return {
+        "alpha_dimensions": alpha_dimensions
+    }
+
+
+def alpha_generate_report(state):
+    """
+    Generate ALPHA Framework report from dimensional analysis.
+    Creates <100 word summaries for each dimension and combines into final report.
+    """
+    print("="*80)
+    print(" ALPHA REPORT GENERATION")
+    print("="*80 + "\n")
+    
+    ticker = state.get("ticker", "UNKNOWN")
+    alpha_dimensions = state.get("alpha_dimensions", {})
+    
+    from langchain_openai import ChatOpenAI
+    from rag.vectordb.chains import (
+        get_alpha_alignment_chain,
+        get_alpha_liquidity_chain,
+        get_alpha_performance_chain,
+        get_alpha_horizon_chain,
+        get_alpha_action_chain,
+        get_alpha_report_combiner_chain
+    )
+    
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    
+    # Helper to format documents
+    def format_docs(docs):
+        if not docs:
+            return "No documents available."
+        return "\n\n---\n\n".join([
+            f"Source: {d.metadata.get('source_file', d.metadata.get('title', 'Unknown'))}\n{d.page_content[:500]}"
+            for d in docs[:5]  # Limit to avoid token overload
+        ])
+    
+    dimension_outputs = {}
+    
+    # Generate each dimension
+    dimensions = [
+        ('alignment', get_alpha_alignment_chain, "Alignment"),
+        ('liquidity', get_alpha_liquidity_chain, "Liquidity"),
+        ('performance', get_alpha_performance_chain, "Performance"),
+        ('horizon', get_alpha_horizon_chain, "Horizon"),
+        ('action', get_alpha_action_chain, "Action")
+    ]
+    
+    for dim_key, chain_func, dim_name in dimensions:
+        print(f" Generating {dim_name}...")
+        
+        dim_data = alpha_dimensions.get(dim_key, {})
+        docs = dim_data.get('documents', [])
+        
+        try:
+            chain = chain_func(llm)
+            result = chain.invoke({
+                "company": ticker,
+                "ticker": ticker,
+                "documents": format_docs(docs)
+            })
+            
+            dimension_outputs[dim_key] = {
+                'analysis': result.analysis,
+                'key_points': result.key_points
+            }
+            print(f"    ✓ {dim_name}: {len(result.analysis)} chars, {len(result.key_points)} points")
+            
+        except Exception as e:
+            print(f"    ✗ Error: {e}")
+            dimension_outputs[dim_key] = {
+                'analysis': f"Analysis unavailable due to insufficient data.",
+                'key_points': []
+            }
+    
+    # Combine into final report
+    print("\n Combining dimensions into final report...")
+    
+    try:
+        combiner_chain = get_alpha_report_combiner_chain(llm)
+        final_report = combiner_chain.invoke({
+            "company": ticker,
+            "ticker": ticker,
+            "alignment": dimension_outputs.get('alignment', {}).get('analysis', 'N/A'),
+            "liquidity": dimension_outputs.get('liquidity', {}).get('analysis', 'N/A'),
+            "performance": dimension_outputs.get('performance', {}).get('analysis', 'N/A'),
+            "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
+            "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
+        })
+        print(f"    ✓ Final report: {len(final_report)} chars")
+        
+    except Exception as e:
+        print(f"    ✗ Error: {e}")
+        final_report = f"# ALPHA Framework Analysis: {ticker}\n\nError generating report: {str(e)}"
+    
+    print("\n" + "="*80)
+    print(" ALPHA REPORT COMPLETE")
+    print("="*80 + "\n")
+    
+    # Return final report as AIMessage
+    from langchain_core.messages import AIMessage
+    
+    return {
+        "messages": [AIMessage(content=final_report)],
+        "alpha_report": final_report,
+        "Intermediate_message": final_report  # For compatibility with show_result node
+    }
