@@ -16,17 +16,17 @@ class PortfolioService:
         db: Session,
         user_id: str,
         name: str,
-        company_names: List[str],
+        tickers: List[str],
         description: Optional[str] = None
     ) -> Portfolio:
         """Create a new portfolio"""
-        # Normalize company names to lowercase for consistency
-        normalized_companies = [c.strip().lower() for c in company_names if c.strip()]
+        # Normalize tickers to lowercase for consistency
+        normalized_tickers = [t.strip().lower() for t in tickers if t.strip()]
         
         portfolio = Portfolio(
             user_id=user_id,
             name=name,
-            company_names=normalized_companies,
+            company_names=normalized_tickers, # Storing tickers in company_names column
             description=description
         )
         db.add(portfolio)
@@ -49,7 +49,7 @@ class PortfolioService:
         db: Session,
         portfolio_id: int,
         name: Optional[str] = None,
-        company_names: Optional[List[str]] = None,
+        tickers: Optional[List[str]] = None,
         description: Optional[str] = None
     ) -> Optional[Portfolio]:
         """Update an existing portfolio"""
@@ -59,8 +59,9 @@ class PortfolioService:
         
         if name is not None:
             portfolio.name = name
-        if company_names is not None:
-            portfolio.company_names = [c.strip().lower() for c in company_names if c.strip()]
+        if tickers is not None:
+             # Normalize tickers
+            portfolio.company_names = [t.strip().lower() for t in tickers if t.strip()]
         if description is not None:
             portfolio.description = description
         

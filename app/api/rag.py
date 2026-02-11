@@ -11,6 +11,7 @@ from app.services.portfolio import PortfolioService
 from app.services.chat import ChatService
 from app.database.models import AgentType, MessageRole
 from app.services.vectordb_manager import get_vectordb_manager
+from app.utils.company_mapping import get_ticker
 import uuid
 import json
 import datetime
@@ -23,6 +24,7 @@ router = APIRouter(tags=["RAG"])
 class AskInput(BaseModel):
     query: str = Field(..., description="User query")
     thread_id: str = Field(..., description="Session thread_id (required for portfolio context)")
+    ticker: Optional[str] = Field(None, description="Specific ticker symbol to target (optional)")
 
 
 class CompareInput(BaseModel):
@@ -71,7 +73,7 @@ async def ask_agent(
 ):
     """
     Handle RAG queries with portfolio-based filtering and chat persistence.
-    Uses the pre-initialized Vector DB instance from portfolio activation.
+    Uses ticker-based vector collections.
     """
     try:
         if not agent:
@@ -79,6 +81,7 @@ async def ask_agent(
         
         query = payload.query
         thread_id = payload.thread_id
+        ticker = payload.ticker
         
         # Get session and associated portfolio
         session = PortfolioService.get_session(db, thread_id)
@@ -108,45 +111,38 @@ async def ask_agent(
             content=query
         )
         
-        # CRITICAL: Get the PRE-INITIALIZED Vector DB instance
-        # This was created when the portfolio was created!
+        # Register session with VectorDBManager (for context tracking)
         vectordb_mgr = get_vectordb_manager()
-        vectordb_result = vectordb_mgr.get_for_session(thread_id)
+        vectordb_mgr.register_session(thread_id, portfolio.id)
         
-        if not vectordb_result:
-            print(f"Vector DB instance not in memory for thread {thread_id}. Attempting lazy load...")
-            # Lazy loading: Re-initialize from portfolio data
-            # This handles server restarts where in-memory state is lost but DB session persists
-            try:
-                # Initialize at PORTFOLIO level, then register session
-                vectordb_mgr.initialize_for_portfolio(portfolio.id, portfolio.company_names)
-                vectordb_mgr.register_session(thread_id, portfolio.id)
-                vectordb_result = vectordb_mgr.get_for_session(thread_id)
-                print(f"Successfully lazy-loaded Vector DB for portfolio {portfolio.id}")
-            except Exception as e:
-                print(f"Failed to lazy-load Vector DB: {e}")
+        # Map portfolio companies to tickers for the filter
+        # This helps the agent know which tickers are valid for this portfolio
+        company_tickers = []
+        for company in portfolio.company_names:
+            t = get_ticker(company)
+            if t:
+                company_tickers.append(t)
+            else:
+                # Fallback to company name if no ticker found
+                company_tickers.append(company)
                 
-        if not vectordb_result:
-            raise HTTPException(
-                status_code=500,
-                detail="Vector DB not initialized for this session. Please reactivate the portfolio."
-            )
-        
-        db_instance, company_filter = vectordb_result
-        
-        print(f"Using portfolio-scoped Vector DB")
+        print(f"Using portfolio-scoped context")
         print(f"   Portfolio: {portfolio.name}")
-        print(f"   Companies: {company_filter}")
-        print(f"   NO company name needed in state - DB already filtered!")
+        print(f"   Tickers: {company_tickers}")
+        if ticker:
+            print(f"   Target Ticker: {ticker}")
         
         config = {"configurable": {"thread_id": thread_id}}
         
         # Check semantic cache
         if semantic_cache:
             start_time = datetime.datetime.now()
-            cached_data = semantic_cache.lookup(query, thread_id=thread_id)
+            # Include ticker in cache key if present?
+            # Creating a composite key or just appending to query might be better
+            cache_query = f"{ticker}:{query}" if ticker else query
+            cached_data = semantic_cache.lookup(cache_query, thread_id=thread_id)
             if cached_data:
-                print(f"Returning cached response for: {query}")
+                print(f"Returning cached response for: {cache_query}")
                 response = cached_data.get("response")
                 response["thread_id"] = thread_id
                 elapsed = (datetime.datetime.now() - start_time).total_seconds()
@@ -162,9 +158,7 @@ async def ask_agent(
             await agent.aupdate_state(config, {"user_clarification": query})
             result = await agent.ainvoke(None, config)
         else:
-            # Standard execution with portfolio filtering
-            # IMPORTANT: We pass the DB instance directly, not company names!
-            # The DB is already scoped to portfolio companies
+            # Standard execution
             inputs = {
                 "messages": [HumanMessage(content=query)],
                 "vectorstore_searched": False,
@@ -176,8 +170,8 @@ async def ask_agent(
                 "document_sources": {},
                 "citation_info": [],
                 "summary_strategy": "single_source",
-                #"vectordb_instance": db_instance,  # REMOVED: Retrieved dynamically in nodes
-                "company_filter": company_filter,  # For logging/display only
+                "company_filter": company_tickers,  # Pass valid tickers for this portfolio
+                "ticker": ticker,  # Specific ticker if provided
                 "sub_query_analysis": {},
                 "sub_query_results": {}
             }
@@ -199,7 +193,8 @@ async def ask_agent(
             metadata={
                 "portfolio_id": portfolio.id,
                 "portfolio_name": portfolio.name,
-                "company_filter": company_filter,
+                "company_filter": company_tickers,
+                "ticker": ticker,
                 "vectorstore_searched": result.get("vectorstore_searched", False),
                 "web_searched": result.get("web_searched", False),
                 "document_count": len(result.get("documents", [])),
@@ -209,7 +204,6 @@ async def ask_agent(
         
         print(f"Query: {query}")
         print(f"Thread ID: {thread_id}")
-        print(f"Portfolio: {portfolio.name} (Companies: {company_filter})")
         print(f"Answer: {answer[:200]}...")
         print(f"Chat persisted to database")
         
@@ -219,7 +213,8 @@ async def ask_agent(
             "thread_id": thread_id,
             "portfolio_id": portfolio.id,
             "portfolio_name": portfolio.name,
-            "company_filter": company_filter,
+            "company_filter": company_tickers,
+            "ticker": ticker,
             "messages": [
                 {
                     "type": msg.__class__.__name__,
@@ -260,7 +255,8 @@ async def ask_agent(
         
         # Update cache
         if semantic_cache:
-            semantic_cache.update(query, response_data, thread_id=thread_id)
+            cache_query = f"{ticker}:{query}" if ticker else query
+            semantic_cache.update(cache_query, response_data, thread_id=thread_id)
         
         return response_data
         
@@ -301,6 +297,23 @@ async def compare_companies(
         if company3:
             companies.append(company3.lower())
             comparison_str += f" vs {company3}"
+            
+        # Map companies to tickers
+        tickers = []
+        for company in companies:
+            t = get_ticker(company)
+            if t:
+                tickers.append(t)
+            else:
+                # If it looks like a ticker, use it
+                if len(company) <= 5 and " " not in company:
+                    tickers.append(company.upper())
+                else:
+                    # Fallback? Maybe just warn or ignore?
+                    # For now keep it as is, retrieve will fail to find collection and fallback to web search probably.
+                    pass
+        
+        print(f"Mapped companies {companies} to tickers: {tickers}")
         
         # Generate session ID if not provided
         thread_id = payload.thread_id or f"comparison_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -332,20 +345,21 @@ Compare {comparison_str} 2024:
             content=f"Compare {comparison_str}"
         )
 
+        # NOTE: create_temporary might be redundant if we use existing ticker collections.
+        # But for now we kept existing logic in vectordb_manager.
+        # We will bypass using the returned company_filter and use our mapped tickers.
         vectordb_mgr = get_vectordb_manager()
-        db_instance, company_filter = vectordb_mgr.create_temporary(thread_id, companies)
+        # db_instance, _ = vectordb_mgr.create_temporary(thread_id, companies) 
+        # Commenting out create_temporary as we want to use existing collections
+        # If we need ad-hoc ingestion for comparison, that's a separate feature.
         
-        print(f"Compare mode: Using temporary Vector DB")
-        print(f"   Companies: {companies}")
-        print(f"   Portfolio DB instances unaffected")
+        print(f"Compare mode: Using ticker-based collections")
+        print(f"   Tickers: {tickers}")
         print(f"   Session ID: {thread_id}")
         
-        # Use provided thread_id or generate a new one - MOVED UP
-        # thread_id = payload.thread_id or f"comparison_{uuid.uuid4()}"
         config = {"configurable": {"thread_id": thread_id}}
         
         # Prepare inputs with comparison mode enabled
-        # Pass the TEMPORARY DB instance, not company names
         inputs = {
             "messages": [HumanMessage(content=query)],
             "vectorstore_searched": False,
@@ -358,7 +372,7 @@ Compare {comparison_str} 2024:
             "citation_info": [],
             "summary_strategy": "single_source",
             #"vectordb_instance": db_instance,  # REMOVED: Retrieved dynamically in nodes
-            "company_filter": company_filter,  # For logging/display
+            "company_filter": tickers,  # Pass TICKERS here
             "sub_query_analysis": {},
             "sub_query_results": {},
             "is_comparison_mode": True,

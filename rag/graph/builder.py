@@ -39,7 +39,7 @@ class BuildingGraph:
         Returns:
             app :- compiled graph
         """
-        print("🚀 Building context-free RAG graph...")
+        print("Building context-free RAG graph...")
         
         workflow = StateGraph(GraphState)
 

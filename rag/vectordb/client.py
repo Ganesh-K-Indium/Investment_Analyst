@@ -7,6 +7,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient
 from qdrant_client import models
+from qdrant_client.http.models import PayloadSchemaType
 from tqdm import tqdm
 import os
 
@@ -23,15 +24,16 @@ except ImportError:
 class load_vector_database():
     """Unified vector database loader with advanced hybrid search capabilities"""
     
-    def __init__(self, use_hybrid_search: bool = True):
+    def __init__(self, use_hybrid_search: bool = True, collection_name: str = None):
         """
         Initialize unified vector database loader with hybrid search.
         
         Args:
             use_hybrid_search: If True, use hybrid search with dense, sparse (BM25), and ColBERT vectors.
+            collection_name: Name of the collection to use. If None, uses default unified collection.
         """
         # Use unified collection for both text and images
-        self.collection_name = "unified_rag_db_hybrid"
+        self.collection_name = collection_name if collection_name else "unified_rag_db_hybrid"
         self.use_hybrid_search = use_hybrid_search
         
         # Initialize embeddings
@@ -66,6 +68,70 @@ class load_vector_database():
             except Exception as local_error:
                 print(f"Failed to connect to local Qdrant: {local_error}")
                 raise ConnectionError("Unable to connect to Qdrant instances.")
+
+        # Ensure collection exists with correct config
+        self.ensure_collection_exists()
+
+    def ensure_collection_exists(self):
+        """
+        Ensure the collection exists with the required configuration.
+        If not, create it with hybrid search support (dense + sparse) and payload indexes.
+        """
+        try:
+            collections = self.qdrant_client.get_collections().collections
+            exists = any(c.name == self.collection_name for c in collections)
+            
+            if not exists:
+                print(f"Collection '{self.collection_name}' does not exist. Creating with hybrid config...")
+                
+                # Dense embedding size (OpenAI)
+                dense_size = 1536
+                
+                # Create collection with hybrid config
+                self.qdrant_client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config={
+                        "dense": models.VectorParams(
+                            size=dense_size,
+                            distance=models.Distance.COSINE,
+                        ),
+                    },
+                    sparse_vectors_config={
+                        "bm25": models.SparseVectorParams(
+                            modifier=models.Modifier.IDF,
+                        )
+                    }
+                )
+                
+                # Create payload indexes
+                payload_fields = {
+                    "metadata.source_file": PayloadSchemaType.KEYWORD,
+                    "metadata.company": PayloadSchemaType.KEYWORD,
+                    "metadata.content_type": PayloadSchemaType.KEYWORD,
+                    "metadata.content_hash": PayloadSchemaType.KEYWORD,
+                    "metadata.image_content_hash": PayloadSchemaType.KEYWORD,
+                    "metadata.page_num": PayloadSchemaType.INTEGER,
+                    "metadata.ingestion_timestamp": PayloadSchemaType.KEYWORD,
+                }
+                
+                for field_name, schema in payload_fields.items():
+                    print(f"Creating index for {field_name} ({schema})...")
+                    self.qdrant_client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name=field_name,
+                        field_schema=schema,
+                    )
+                
+                print(f" Collection '{self.collection_name}' created successfully with hybrid search and indexes.")
+            else:
+                 # Optional: Check if indexes exist and create if missing?
+                 # For now, assume if it exists, it's correct or managed elsewhere.
+                 pass
+                 
+        except Exception as e:
+            print(f"Error ensuring collection exists: {e}")
+            # Don't raise, might interfere with read-only operations if strict permissions logic
+
     
     def get_unified_vectorstore(self):
         """

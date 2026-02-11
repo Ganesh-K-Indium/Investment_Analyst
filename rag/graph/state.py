@@ -1,4 +1,4 @@
-from typing import List, Annotated, Sequence,Dict, Any
+from typing import List, Annotated, Sequence,Dict, Any, Optional
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
@@ -65,7 +65,7 @@ class GraphState(TypedDict):
     user_clarification: str  # User's response to clarification
     clarified_intent: Dict[str, Any]  # LLM-parsed intent from clarification
     retrieval_constraints: Dict[str, Any]  # Specific filters/constraints from user
-    retrieval_constraints: Dict[str, Any]  # Specific filters/constraints from user
     #vectordb_instance: Any  # REMOVED: Managed via VectorDBManager singleton
     company_filter: List[str]  # List of companies this DB instance is filtered for
+    ticker: Optional[str]  # Ticker symbol for collection selection
     

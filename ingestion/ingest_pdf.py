@@ -3,18 +3,25 @@
 Simple PDF Ingestion Script
 
 Usage:
-    python ingest_pdf.py /path/to/pdf_file.pdf
+    python ingest_pdf.py <pdf_file_path> [ticker]
+
+Example:
+    python ingest_pdf.py /path/to/apple_10k.pdf AAPL
 """
 
 import sys
 import os
-import json
+import argparse
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add project root directory to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.insert(0, project_root)
+# Add ingestion directory to path
+sys.path.insert(0, current_dir)
 
-from pdf_processor1 import process_pdf_and_get_result
+from ingestion.pdf_processor1 import process_pdf_and_get_result
 
 
 def format_result(result: dict) -> str:
@@ -24,6 +31,7 @@ def format_result(result: dict) -> str:
         "PDF INGESTION RESULT",
         "="*60,
         f"File: {result['file_name']}",
+        f"Ticker: {result.get('ticker', 'N/A')}",
         f"Status: {'✓ SUCCESS' if result['success'] else '✗ FAILED'}",
         ""
     ]
@@ -52,12 +60,13 @@ def format_result(result: dict) -> str:
     return "\n".join(lines)
 
 
-def ingest_pdf(pdf_path: str) -> dict:
+def ingest_pdf(pdf_path: str, ticker: str = None) -> dict:
     """
     Ingest a PDF file and return the result.
     
     Args:
         pdf_path: Path to the PDF file
+        ticker: Ticker symbol (optional)
         
     Returns:
         dict: Processing result
@@ -86,22 +95,23 @@ def ingest_pdf(pdf_path: str) -> dict:
         }
     
     print(f"Ingesting PDF: {pdf_path}")
-    result = process_pdf_and_get_result(pdf_path)
+    if ticker:
+        print(f"Ticker: {ticker}")
+        
+    result = process_pdf_and_get_result(pdf_path, ticker=ticker)
     return result
 
 
 def main():
     """Main entry point."""
-    if len(sys.argv) < 2:
-        print("Usage: python ingest_pdf.py <pdf_file_path>")
-        print("\nExample: python ingest_pdf.py /path/to/document.pdf")
-        print("Note: If the path contains spaces, enclose it in quotes or pass as separate arguments")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Ingest a PDF file into the vector database.")
+    parser.add_argument("pdf_path", help="Path to the PDF file")
+    parser.add_argument("ticker", nargs="?", help="Ticker symbol (optional)", default=None)
     
-    pdf_path = ' '.join(sys.argv[1:])
+    args = parser.parse_args()
     
     # Process the PDF
-    result = ingest_pdf(pdf_path)
+    result = ingest_pdf(args.pdf_path, args.ticker)
     
     # Display formatted result
     print(format_result(result))

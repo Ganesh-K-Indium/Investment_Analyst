@@ -31,19 +31,19 @@ class SemanticCache:
         self.qdrant_api_key = os.getenv("QDRANT_API_KEY", '')
         
         try:
-            print(f"🔌 SemanticCache: Connecting to Qdrant at {self.qdrant_url}...")
+            print(f" SemanticCache: Connecting to Qdrant at {self.qdrant_url}...")
             self.client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=10)
             self.client.get_collections() # Test connection
-            print("✅ SemanticCache: Connected to Cloud Qdrant")
+            print(" SemanticCache: Connected to Cloud Qdrant")
         except Exception as e:
-            print(f"⚠️ SemanticCache: Cloud connection failed ({e}). Trying local...")
+            print(f" SemanticCache: Cloud connection failed ({e}). Trying local...")
             self.qdrant_url = "http://localhost:6333"
             self.qdrant_api_key = ''
             try:
                 self.client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=5)
-                print("✅ SemanticCache: Connected to Local Qdrant")
+                print("SemanticCache: Connected to Local Qdrant")
             except Exception as local_e:
-                print(f"❌ SemanticCache: Failed to connect to Qdrant. Caching disabled. {local_e}")
+                print(f" SemanticCache: Failed to connect to Qdrant. Caching disabled. {local_e}")
                 self.client = None
                 
         # Ensure collection exists
@@ -57,7 +57,7 @@ class SemanticCache:
             exists = any(c.name == self.collection_name for c in collections)
             
             if not exists:
-                print(f"🔨 SemanticCache: Creating collection '{self.collection_name}'...")
+                print(f" SemanticCache: Creating collection '{self.collection_name}'...")
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=models.VectorParams(
@@ -65,7 +65,7 @@ class SemanticCache:
                         distance=models.Distance.COSINE
                     )
                 )
-                print(f"✅ SemanticCache: Collection created.")
+                print(f" SemanticCache: Collection created.")
             
             # Ensure payload index for thread_id (required for filtering)
             self.client.create_payload_index(
@@ -73,9 +73,9 @@ class SemanticCache:
                 field_name="thread_id",
                 field_schema=models.PayloadSchemaType.KEYWORD
             )
-            print("✅ SemanticCache: Thread ID index ensured.")
+            print(" SemanticCache: Thread ID index ensured.")
         except Exception as e:
-            print(f"❌ SemanticCache: Error ensuring collection: {e}")
+            print(f" SemanticCache: Error ensuring collection: {e}")
 
     def lookup(self, query: str, thread_id: str = None):
         """
@@ -98,12 +98,12 @@ class SemanticCache:
         
         # Check for keywords
         if any(kw in query_lower for kw in bypass_keywords):
-            print(f"⏩ SemanticCache: Bypassing cache for context-dependent query: '{query}'")
+            print(f" SemanticCache: Bypassing cache for context-dependent query: '{query}'")
             return None
             
         # Check for very short queries (likely follow-ups)
         if len(query.split()) < 3:
-            print(f"⏩ SemanticCache: Bypassing cache for short query: '{query}'")
+            print(f" SemanticCache: Bypassing cache for short query: '{query}'")
             return None
             
         try:
@@ -138,11 +138,11 @@ class SemanticCache:
                 return hit.payload
             else:
                 scope_msg = f"Thread: {thread_id}" if thread_id else "Global"
-                print(f"💨 SemanticCache: MISS ({scope_msg})")
+                print(f" SemanticCache: MISS ({scope_msg})")
                 return None
                 
         except Exception as e:
-            print(f"⚠️ SemanticCache: Lookup error: {e}")
+            print(f" SemanticCache: Lookup error: {e}")
             return None
 
     def update(self, query: str, response_data: dict, thread_id: str = None):
@@ -178,7 +178,7 @@ class SemanticCache:
                     )
                 ]
             )
-            print(f"💾 SemanticCache: Saved response for '{query[:30]}...'")
+            print(f" SemanticCache: Saved response for '{query[:30]}...'")
             
         except Exception as e:
-            print(f"⚠️ SemanticCache: Update error: {e}")
+            print(f" SemanticCache: Update error: {e}")

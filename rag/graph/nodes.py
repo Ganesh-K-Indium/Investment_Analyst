@@ -11,6 +11,7 @@ from rag.vectordb.chains import (get_retrival_grader_chain, get_rag_chain,
                                                           get_financial_analyst_grader_chain,
                                                           get_financial_data_extractor_chain)
 from rag.vectordb.client import load_vector_database
+from app.utils.company_mapping import get_ticker
 load_dotenv()
 
 # Trusted financial data domains for web search
@@ -137,7 +138,7 @@ def smart_extract_financial_data(documents, max_chars=80000):
     
     # Check cache first (MAJOR optimization - avoids re-processing)
     if cache_key in _extraction_cache:
-        print(f"[CACHE HIT] ✅ Reusing previously processed {len(documents)} documents")
+        print(f"[CACHE HIT]  Reusing previously processed {len(documents)} documents")
         return _extraction_cache[cache_key]
     
     total_chars = sum(len(doc.page_content) for doc in documents)
@@ -177,7 +178,7 @@ def smart_extract_financial_data(documents, max_chars=80000):
         
         # Small docs: Add directly (no LLM processing needed)
         if small_docs:
-            print(f"[EXTRACT] ✅ Adding {len(small_docs)} small docs directly (no LLM needed)")
+            print(f"[EXTRACT]  Adding {len(small_docs)} small docs directly (no LLM needed)")
             extracted_docs.extend(small_docs)
         
         # Large docs: Process with LLM
@@ -222,11 +223,11 @@ def smart_extract_financial_data(documents, max_chars=80000):
                         # Add more original content for better context
                         additional_content = doc.page_content[:budget_per_web_doc - len(structured_summary)]
                         final_content = f"{structured_summary}\n\n---FULL CONTENT---\n{additional_content}"
-                        print(f"   ✅ {structured_data.company} {structured_data.year}: Extracted + {len(final_content):,} chars content")
+                        print(f"    {structured_data.company} {structured_data.year}: Extracted + {len(final_content):,} chars content")
                     else:
                         # Extraction didn't find much, use more original content
                         final_content = doc.page_content[:budget_per_web_doc]
-                        print(f"   ⚠️  Limited extraction, using {len(final_content):,} chars original content")
+                        print(f"     Limited extraction, using {len(final_content):,} chars original content")
                     
                     return Document(
                         page_content=final_content,
@@ -236,7 +237,7 @@ def smart_extract_financial_data(documents, max_chars=80000):
                 except Exception as e:
                     # SMART FALLBACK: Keep MORE content (3-5K, not 1K!)
                     fallback_content = doc.page_content[:budget_per_web_doc]
-                    print(f"   ⚠️  Extraction failed, keeping {len(fallback_content):,} chars original content")
+                    print(f"     Extraction failed, keeping {len(fallback_content):,} chars original content")
                     return Document(
                         page_content=fallback_content,
                         metadata=doc.metadata
@@ -256,7 +257,7 @@ def smart_extract_financial_data(documents, max_chars=80000):
         vs_total = sum(len(d.page_content) for d in vectorstore_docs)
         if vs_total <= remaining_budget:
             extracted_docs.extend(vectorstore_docs)
-            print(f"[EXTRACT] ✅ All vectorstore docs fit ({vs_total:,} chars)")
+            print(f"[EXTRACT] All vectorstore docs fit ({vs_total:,} chars)")
         else:
             # Truncate vectorstore docs proportionally
             budget_per_vs = remaining_budget // len(vectorstore_docs)
@@ -268,7 +269,7 @@ def smart_extract_financial_data(documents, max_chars=80000):
                         page_content=doc.page_content[:budget_per_vs],
                         metadata=doc.metadata
                     ))
-            print(f"[EXTRACT] ⚠️  Vectorstore docs truncated to fit budget")
+            print(f"[EXTRACT] Vectorstore docs truncated to fit budget")
     
     # Calculate final stats
     final_chars = sum(len(d.page_content) for d in extracted_docs)
@@ -276,7 +277,7 @@ def smart_extract_financial_data(documents, max_chars=80000):
     
     print(f"[EXTRACT COMPLETE]")
     print(f"  Original: {total_chars:,} → Final: {final_chars:,} chars ({reduction_pct:.1f}% reduction)")
-    print(f"  ✅ {len(extracted_docs)} documents with rich financial + contextual data")
+    print(f"  {len(extracted_docs)} documents with rich financial + contextual data")
     
     # Cache result
     _extraction_cache[cache_key] = extracted_docs
@@ -307,7 +308,7 @@ def preprocess_and_analyze_query(state):
     # -------------------------------------------------------------
     persisted_documents = state.get("documents", [])
     if persisted_documents and len(persisted_documents) > 0:
-        print(f"🧠 Memory: Found {len(persisted_documents)} persisted documents from previous turn")
+        print(f" Memory: Found {len(persisted_documents)} persisted documents from previous turn")
         
         # Intent Detection Keywords
         SUMMARIZE_KEYWORDS = ["summarize", "sum up", "recap", "give me a summary", "in short", "briefly", "tldr"]
@@ -317,7 +318,7 @@ def preprocess_and_analyze_query(state):
         # Priority 1: Detect SUMMARIZE intent (highest efficiency - use conversation messages)
         is_summarize = any(keyword in question_lower for keyword in SUMMARIZE_KEYWORDS)
         if is_summarize:
-            print("🧠 Smart Reuse: SUMMARIZE query detected → Will use conversation messages")
+            print(" Smart Reuse: SUMMARIZE query detected → Will use conversation messages")
             
             # Extract AI messages from conversation history
             ai_messages = []
@@ -342,7 +343,7 @@ def preprocess_and_analyze_query(state):
         # Priority 2: Detect MORE_INFO intent (incremental retrieval)
         is_more_info = any(keyword in question_lower for keyword in MORE_INFO_KEYWORDS)
         if is_more_info:
-            print("🔍 Smart Reuse: MORE_INFO query detected → Will perform incremental retrieval")
+            print(" Smart Reuse: MORE_INFO query detected → Will perform incremental retrieval")
             return {
                 "companies_detected": [],
                 "context_strategy": "incremental",
@@ -359,7 +360,7 @@ def preprocess_and_analyze_query(state):
         # Priority 3: Detect generic FOLLOW_UP (use persisted documents)
         is_follow_up = any(keyword in question_lower for keyword in FOLLOW_UP_KEYWORDS)
         if is_follow_up:
-            print("🚀 Smart Reuse: FOLLOW_UP detected → Will use existing context")
+            print(" Smart Reuse: FOLLOW_UP detected → Will use existing context")
             return {
                 "companies_detected": [],
                 "context_strategy": "documents",
@@ -501,8 +502,8 @@ def request_clarification(state):
     else:
         context_preview = "No prior context available"
     
-    print(f"📋 Query type: {query_type}")
-    print(f"📚 Context: {context_preview}")
+    print(f" Query type: {query_type}")
+    print(f" Context: {context_preview}")
     
     # Generate clarification question using GPT-4o
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
@@ -532,7 +533,7 @@ Clarifying question:"""
     response = llm.invoke(prompt)
     clarification_question = response.content.strip()
     
-    print(f"❓ Generated question: {clarification_question[:100]}...")
+    print(f"Generated question: {clarification_question[:100]}...")
     print(f"{'='*80}\n")
     
     return {
@@ -551,18 +552,18 @@ def process_clarification(state):
     original_intent = state.get("sub_query_analysis", {}).get("query_type")
     
     if not user_response:
-        print("⚠️ No user clarification provided - proceeding with original intent")
+        print(" No user clarification provided - proceeding with original intent")
         return {
             "clarification_needed": False,
             "clarified_intent": {"action": "proceed_original"}
         }
     
-    print(f"💬 User response: {user_response[:100]}...")
+    print(f" User response: {user_response[:100]}...")
     
     # Check if user wants to skip
     skip_keywords = ["skip", "proceed", "continue", "no", "as planned", "go ahead"]
     if any(kw in user_response.lower() for kw in skip_keywords):
-        print("✅ User skipped clarification - proceeding with original intent")
+        print(" User skipped clarification - proceeding with original intent")
         return {
             "clarification_needed": False,
             "clarified_intent": {"action": "proceed_original"}
@@ -602,7 +603,7 @@ Extract:
         response = llm.invoke(prompt)
         clarified_intent = parser.parse(response.content)
         
-        print(f"📋 Clarified Intent:")
+        print(f" Clarified Intent:")
         print(f"   Action: {clarified_intent.get('action')}")
         print(f"   Scope: {clarified_intent.get('scope')}")
         print(f"   Keywords: {clarified_intent.get('keywords')}")
@@ -617,7 +618,7 @@ Extract:
         }
     
     except Exception as e:
-        print(f"⚠️ Error parsing clarification: {e}")
+        print(f" Error parsing clarification: {e}")
         print("Proceeding with original intent")
         return {
             "clarification_needed": False,
@@ -626,49 +627,32 @@ Extract:
 
 def retrieve(state, config):
     """
-    UNIFIED RETRIEVAL: Retrieves BOTH text and image data from unified collection using hybrid search.
-    Uses dense (OpenAI), sparse (BM25), and RRF fusion for optimal retrieval quality.
+    Retrieve documents relevant to the question using ticker-based collections.
+    Supports multi-company retrieval by querying separate collections.
     """
     print("="*80)
-    print("🚀 UNIFIED HYBRID RETRIEVAL (TEXT + IMAGES)")
+    print(" TICKER-BASED RETRIEVAL (TEXT + IMAGES)")
     print("="*80)
     
     messages = state["messages"]
     question = messages[-1].content
     
-    # No conversation context in context-free mode
-    enriched_query = question
-    
-    # 🔥 NEW ARCHITECTURE: Retrieve pre-initialized Vector DB instance using thread_id
-    # This avoids storing non-serializable objects in the state
-    from app.services.vectordb_manager import get_vectordb_manager
-    
+    # Get configuration
     thread_id = config.get("configurable", {}).get("thread_id")
-    if not thread_id:
-        raise ValueError("Thread ID missing in configuration. Cannot retrieve Vector DB instance.")
-        
+    
+    # Get managers
+    from app.services.vectordb_manager import get_vectordb_manager
     vectordb_mgr = get_vectordb_manager()
-    vectordb_result = vectordb_mgr.get_for_session(thread_id)
     
-    if not vectordb_result:
-        error_msg = f"❌ Vector DB instance not found for thread {thread_id}. Portfolio must be activated!"
-        print(error_msg)
-        raise ValueError(error_msg)
+    # 1. Identify Target Ticker(s)
+    # ----------------------------
+    # Priority:
+    # 1. Ticker explicitly provided in state (from API)
+    # 2. Ticker derived from company_filter
+    # 3. Ticker derived from question analysis
     
-    vectordb_instance, company_filter_from_db = vectordb_result
-    
-    # Use the filter from the DB or state (should be consistent)
-    company_filter = state.get("company_filter", []) or company_filter_from_db
-    
-    print(f"✅ Using pre-initialized Vector DB for thread: {thread_id}")
-    print(f"🔒 Company Filter: {company_filter}")
-    print(f"📊 DB instance ready - Retrieved from Manager")
-    
-    # Use the pre-initialized instance (already connected and filtered)
-    init = vectordb_instance
-    
-    # Backward compatibility: map new field to old variable name for existing logic
-    user_provided_company = company_filter
+    primary_ticker = state.get("ticker")
+    company_filter = state.get("company_filter", [])
     
     # Use cached sub-query analysis
     sub_query_analysis = state.get("sub_query_analysis", {})
@@ -677,151 +661,70 @@ def retrieve(state, config):
     companies_in_question = sub_query_analysis.get("companies_detected", [])
     query_type = sub_query_analysis.get("query_type", "single_company")
     
-    print(f"📊 Type: {query_type} | 🏢 Companies: {companies_in_question or 'None'} | 🔍 Sub-queries: {len(sub_queries) if needs_sub_queries else 0}")
-    
-    # ============================================================================
-    # INCREMENTAL RETRIEVAL: For "more info" queries, merge new + existing docs
-    # ============================================================================
-    context_strategy = state.get("context_strategy", "")
-    if context_strategy == "incremental":
-        print("\\n🔄 INCREMENTAL RETRIEVAL MODE")
-        print("-" * 80)
-        
-        # Get existing documents and their IDs
-        existing_docs = state.get("documents", [])
-        existing_doc_ids = set()
-        
-        for doc in existing_docs:
-            if hasattr(doc, 'metadata'):
-                # Create unique doc ID
-                doc_id = f"{doc.metadata.get('company','')}_{doc.metadata.get('source_file','')}_{doc.metadata.get('page_num','')}_{doc.page_content[:50]}"
-                existing_doc_ids.add(doc_id)
-        
-        print(f"📚 Existing: {len(existing_docs)} documents from previous turn")
-        
-        # Perform new retrieval using pre-initialized DB instance
-        print(f"🔍 Retrieving NEW documents for: {question}")
-        new_results = init.hybrid_search(
-            query=question,
-            content_type=None,  # Both text and images
-            company=company_filter or (companies_in_question[0] if companies_in_question else None),
-            limit=5,  # Smaller limit for incremental
-            dense_limit=50,
-            sparse_limit=50
-        )
-        
-        # Convert to Document objects and filter duplicates
-        unique_new_docs = []
-        for point in new_results:
-            if hasattr(point, 'payload'):
-                content = point.payload.get('page_content', '')
-                metadata = point.payload.get('metadata', {})
-                doc = Document(page_content=content, metadata=metadata)
-                
-                # Check if duplicate
-                doc_id = f"{metadata.get('company','')}_{metadata.get('source_file','')}_{metadata.get('page_num','')}_{content[:50]}"
-                
-                if doc_id not in existing_doc_ids:
-                    unique_new_docs.append(doc)
-                    existing_doc_ids.add(doc_id)  # Prevent duplicates within new docs
-        
-        # Merge: existing + new unique documents
-        print(f"✅ Found {len(unique_new_docs)} NEW unique documents")
-        merged_documents = existing_docs + unique_new_docs
-        print(f"📦 Total context: {len(merged_documents)} documents ({len(existing_docs)} existing + {len(unique_new_docs)} new)")
-        print(f"{'='*80}\\n")
-        
-        return {
-            "documents": merged_documents,
-            "vectorstore_searched": True,
-            "tool_calls": state.get("tool_calls", []) + [{
-                "tool": "incremental_retrieval",
-                "existing_docs": len(existing_docs),
-                "new_docs": len(unique_new_docs),
-                "total_docs": len(merged_documents)
-            }]
-        }
+    print(f" Type: {query_type} |  Companies: {companies_in_question or 'None'} |  Sub-queries: {len(sub_queries) if needs_sub_queries else 0}")
 
-    
-    # ============================================================================
-    # CRITICAL: Check if requested company exists in vector DB FIRST
-    # ============================================================================
-    # Handle both string and list inputs for company names
-    if user_provided_company:
-        target_company = user_provided_company[0] if isinstance(user_provided_company, list) else user_provided_company
-    elif companies_in_question:
-        target_company = companies_in_question[0] if isinstance(companies_in_question, list) else companies_in_question
-    else:
-        target_company = None
-    
-    if target_company:
-        print(f"\n🔍 Checking if '{target_company}' exists in vector DB...")
-        available_companies = init.get_collection_companies().lower()
-        print(f"   Available companies: {available_companies}")
+    if not primary_ticker:
+        # Try to derive from company_filter
+        if company_filter:
+            # company_filter now contains tickers (mapped in API) or names
+            for c in company_filter:
+                t = get_ticker(c)
+                if t: 
+                    primary_ticker = t
+                    break
+                # If c is already a ticker (heuristic: short, no spaces)
+                if len(c) <= 5 and " " not in c:
+                    primary_ticker = c
+                    break
         
-        # Ensure target_company is a string before calling .lower()
-        target_company_str = str(target_company) if not isinstance(target_company, str) else target_company
-        
-        if target_company_str.lower() not in available_companies:
-            print(f"   ❌ '{target_company_str}' NOT FOUND in vector DB")
-            print(f"   ✅ Returning EMPTY results → Will trigger web search")
-            print(f"{'='*80}\n")
+        # Try to derive from question analysis
+        if not primary_ticker and companies_in_question:
+            primary_ticker = get_ticker(companies_in_question[0])
             
-            return {
-                "documents": [],
-                "vectorstore_searched": True,
-                "tool_calls": state.get("tool_calls", []) + [{
-                    "tool": "unified_hybrid_retriever",
-                    "result": "company_not_in_db",
-                    "requested_company": target_company_str,
-                    "available_companies": available_companies
-                }],
-                "sub_query_results": {}
-            }
-        else:
-            print(f"   ✅ '{target_company_str}' FOUND in vector DB")
-    
+    print(f" Primary Ticker: {primary_ticker or 'None (Generic Source)'}")
+
+    # ============================================================================
+    # SUB-QUERY MODE: Targeted retrieval for each sub-query (Multi-Collection)
+    # ============================================================================
     all_documents = []
     sub_query_results = {}
+    seen_doc_ids = set()
     
-    # SUB-QUERY MODE: Targeted retrieval for each sub-query
     if needs_sub_queries and sub_queries:
         print(f"\n🎯 SUB-QUERY MODE: {len(sub_queries)} data points")
         print("-" * 80)
         
-        seen_doc_ids = set()
-        
         for i, sq in enumerate(sub_queries, 1):
-            print(f"\n📍 {i}/{len(sub_queries)}: {sq}")
+            print(f"\n {i}/{len(sub_queries)}: {sq}")
             
-            # Detect company for this sub-query
-            sq_lower = sq.lower()
-            sq_company = None
+            # Detect company/ticker for THIS sub-query
+            sq_ticker = None
+            
+            # Check if sub-query mentions a specific company
             for company in companies_in_question:
-                if company.lower() in sq_lower:
-                    sq_company = company
+                if company.lower() in sq.lower():
+                    sq_ticker = get_ticker(company)
                     break
             
-            # ALWAYS filter by company if detected or from portfolio
-            # Priority: sub-query company > portfolio filter > companies in question
-            if sq_company:
-                filter_company = sq_company
-            elif company_filter:
-                filter_company = company_filter
-            elif companies_in_question:
-                filter_company = companies_in_question[0]  # Use first detected company
-            else:
-                filter_company = None
+            # Fallback to primary ticker
+            if not sq_ticker:
+                sq_ticker = primary_ticker
             
-            if filter_company:
-                print(f"   🔒 Filter: {filter_company}")
+            if not sq_ticker:
+                print(f"  No ticker identified for sub-query. Skipping.")
+                sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
+                continue
+                
+            print(f"   Target Ticker: {sq_ticker}")
             
             try:
-                # UNIFIED HYBRID SEARCH: Gets both text and images
-                search_results = init.hybrid_search(
+                # Get instance for this ticker
+                db_instance = vectordb_mgr.get_instance(sq_ticker)
+                
+                # Perform search
+                search_results = db_instance.hybrid_search(
                     query=sq,
-                    content_type=None,  # Both text and images
-                    company=filter_company,
+                    content_type=None,
                     limit=8,
                     dense_limit=80,
                     sparse_limit=80
@@ -836,21 +739,9 @@ def retrieve(state, config):
                         doc = Document(page_content=content, metadata=metadata)
                         sq_docs.append(doc)
                 
-                # CRITICAL: Validate that documents match the requested company
-                if filter_company:
-                    validated_docs = []
-                    # Handle both string and list filter_company
-                    filter_companies = filter_company if isinstance(filter_company, list) else [filter_company]
-                    filter_companies_lower = [fc.lower() for fc in filter_companies]
-                    
-                    for doc in sq_docs:
-                        doc_company = doc.metadata.get('company', '').lower() if hasattr(doc, 'metadata') else ''
-                        # Check if doc matches any of the filter companies
-                        if any(fc in doc_company or doc_company in fc for fc in filter_companies_lower):
-                            validated_docs.append(doc)
-                        else:
-                            print(f"   ⚠️ Filtering out doc from wrong company: {doc.metadata.get('company', 'Unknown')}")
-                    sq_docs = validated_docs
+                # Validation (check if metadata matches ticker if available)
+                # Note: Collection is already ticker-specific, so validation is implicit
+                # but we can filter by 'company' name in metadata if we want strictness
                 
                 # Track results
                 companies_found = set()
@@ -869,10 +760,12 @@ def retrieve(state, config):
                     "content_types": content_types
                 }
                 
-                # Deduplicate
+                # Deduplicate and Collect
                 for doc in sq_docs:
                     if hasattr(doc, 'metadata'):
-                        doc_id = f"{doc.metadata.get('company','')}_{doc.metadata.get('source_file','')}_{doc.metadata.get('page_num','')}_{doc.metadata.get('content_type','')}_{doc.page_content[:50]}"
+                         # Include ticker in ID to prevent collisions across collections?
+                         # Actually UUIDs are unique enough usually
+                         doc_id = f"{doc.metadata.get('company','')}_{doc.metadata.get('source_file','')}_{doc.metadata.get('page_num','')}_{doc.metadata.get('content_type','')}_{doc.page_content[:50]}"
                     else:
                         doc_id = doc.page_content[:100]
                     
@@ -880,90 +773,78 @@ def retrieve(state, config):
                         seen_doc_ids.add(doc_id)
                         all_documents.append(doc)
                 
-                status = "✅" if len(sq_docs) > 0 else "❌"
-                print(f"   {status} {len(sq_docs)} docs | 📄 {content_types['text']} text, 🖼️ {content_types['image']} images")
-                print(f"   🏢 {', '.join(companies_found) if companies_found else 'None'}")
+                status = "Yes" if len(sq_docs) > 0 else "No"
+                print(f"   {status} {len(sq_docs)} docs |  {content_types['text']} text,  {content_types['image']} images")
                 
             except Exception as e:
-                print(f"   ❌ Error: {e}")
+                print(f"   ❌ Error searching collection for {sq_ticker}: {e}")
                 sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
-        
-        print(f"\n{'='*80}")
-        print(f"📦 Retrieved {len(all_documents)} unique documents")
-        
-        # Show preview
-        if all_documents:
-            print(f"\n🔍 Preview:")
-            for i, doc in enumerate(all_documents[:3], 1):
-                company = doc.metadata.get('company', 'Unknown') if hasattr(doc, 'metadata') else 'Unknown'
-                ctype = doc.metadata.get('content_type', 'text') if hasattr(doc, 'metadata') else 'text'
-                preview = doc.page_content[:150].replace('\n', ' ')
-                print(f"   {i}. [{ctype.upper()}] {company}: {preview}...")
-    
+
     else:
-        # DIRECT MODE: Single retrieval
+        # ============================================================================
+        # DIRECT MODE: Retrieval from one or more collections
+        # ============================================================================
         print(f"\n🎯 DIRECT RETRIEVAL MODE")
         print("-" * 80)
         
-        retrieval_query = enriched_query if enriched_query != question else question
-        if retrieval_query != question:
-            print(f"📝 Enriched: {retrieval_query[:100]}...")
+        # Identify all target tickers
+        target_tickers = set()
+        if primary_ticker:
+            target_tickers.add(primary_ticker)
+            
+        # Also add tickers from company_filter (passed from API, especially for comparison)
+        if company_filter:
+            for t in company_filter:
+                # Assuming company_filter contains tickers now (mapped in API)
+                # But double check just in case
+                valid_ticker = get_ticker(t) or (t if len(t) <= 5 and " " not in t else None)
+                if valid_ticker:
+                    target_tickers.add(valid_ticker)
         
-        try:
-            # UNIFIED HYBRID SEARCH: Gets both text and images (using pre-initialized DB)
-            search_results = init.hybrid_search(
-                query=retrieval_query,
-                content_type=None,  # Both text and images
-                company=company_filter,  # Use portfolio filter
-                limit=15,
-                dense_limit=100,
-                sparse_limit=100
-            )
+        if not target_tickers:
+             print("❌ No target ticker identification. Cannot perform vector search.")
+             print("✅ Returning EMPTY (will trigger web search)")
+             all_documents = []
+        else:
+            print(f"🔍 Searching collections for tickers: {', '.join(target_tickers)}")
             
-            # Convert to Document objects
-            temp_docs = []
-            for point in search_results:
-                if hasattr(point, 'payload'):
-                    content = point.payload.get('page_content', '')
-                    metadata = point.payload.get('metadata', {})
-                    doc = Document(page_content=content, metadata=metadata)
-                    temp_docs.append(doc)
-            
-            # CRITICAL: Validate that documents match the requested company
-            # CRITICAL: Validate that documents match the requested company
-            if user_provided_company or companies_in_question:
-                # Resolve filter_company to a string or list of strings
-                raw_filter = user_provided_company or companies_in_question
-                
-                # Normalize to a set of lowercase company names for checking
-                if isinstance(raw_filter, str):
-                    target_companies = {raw_filter.lower()}
-                elif isinstance(raw_filter, list):
-                    target_companies = {c.lower() for c in raw_filter if isinstance(c, str)}
-                else:
-                    target_companies = set()
-                
-                validated_docs = []
-                for doc in temp_docs:
-                    doc_company = doc.metadata.get('company', '').lower() if hasattr(doc, 'metadata') else ''
+            # Iterate through all identified tickers and merge results
+            for target_ticker in target_tickers:
+                try:
+                    print(f"   👉 Querying collection: ticker_{target_ticker}")
+                    db_instance = vectordb_mgr.get_instance(target_ticker)
                     
-                    # Check if document company matches ANY of the target companies
-                    # Partial match: target in doc_company OR doc_company in target
-                    match = False
-                    for target in target_companies:
-                        if target in doc_company or doc_company in target:
-                            match = True
-                            break
+                    search_results = db_instance.hybrid_search(
+                        query=question,
+                        content_type=None,
+                        limit=10, # Reduced limit per collection to avoid flooding
+                        dense_limit=100,
+                        sparse_limit=100
+                    )
                     
-                    if match:
-                        validated_docs.append(doc)
-                    else:
-                        print(f"   ⚠️ Filtering out doc from wrong company: {doc.metadata.get('company', 'Unknown')} (Targets: {target_companies})")
-                all_documents = validated_docs
-            else:
-                all_documents = temp_docs
+                    # Convert to Documents and Deduplicate
+                    current_collection_docs = 0
+                    for point in search_results:
+                        if hasattr(point, 'payload'):
+                            content = point.payload.get('page_content', '')
+                            metadata = point.payload.get('metadata', {})
+                            
+                            # Create a unique ID for deduplication
+                            # Use source_file + page_num + content hash equivalent
+                            doc_id = f"{metadata.get('company', target_ticker)}_{metadata.get('source_file','')}_{metadata.get('page_num','')}_{content[:50]}"
+                            
+                            if doc_id not in seen_doc_ids:
+                                seen_doc_ids.add(doc_id)
+                                doc = Document(page_content=content, metadata=metadata)
+                                all_documents.append(doc)
+                                current_collection_docs += 1
+                                
+                    print(f"      ✅ Found {current_collection_docs} unique docs")
+                    
+                except Exception as e:
+                    print(f"      ❌ Error searching collection for {target_ticker}: {e}")
             
-            # Log results
+            # Final stats
             content_types = {'text': 0, 'image': 0}
             companies_found = set()
             for doc in all_documents:
@@ -971,79 +852,29 @@ def retrieve(state, config):
                     ctype = doc.metadata.get('content_type', 'text')
                     content_types[ctype] = content_types.get(ctype, 0) + 1
                     companies_found.add(doc.metadata.get('company', 'Unknown'))
-            
-            print(f"\n✅ Retrieved {len(all_documents)} documents")
+
+            print(f"\n✅ Retrieved {len(all_documents)} total documents from {len(target_tickers)} collections")
             print(f"   📄 {content_types['text']} text, 🖼️ {content_types['image']} images")
             print(f"   🏢 {', '.join(sorted(companies_found))}")
-            
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            print("   Falling back to vectorstore...")
-            vectorstore = init.get_unified_vectorstore()
-            all_documents = vectorstore.similarity_search(retrieval_query, k=15)
-    
-    # Final validation: Ensure documents match requested company
-    # This is a safety net (documents should already be filtered above)
-    if companies_in_question and len(all_documents) > 0:
-        print(f"\n🔍 Final validation for: {companies_in_question}")
-        
-        # Handle both string and list companies_in_question
-        companies_list = companies_in_question if isinstance(companies_in_question, list) else [companies_in_question]
-        
-        filtered_docs = []
-        for doc in all_documents:
-            doc_company = doc.metadata.get("company", "").lower()
-            if any(company.lower() in doc_company or doc_company in company.lower() 
-                   for company in companies_list if isinstance(company, str)):
-                filtered_docs.append(doc)
-        
-        if filtered_docs:
-            if len(filtered_docs) < len(all_documents):
-                print(f"   ⚠️ Removed {len(all_documents) - len(filtered_docs)} docs from wrong companies")
-            all_documents = filtered_docs
-        else:
-            # No documents match the requested company - return empty to trigger web search
-            print(f"   ❌ No documents match requested company: {companies_in_question}")
-            print(f"   ✅ Returning EMPTY (will trigger web search)")
-            all_documents = []
-    
-    # If user explicitly provided a company filter but no documents match, return empty
-    if user_provided_company and len(all_documents) > 0:
-        # Handle both string and list for user_provided_company
-        if isinstance(user_provided_company, list):
-            user_company_list = user_provided_company
-        else:
-            user_company_list = [user_provided_company] if user_provided_company else []
-        
-        if user_company_list:
-            has_match = any(
-                any(company.lower() in doc.metadata.get("company", "").lower() 
-                    for company in user_company_list if isinstance(company, str))
-                for doc in all_documents if hasattr(doc, 'metadata')
-            )
-            if not has_match:
-                print(f"\n❌ No documents match user-provided company: {user_company_list}")
-                print(f"✅ Returning EMPTY (will trigger web search)")
-                all_documents = []
-    
-    # No memory-based filtering in context-free mode
-    
+
     # Final summary
     print(f"\n{'='*80}")
     print(f"✅ FINAL: {len(all_documents)} documents ready")
     print(f"{'='*80}\n")
     
     tool_call_entry = {
-        "tool": "unified_hybrid_retriever",
+        "tool": "ticker_hybrid_retriever",
         "sub_queries_used": len(sub_queries) > 0,
-        "hybrid_search": True
+        "hybrid_search": True,
+        "primary_ticker": primary_ticker
     }
     
     return {
         "documents": all_documents,
         "vectorstore_searched": True,
         "tool_calls": state.get("tool_calls", []) + [tool_call_entry],
-        "sub_query_results": sub_query_results
+        "sub_query_results": sub_query_results,
+        "ticker": primary_ticker  # Store resolved ticker in state
     }
 
 
@@ -1266,8 +1097,8 @@ def grade_documents(state):
     
     # CRITICAL: Handle empty documents case (e.g., company not in DB)
     if not documents or len(documents) == 0:
-        print("❌ NO DOCUMENTS TO GRADE")
-        print("   Returning INSUFFICIENT grade → Will trigger web search")
+        print(" NO DOCUMENTS TO GRADE")
+        print(" Returning INSUFFICIENT grade → Will trigger web search")
         
         return {
             "documents": [],
@@ -1345,7 +1176,7 @@ def grade_documents(state):
             "query_type": query_type
         })
         
-        print(f"\n📊 FINANCIAL ANALYST GRADE: {analyst_grade.overall_grade.upper()}")
+        print(f"\n FINANCIAL ANALYST GRADE: {analyst_grade.overall_grade.upper()}")
         print(f"Can Answer Question: {analyst_grade.can_answer_question}")
         print(f"Reasoning: {analyst_grade.reasoning}")
         
@@ -1356,10 +1187,10 @@ def grade_documents(state):
             print(f"    Years: {', '.join(company_coverage.year_coverage) if company_coverage.year_coverage else 'Unknown'}")
             print(f"    Metrics Found: {', '.join(company_coverage.metrics_found[:5])}{'...' if len(company_coverage.metrics_found) > 5 else ''}")
             if company_coverage.metrics_missing:
-                print(f"    ⚠️  Metrics Missing: {', '.join(company_coverage.metrics_missing[:3])}{'...' if len(company_coverage.metrics_missing) > 3 else ''}")
+                print(f"      Metrics Missing: {', '.join(company_coverage.metrics_missing[:3])}{'...' if len(company_coverage.metrics_missing) > 3 else ''}")
         
         if analyst_grade.missing_data_summary:
-            print(f"\n  ⚠️  MISSING DATA: {analyst_grade.missing_data_summary}")
+            print(f"\n   MISSING DATA: {analyst_grade.missing_data_summary}")
         
         # Store grading result in state for decision-making
         grading_result = {
@@ -1380,7 +1211,7 @@ def grade_documents(state):
             "can_answer": analyst_grade.can_answer_question
         }
         
-        print(f"\n✅ GRADING COMPLETE: {len(filtered_docs)} documents retained")
+        print(f"\n GRADING COMPLETE: {len(filtered_docs)} documents retained")
         print(f"   Next: Decision node will use this grading to determine if web search needed")
         
         return {
@@ -1390,8 +1221,8 @@ def grade_documents(state):
         }
         
     except Exception as e:
-        print(f"⚠️  Financial analyst grading failed: {e}")
-        print("   Falling back to keeping all documents")
+        print(f" Financial analyst grading failed: {e}")
+        print("  Falling back to keeping all documents")
         
         # Fallback: keep all documents
         return {
@@ -1841,7 +1672,7 @@ def financial_web_search(state):
         if extracted_metrics:
             print(f"✓ Successfully extracted {len(extracted_metrics)} financial metrics from web documents")
         else:
-            print("⚠️  Could not extract specific numeric values from web documents")
+            print("  Could not extract specific numeric values from web documents")
 
     tool_call_entry = {
         "tool": "financial_web_search",
@@ -1883,22 +1714,22 @@ def integrate_web_search(state):
     sub_query_results = state.get("sub_query_results", {})
     companies_detected = sub_query_analysis.get("companies_detected", [])
     
-    # 🔥 NEW: Use portfolio company filter if available (takes priority over detected companies)
+    #  NEW: Use portfolio company filter if available (takes priority over detected companies)
     company_filter = state.get("company_filter", [])
     if company_filter:
         # Portfolio company filter (already scoped to specific companies)
         target_company = company_filter[0] if isinstance(company_filter, list) else company_filter
-        print(f"🎯 Using portfolio company for web search: {target_company}")
+        print(f" Using portfolio company for web search: {target_company}")
     elif companies_detected:
         target_company = companies_detected[0]
-        print(f"📝 Using detected company for web search: {target_company}")
+        print(f" Using detected company for web search: {target_company}")
     else:
         target_company = None
-        print(f"⚠️  No company specified for web search (will search generically)")
+        print(f" No company specified for web search (will search generically)")
     
     # PRIORITY 1: Use targeted gap queries (most specific)
     if targeted_gap_queries:
-        print(f"🎯 USING TARGETED GAP QUERIES FROM GAP ANALYSIS")
+        print(f" USING TARGETED GAP QUERIES FROM GAP ANALYSIS")
         print(f"   Gap Type: {gap_analysis.get('gap_type', 'unknown')}")
         print(f"   Missing Items: {', '.join(gap_analysis.get('missing_items', [])[:3])}")
         print(f"   Targeted Queries: {len(targeted_gap_queries)}")
@@ -1911,7 +1742,7 @@ def integrate_web_search(state):
     
     # PRIORITY 2: Use missing sub-queries (fallback)
     else:
-        print(f"📋 USING MISSING SUB-QUERIES (no gap analysis available)")
+        print(f" USING MISSING SUB-QUERIES (no gap analysis available)")
         
         sub_queries = sub_query_analysis.get("sub_queries", [])
         needs_sub_queries = sub_query_analysis.get("needs_sub_queries", False)
@@ -1940,7 +1771,7 @@ def integrate_web_search(state):
                     if target_company:
                         # Include company name in search for better targeting
                         search_query = f"{target_company} {msq} financial data"
-                        print(f"   🔍 Query: {search_query}")
+                        print(f"    Query: {search_query}")
                     else:
                         search_query = f"{msq} financial data"
                     search_queries_to_execute.append(search_query)
@@ -1948,7 +1779,7 @@ def integrate_web_search(state):
                 mode = "sub_queries"
             else:
                 # No missing sub-queries
-                print("   ⚠️  No missing sub-queries, using general search")
+                print("     No missing sub-queries, using general search")
                 search_queries_to_execute = [question]
                 mode = "general"
         else:
@@ -2010,10 +1841,10 @@ def integrate_web_search(state):
             if query_doc_count > 0:
                 print(f"      ✓ Retrieved {query_doc_count} unique documents")
             else:
-                print(f"      ⚠️  No unique documents (may be duplicates)")
+                print(f"        No unique documents (may be duplicates)")
                 
         except Exception as e:
-            print(f"      ⚠️  ERROR: {e}")
+            print(f"        ERROR: {e}")
     
     print(f"\n---WEB SEARCH COMPLETE---")
     print(f"Total unique documents: {len(web_documents)}")
@@ -2135,8 +1966,8 @@ def parse_markdown_table(text):
                         else:
                             break  # Stop counting when we hit comparison/notes columns
                     
-                    print(f"📊 Detected {num_companies} company/companies in table")
-                    print(f"   Header columns: {cells}")
+                    print(f" Detected {num_companies} company/companies in table")
+                    print(f"  Header columns: {cells}")
                     continue
                 
                 # Process data rows
@@ -2162,7 +1993,7 @@ def parse_markdown_table(text):
                         }
                     elif num_companies >= 3 and len(cells) >= 4:
                         # Fallback for edge cases
-                        print(f"   📊 Processing 3-company row: {metric_name}")
+                        print(f" Processing 3-company row: {metric_name}")
                         metrics_data[metric_name] = {
                             'company1': cells[1].strip(),
                             'company2': cells[2].strip(),
@@ -2177,7 +2008,7 @@ def parse_markdown_table(text):
             first_data = metrics_data[first_metric]
             print(f"   Sample metric '{first_metric}': company3='{first_data.get('company3')}'")
     else:
-        print("⚠️ No metrics extracted from table")
+        print(" No metrics extracted from table")
     
     return metrics_data
 
@@ -2266,11 +2097,11 @@ def generate_comparison_chart(state):
         company3 = state.get("comparison_company3", None)
         
         # Debug logging
-        print(f"🔍 DEBUG: company1='{company1}', company2='{company2}', company3='{company3}'")
-        print(f"🔍 DEBUG: company3 type={type(company3)}, is None={company3 is None}, is empty={company3 == ''}")
+        print(f" DEBUG: company1='{company1}', company2='{company2}', company3='{company3}'")
+        print(f" DEBUG: company3 type={type(company3)}, is None={company3 is None}, is empty={company3 == ''}")
         
         if not answer or not company1 or not company2:
-            print("⚠️ Missing data for chart generation")
+            print(" Missing data for chart generation")
             return {"chart_url": None, "chart_filename": None}
         
         # Treat empty string as None for company3
@@ -2278,14 +2109,14 @@ def generate_comparison_chart(state):
             company3 = None
         
         if company3:
-            print(f"📊 Generating chart for {company1} vs {company2} vs {company3}")
+            print(f"Generating chart for {company1} vs {company2} vs {company3}")
         else:
-            print(f"📊 Generating chart for {company1} vs {company2}")
+            print(f"Generating chart for {company1} vs {company2}")
         
         # Step 1: Parse table
         metrics_data = parse_markdown_table(answer)
         if not metrics_data:
-            print("⚠️ No metrics found in answer")
+            print("No metrics found in answer")
             return {"chart_url": None, "chart_filename": None}
         
         print(f"✓ Parsed {len(metrics_data)} metrics from table")
@@ -2293,7 +2124,7 @@ def generate_comparison_chart(state):
         # Step 2: Prepare chart data
         chart_data = prepare_chart_data(metrics_data, company1, company2, company3, max_metrics=8)
         if not chart_data['metrics']:
-            print("⚠️ No valid numeric metrics for charting")
+            print("No valid numeric metrics for charting")
             return {"chart_url": None, "chart_filename": None}
         
         print(f"✓ Prepared {len(chart_data['metrics'])} metrics for charting")
@@ -2384,7 +2215,7 @@ def generate_comparison_chart(state):
             fig.write_image(local_path, width=1000 if not company3 else 1200, height=600)
             print(f"✓ Chart saved locally: {local_path}")
         except Exception as e:
-            print(f"⚠️ Failed to save locally: {str(e)}")
+            print(f"Failed to save locally: {str(e)}")
         
         # Step 5: Try to upload to Cloudinary (non-blocking)
         chart_url = None
@@ -2393,18 +2224,18 @@ def generate_comparison_chart(state):
             from app.cloudinary import upload_to_cloudinary
             
             if os.getenv("CLOUDINARY_CLOUD_NAME"):
-                print("📤 Uploading chart to Cloudinary...")
+                print("Uploading chart to Cloudinary...")
                 result = upload_to_cloudinary(local_path)
                 
                 if result.get("success"):
                     chart_url = result.get("url")
                     print(f"✓ Chart uploaded: {chart_url}")
                 else:
-                    print(f"⚠️ Cloudinary upload failed: {result.get('error')}")
+                    print(f"Cloudinary upload failed: {result.get('error')}")
             else:
-                print("⚠️ Cloudinary not configured - chart saved locally only")
+                print("Cloudinary not configured - chart saved locally only")
         except Exception as e:
-            print(f"⚠️ Cloudinary upload skipped: {str(e)}")
+            print(f"Cloudinary upload skipped: {str(e)}")
         
         return {
             "chart_url": chart_url,
@@ -2412,11 +2243,11 @@ def generate_comparison_chart(state):
         }
     
     except ImportError as e:
-        print(f"❌ Missing required package: {e}")
+        print(f"Missing required package: {e}")
         print("Install with: pip install plotly kaleido")
         return {"chart_url": None, "chart_filename": None}
     except Exception as e:
-        print(f"❌ Chart generation error: {str(e)}")
+        print(f"Chart generation error: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"chart_url": None, "chart_filename": None}

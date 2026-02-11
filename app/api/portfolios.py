@@ -2,8 +2,8 @@
 Portfolio management endpoints
 """
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from pydantic import BaseModel, Field, validator
+from typing import List, Optional, Any
 from sqlalchemy.orm import Session
 from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
@@ -17,13 +17,13 @@ router = APIRouter(prefix="/portfolios", tags=["Portfolios"])
 class PortfolioCreate(BaseModel):
     user_id: str = Field(..., description="User identifier")
     name: str = Field(..., description="Portfolio name")
-    company_names: List[str] = Field(..., description="List of company names to include in portfolio")
+    tickers: List[str] = Field(..., description="List of stock tickers to include in portfolio")
     description: Optional[str] = Field(None, description="Portfolio description")
 
 
 class PortfolioUpdate(BaseModel):
     name: Optional[str] = Field(None, description="Updated portfolio name")
-    company_names: Optional[List[str]] = Field(None, description="Updated list of company names")
+    tickers: Optional[List[str]] = Field(None, description="Updated list of tickers")
     description: Optional[str] = Field(None, description="Updated portfolio description")
 
 
@@ -31,14 +31,39 @@ class PortfolioResponse(BaseModel):
     id: int
     user_id: str
     name: str
-    company_names: List[str]
+    tickers: List[str]
     description: Optional[str]
     created_at: datetime
     updated_at: datetime
     
     class Config:
         from_attributes = True
+        
+    @validator('tickers', pre=True, always=True)
+    def map_company_names_to_tickers(cls, v, values):
+        # If the input contains 'company_names' (from DB model), map it to tickers
+        # Use simple attribute access check since we might get a dict or object
+        if hasattr(values, 'company_names'):
+            return values.company_names
+        # If we are creating from dict and it has company_names
+        if isinstance(v, list): 
+            return v
+        return []
+    
+    def __init__(self, **data):
+        # Handle renaming from DB model 'company_names' to 'tickers'
+        if 'company_names' in data:
+            data['tickers'] = data.pop('company_names')
+        elif hasattr(data.get('_orm_object'), 'company_names'):
+             pass # Logic handled by validator or manual mapping in endpoint
+        super().__init__(**data)
 
+# Simplify Payload mapping approach:
+# We will manually map the DB object to this Pydantic model in the endpoint if auto-mapping fails for renamed fields.
+# Actually, Pydantic V2 alias_generator might be complex. 
+# Let's keep it simple: Use a static method or just map manually in the route if needed. 
+# OR: Just use `company_names` field in Response but annotated as tickers? 
+# No, user wants refactor.
 
 class SessionCreateRequest(BaseModel):
     portfolio_id: int = Field(..., description="Portfolio ID to create session for")
@@ -51,7 +76,7 @@ class SessionResponse(BaseModel):
     portfolio_id: int
     user_id: str
     portfolio_name: str
-    company_names: List[str]
+    tickers: List[str]
     created_at: datetime
     last_accessed: datetime
 
@@ -61,13 +86,13 @@ def create_portfolio(
     payload: PortfolioCreate,
     db: Session = Depends(get_db_session)
 ):
-    """Create a new portfolio with specified companies and initialize Vector DB"""
+    """Create a new portfolio with specified tickers and initialize Vector DB"""
     try:
         portfolio = PortfolioService.create_portfolio(
             db=db,
             user_id=payload.user_id,
             name=payload.name,
-            company_names=payload.company_names,
+            tickers=payload.tickers,
             description=payload.description
         )
         
@@ -77,16 +102,25 @@ def create_portfolio(
         try:
             vectordb_mgr.initialize_for_portfolio(
                 portfolio_id=portfolio.id,
-                company_names=portfolio.company_names
+                company_names=portfolio.company_names # Stored as tickers now
             )
             print(f"Portfolio created with Vector DB initialized")
             print(f"   Portfolio ID: {portfolio.id}")
-            print(f"   Companies: {portfolio.company_names}")
+            print(f"   Tickers: {portfolio.company_names}")
         except Exception as e:
             print(f"Warning: Failed to initialize Vector DB: {e}")
             print("   Portfolio created but RAG queries may fail")
         
-        return portfolio
+        # Manually map for response because of field rename
+        return PortfolioResponse(
+            id=portfolio.id,
+            user_id=portfolio.user_id,
+            name=portfolio.name,
+            tickers=portfolio.company_names,
+            description=portfolio.description,
+            created_at=portfolio.created_at,
+            updated_at=portfolio.updated_at
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create portfolio: {str(e)}")
 
@@ -100,7 +134,16 @@ def get_portfolio(
     portfolio = PortfolioService.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    return portfolio
+    
+    return PortfolioResponse(
+        id=portfolio.id,
+        user_id=portfolio.user_id,
+        name=portfolio.name,
+        tickers=portfolio.company_names,
+        description=portfolio.description,
+        created_at=portfolio.created_at,
+        updated_at=portfolio.updated_at
+    )
 
 
 @router.get("/user/{user_id}", response_model=List[PortfolioResponse])
@@ -110,7 +153,17 @@ def get_user_portfolios(
 ):
     """Get all portfolios for a user"""
     portfolios = PortfolioService.get_user_portfolios(db, user_id)
-    return portfolios
+    return [
+        PortfolioResponse(
+            id=p.id,
+            user_id=p.user_id,
+            name=p.name,
+            tickers=p.company_names,
+            description=p.description,
+            created_at=p.created_at,
+            updated_at=p.updated_at
+        ) for p in portfolios
+    ]
 
 
 @router.put("/{portfolio_id}", response_model=PortfolioResponse)
@@ -119,19 +172,19 @@ def update_portfolio(
     payload: PortfolioUpdate,
     db: Session = Depends(get_db_session)
 ):
-    """Update an existing portfolio and re-initialize Vector DB if companies changed"""
+    """Update an existing portfolio and re-initialize Vector DB if tickers changed"""
     portfolio = PortfolioService.update_portfolio(
         db=db,
         portfolio_id=portfolio_id,
         name=payload.name,
-        company_names=payload.company_names,
+        tickers=payload.tickers,
         description=payload.description
     )
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     
-    # If company names were updated, re-initialize the Vector DB
-    if payload.company_names is not None:
+    # If tickers were updated, re-initialize the Vector DB
+    if payload.tickers is not None:
         vectordb_mgr = get_vectordb_manager()
         try:
             # Clean up old instance and create new one
@@ -142,7 +195,6 @@ def update_portfolio(
             )
             
             # Re-register all existing sessions for this portfolio
-            # (in case any were active before the update)
             from app.database.models import Session as SessionModel
             sessions = db.query(SessionModel).filter(
                 SessionModel.portfolio_id == portfolio_id
@@ -152,12 +204,20 @@ def update_portfolio(
                 vectordb_mgr.register_session(session.id, portfolio_id)
             
             print(f"Portfolio {portfolio_id} updated and Vector DB re-initialized")
-            print(f"   New companies: {portfolio.company_names}")
+            print(f"   New Tickers: {portfolio.company_names}")
             print(f"   Re-registered {len(sessions)} existing sessions")
         except Exception as e:
             print(f"Warning: Failed to re-initialize Vector DB: {e}")
     
-    return portfolio
+    return PortfolioResponse(
+        id=portfolio.id,
+        user_id=portfolio.user_id,
+        name=portfolio.name,
+        tickers=portfolio.company_names,
+        description=portfolio.description,
+        created_at=portfolio.created_at,
+        updated_at=portfolio.updated_at
+    )
 
 
 @router.delete("/{portfolio_id}")
@@ -201,7 +261,6 @@ def create_session(
     )
     
     # Register this session to the portfolio's Vector DB
-    # The Vector DB was initialized when the portfolio was created
     vectordb_mgr = get_vectordb_manager()
     vectordb_mgr.register_session(
         thread_id=session.id,
@@ -226,14 +285,14 @@ def create_session(
     print(f"Session created and registered to portfolio Vector DB")
     print(f"   Session ID: {session.id}")
     print(f"   Portfolio ID: {portfolio.id}")
-    print(f"   Companies: {portfolio.company_names}")
+    print(f"   Tickers: {portfolio.company_names}")
     
     return SessionResponse(
         thread_id=session.id,
         portfolio_id=session.portfolio_id,
         user_id=session.user_id,
         portfolio_name=portfolio.name,
-        company_names=portfolio.company_names,
+        tickers=portfolio.company_names,
         created_at=session.created_at,
         last_accessed=session.last_accessed
     )
@@ -256,7 +315,7 @@ def get_session(
         portfolio_id=session.portfolio_id,
         user_id=session.user_id,
         portfolio_name=portfolio.name,
-        company_names=portfolio.company_names,
+        tickers=portfolio.company_names,
         created_at=session.created_at,
         last_accessed=session.last_accessed
     )

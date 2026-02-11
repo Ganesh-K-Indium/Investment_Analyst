@@ -122,3 +122,6 @@ cryptography>=42.0.0
 # - MCP servers run separately on ports 8565, 8566, 8567
 # - Main API runs on port 8000
 # - All dependencies are compatible and tested togetherpip
+
+fastmcp 
+pytesseract
