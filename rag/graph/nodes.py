@@ -1094,6 +1094,20 @@ def grade_documents(state):
     companies_detected = sub_query_analysis.get("companies_detected", [])
     
     print(f"Query Type: {query_type}")
+    
+    # Context-aware Company Detection
+    # If no companies detected in question, use context from portfolio/state
+    if not companies_detected:
+        ctx_ticker = state.get("ticker")
+        ctx_filter = state.get("company_filter", [])
+        
+        if ctx_ticker:
+            companies_detected = [ctx_ticker]
+            print(f"Using context ticker: {ctx_ticker}")
+        elif ctx_filter:
+            companies_detected = ctx_filter
+            print(f"Using portfolio context companies: {ctx_filter}")
+            
     print(f"Companies Detected: {companies_detected}")
     print(f"Documents to grade: {len(documents)}")
     
