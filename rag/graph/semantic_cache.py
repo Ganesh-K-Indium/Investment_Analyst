@@ -14,7 +14,7 @@ class SemanticCache:
     for semantically similar queries.
     """
     
-    def __init__(self, threshold: float = 0.90):
+    def __init__(self, threshold: float = 0.95):
         """
         Initialize the semantic cache.
         
