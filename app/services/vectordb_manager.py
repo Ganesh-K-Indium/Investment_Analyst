@@ -21,12 +21,15 @@ class VectorDBManager:
         # mapping thread_id -> portfolio_id (still useful for context)
         self._session_to_portfolio: Dict[str, int] = {}
     
-    def get_instance(self, ticker: str) -> load_vector_database:
+    def get_instance(self, ticker: str, create_if_missing: bool = False) -> load_vector_database:
         """
         Get or create a vector DB instance for a specific ticker.
         
         Args:
             ticker: Stock ticker symbol
+            create_if_missing: If True, creates collection if it doesn't exist. 
+                             If False, it might still create if load_vector_database logic forces it,
+                             so we should update load_vector_database too, but for now this signals intent.
             
         Returns:
             Initialized load_vector_database instance for that ticker
@@ -40,13 +43,17 @@ class VectorDBManager:
         if ticker_key in self._instances:
             return self._instances[ticker_key]
         
-        print(f"Initializing Vector DB for ticker: {ticker}")
+        print(f"Initializing Vector DB for ticker: {ticker} (create_if_missing={create_if_missing})")
         collection_name = f"ticker_{ticker_key}"
         
         # Create DB instance
+        # Note: We need to update load_vector_database to respect a 'create' flag 
+        # or we rely on it checking existence. 
+        # For now, we instantiate it, but we'll modify load_vector_database next to not auto-create.
         db_instance = load_vector_database(
             use_hybrid_search=True,
-            collection_name=collection_name
+            collection_name=collection_name,
+            create_if_missing=create_if_missing
         )
         
         self._instances[ticker_key] = db_instance

@@ -260,27 +260,16 @@ def create_session(
         thread_id=payload.thread_id
     )
     
-    # Register this session to the portfolio's Vector DB
+    # Register this session to the portfolio's Vector DB context
     vectordb_mgr = get_vectordb_manager()
     vectordb_mgr.register_session(
         thread_id=session.id,
         portfolio_id=portfolio.id
     )
     
-    # Verify the Vector DB exists for this portfolio
-    vectordb_result = vectordb_mgr.get_for_portfolio(portfolio.id)
-    if not vectordb_result:
-        # Lazy initialization if DB not found (handles server restarts)
-        print(f"Vector DB not found for portfolio {portfolio.id}, initializing...")
-        try:
-            vectordb_mgr.initialize_for_portfolio(
-                portfolio_id=portfolio.id,
-                company_names=portfolio.company_names
-            )
-            print(f"Successfully initialized Vector DB for portfolio {portfolio.id}")
-        except Exception as e:
-            print(f"Warning: Failed to initialize Vector DB: {e}")
-            print("   Session created but RAG queries may fail")
+    # Lazy initialization logic is handled by VectorDBManager on retrieval
+    # No need to explicitly initialize or check for portfolio DB instance here
+    print(f"Session registered with VectorDBManager")
     
     print(f"Session created and registered to portfolio Vector DB")
     print(f"   Session ID: {session.id}")

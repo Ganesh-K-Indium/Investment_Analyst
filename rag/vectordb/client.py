@@ -24,17 +24,19 @@ except ImportError:
 class load_vector_database():
     """Unified vector database loader with advanced hybrid search capabilities"""
     
-    def __init__(self, use_hybrid_search: bool = True, collection_name: str = None):
+    def __init__(self, use_hybrid_search: bool = True, collection_name: str = None, create_if_missing: bool = True):
         """
         Initialize unified vector database loader with hybrid search.
         
         Args:
             use_hybrid_search: If True, use hybrid search with dense, sparse (BM25), and ColBERT vectors.
             collection_name: Name of the collection to use. If None, uses default unified collection.
+            create_if_missing: If True, creates the collection if it doesn't exist.
         """
         # Use unified collection for both text and images
         self.collection_name = collection_name if collection_name else "unified_rag_db_hybrid"
         self.use_hybrid_search = use_hybrid_search
+        self.create_if_missing = create_if_missing
         
         # Initialize embeddings
         self.embeddings = OpenAIEmbeddings()
@@ -46,16 +48,16 @@ class load_vector_database():
         if use_hybrid_search and SPARSE_EMBEDDING_AVAILABLE:
             try:
                 self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
-                print("BM25 sparse embeddings initialized")
+                # print("BM25 sparse embeddings initialized") # Reduced log noise
             except Exception as e:
                 print(f"Warning: Failed to initialize sparse embeddings: {e}")
         
         # Try cloud Qdrant first, fallback to local
         try:
-            print(f"Attempting to connect to Qdrant at: {self.qdrant_url}")
+            # print(f"Attempting to connect to Qdrant at: {self.qdrant_url}") # Reduced log noise
             self.qdrant_client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=60)
-            self.qdrant_client.get_collections()
-            print(f"Successfully connected to Qdrant at {self.qdrant_url}")
+            # self.qdrant_client.get_collections() # Avoid extra call if not needed
+            # print(f"Successfully connected to Qdrant at {self.qdrant_url}")
         except Exception as e:
             print(f"Failed to connect to cloud Qdrant: {e}")
             print("Falling back to local Qdrant at http://localhost:6333")
@@ -63,14 +65,18 @@ class load_vector_database():
             self.qdrant_api_key = ''
             try:
                 self.qdrant_client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=60)
-                self.qdrant_client.get_collections()
+                # self.qdrant_client.get_collections()
                 print(f"Successfully connected to local Qdrant")
             except Exception as local_error:
                 print(f"Failed to connect to local Qdrant: {local_error}")
                 raise ConnectionError("Unable to connect to Qdrant instances.")
 
         # Ensure collection exists with correct config
-        self.ensure_collection_exists()
+        if self.create_if_missing:
+            self.ensure_collection_exists()
+        else:
+            # check existence without creating
+            self._check_exists()
 
     def ensure_collection_exists(self):
         """
@@ -131,6 +137,16 @@ class load_vector_database():
         except Exception as e:
             print(f"Error ensuring collection exists: {e}")
             # Don't raise, might interfere with read-only operations if strict permissions logic
+
+    def _check_exists(self):
+        """Check if collection exists without creating it."""
+        try:
+            collections = self.qdrant_client.get_collections().collections
+            exists = any(c.name == self.collection_name for c in collections)
+            if not exists:
+                print(f"⚠️ Collection '{self.collection_name}' does not exist (read-only mode).")
+        except Exception as e:
+            print(f"Error checking collection existence: {e}")
 
     
     def get_unified_vectorstore(self):

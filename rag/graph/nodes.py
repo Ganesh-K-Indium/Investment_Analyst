@@ -651,37 +651,56 @@ def retrieve(state, config):
     # 2. Ticker derived from company_filter
     # 3. Ticker derived from question analysis
     
+    # 1. Identify Target Ticker(s)
+    # ----------------------------
+    # Priority:
+    # 1. Identify Target Ticker(s)
+    # ----------------------------
+    # STRICT LOGIC:
+    # - /ask endpoint provides 'company_filter' (portfolio tickers)
+    # - /compare endpoint provides 'company_filter' (input tickers)
+    # - 'ticker' is an optional override
+    
     primary_ticker = state.get("ticker")
+    # Clean up primary ticker
+    if primary_ticker and (primary_ticker.lower() == "string" or not primary_ticker.strip()):
+        primary_ticker = None
+        
     company_filter = state.get("company_filter", [])
     
     # Use cached sub-query analysis
     sub_query_analysis = state.get("sub_query_analysis", {})
     needs_sub_queries = sub_query_analysis.get("needs_sub_queries", False)
     sub_queries = sub_query_analysis.get("sub_queries", [])
-    companies_in_question = sub_query_analysis.get("companies_detected", [])
     query_type = sub_query_analysis.get("query_type", "single_company")
-    
-    print(f" Type: {query_type} |  Companies: {companies_in_question or 'None'} |  Sub-queries: {len(sub_queries) if needs_sub_queries else 0}")
 
-    if not primary_ticker:
-        # Try to derive from company_filter
-        if company_filter:
-            # company_filter now contains tickers (mapped in API) or names
-            for c in company_filter:
-                t = get_ticker(c)
-                if t: 
-                    primary_ticker = t
-                    break
-                # If c is already a ticker (heuristic: short, no spaces)
-                if len(c) <= 5 and " " not in c:
-                    primary_ticker = c
-                    break
-        
-        # Try to derive from question analysis
-        if not primary_ticker and companies_in_question:
-            primary_ticker = get_ticker(companies_in_question[0])
-            
-    print(f" Primary Ticker: {primary_ticker or 'None (Generic Source)'}")
+    target_tickers = set()
+
+    # Strategy: Strictly use provided inputs
+    
+    # 1. From Portfolio/Input (company_filter) - THIS IS THE SOURCE OF TRUTH
+    if company_filter:
+        for c in company_filter:
+            if c and isinstance(c, str) and c.strip():
+                # We assume these are already valid tickers from the API layer
+                target_tickers.add(c.strip())
+    
+    # 2. From API Override (primary_ticker)
+    # If provided, does it restrict the search or add to it?
+    # Usually 'ticker' param in /ask is meant to focus on one company.
+    if primary_ticker:
+         # If primary_ticker is provided, we focus ONLY on it (override), 
+         # or we add it? 
+         # Given the user wants simplicity, if they explicitly asked for a ticker, 
+         # they probably want that specific one. 
+         # But to be safe and support "portfolio + specific question", let's just make sure it's included.
+         target_tickers.add(primary_ticker)
+
+    print(f" Identified Target Tickers: {list(target_tickers) or 'None'}")
+    
+    # If primary_ticker was empty, set it to the first found ticker for downstream consistency
+    if not primary_ticker and target_tickers:
+        primary_ticker = list(target_tickers)[0]
 
     # ============================================================================
     # SUB-QUERY MODE: Targeted retrieval for each sub-query (Multi-Collection)
@@ -697,127 +716,110 @@ def retrieve(state, config):
         for i, sq in enumerate(sub_queries, 1):
             print(f"\n {i}/{len(sub_queries)}: {sq}")
             
-            # Detect company/ticker for THIS sub-query
-            sq_ticker = None
+            # Detect company/ticker for THIS sub-query from the ALLOWED set
+            sq_tickers_for_step = set()
             
-            # Check if sub-query mentions a specific company
-            for company in companies_in_question:
-                if company.lower() in sq.lower():
-                    sq_ticker = get_ticker(company)
-                    break
+            # Simple check: which of our valid target_tickers is mentioned in the sub-query?
+            for t_ticker in target_tickers:
+                # Check if ticker symbol is explicitly mentioned
+                if t_ticker.lower() in sq.lower().split():
+                     sq_tickers_for_step.add(t_ticker)
+                # We could check company name map here if we had it available easily, 
+                # but for simplicity we rely on the ticker symbol or just query all if unsure.
             
-            # Fallback to primary ticker
-            if not sq_ticker:
-                sq_ticker = primary_ticker
+            # If no specific ticker mentioned in sub-query, query ALL allowed tickers
+            if not sq_tickers_for_step:
+                sq_tickers_for_step = target_tickers
             
-            if not sq_ticker:
-                print(f"  No ticker identified for sub-query. Skipping.")
+            if not sq_tickers_for_step:
+                print(f"  No allowed tickers found. Skipping vector search.")
                 sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
                 continue
                 
-            print(f"   Target Ticker: {sq_ticker}")
+            print(f"   Target Tickers for step: {list(sq_tickers_for_step)}")
             
-            try:
-                # Get instance for this ticker
-                db_instance = vectordb_mgr.get_instance(sq_ticker)
-                
-                # Perform search
-                search_results = db_instance.hybrid_search(
-                    query=sq,
-                    content_type=None,
-                    limit=8,
-                    dense_limit=80,
-                    sparse_limit=80
-                )
-                
-                # Convert to Document objects
-                sq_docs = []
-                for point in search_results:
-                    if hasattr(point, 'payload'):
-                        content = point.payload.get('page_content', '')
-                        metadata = point.payload.get('metadata', {})
-                        doc = Document(page_content=content, metadata=metadata)
-                        sq_docs.append(doc)
-                
-                # Validation (check if metadata matches ticker if available)
-                # Note: Collection is already ticker-specific, so validation is implicit
-                # but we can filter by 'company' name in metadata if we want strictness
-                
-                # Track results
-                companies_found = set()
-                content_types = {'text': 0, 'image': 0}
-                for doc in sq_docs:
-                    if hasattr(doc, 'metadata'):
-                        companies_found.add(doc.metadata.get('company', 'Unknown'))
-                        ctype = doc.metadata.get('content_type', 'text')
-                        content_types[ctype] = content_types.get(ctype, 0) + 1
-                
-                sub_query_results[sq] = {
-                    "found": len(sq_docs) > 0,
-                    "doc_count": len(sq_docs),
-                    "preview": sq_docs[0].page_content[:200] if sq_docs else None,
-                    "companies": list(companies_found),
-                    "content_types": content_types
-                }
-                
-                # Deduplicate and Collect
-                for doc in sq_docs:
-                    if hasattr(doc, 'metadata'):
-                         # Include ticker in ID to prevent collisions across collections?
-                         # Actually UUIDs are unique enough usually
-                         doc_id = f"{doc.metadata.get('company','')}_{doc.metadata.get('source_file','')}_{doc.metadata.get('page_num','')}_{doc.metadata.get('content_type','')}_{doc.page_content[:50]}"
-                    else:
-                        doc_id = doc.page_content[:100]
+            # Query each relevant ticker collection for this sub-query
+            step_docs = []
+            for t_ticker in sq_tickers_for_step:
+                try:
+                    # Get instance for this ticker (DO NOT CREATE if missing)
+                    db_instance = vectordb_mgr.get_instance(t_ticker, create_if_missing=False)
                     
-                    if doc_id not in seen_doc_ids:
-                        seen_doc_ids.add(doc_id)
-                        all_documents.append(doc)
+                    # Perform search
+                    search_results = db_instance.hybrid_search(
+                        query=sq,
+                        content_type=None,
+                        limit=5, # Reduced limit per ticker/sub-query
+                        dense_limit=50,
+                        sparse_limit=50
+                    )
+                    
+                    # Convert to Document objects
+                    for point in search_results:
+                        if hasattr(point, 'payload'):
+                            content = point.payload.get('page_content', '')
+                            metadata = point.payload.get('metadata', {})
+                            # Ensure company metadata is set if missing
+                            if 'company' not in metadata: metadata['company'] = t_ticker
+                            doc = Document(page_content=content, metadata=metadata)
+                            step_docs.append(doc)
+                            
+                except Exception as e:
+                     # Likely collection not found (safe to ignore in retrieval)
+                     print(f"   (Collection not found or error for {t_ticker}: {e})")
+
+            # Deduplicate and Collect results for this sub-query
+            companies_found = set()
+            content_types = {'text': 0, 'image': 0}
+            
+            for doc in step_docs:
+                doc_id = f"{doc.metadata.get('company','')}_{doc.metadata.get('source_file','')}_{doc.metadata.get('page_num','')}_{doc.page_content[:50]}"
                 
-                status = "Yes" if len(sq_docs) > 0 else "No"
-                print(f"   {status} {len(sq_docs)} docs |  {content_types['text']} text,  {content_types['image']} images")
+                if doc_id not in seen_doc_ids:
+                    seen_doc_ids.add(doc_id)
+                    all_documents.append(doc)
                 
-            except Exception as e:
-                print(f"   ❌ Error searching collection for {sq_ticker}: {e}")
-                sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
+                # Update stats for sub-query result
+                companies_found.add(doc.metadata.get('company', 'Unknown'))
+                ctype = doc.metadata.get('content_type', 'text')
+                content_types[ctype] = content_types.get(ctype, 0) + 1
+
+            sub_query_results[sq] = {
+                "found": len(step_docs) > 0,
+                "doc_count": len(step_docs),
+                "preview": step_docs[0].page_content[:200] if step_docs else None,
+                "companies": list(companies_found),
+                "content_types": content_types
+            }
+            
+            status = "Yes" if len(step_docs) > 0 else "No"
+            print(f"   {status} {len(step_docs)} docs found")
 
     else:
         # ============================================================================
         # DIRECT MODE: Retrieval from one or more collections
         # ============================================================================
-        print(f"\n🎯 DIRECT RETRIEVAL MODE")
+        print(f"\n DIRECT RETRIEVAL MODE")
         print("-" * 80)
         
-        # Identify all target tickers
-        target_tickers = set()
-        if primary_ticker:
-            target_tickers.add(primary_ticker)
-            
-        # Also add tickers from company_filter (passed from API, especially for comparison)
-        if company_filter:
-            for t in company_filter:
-                # Assuming company_filter contains tickers now (mapped in API)
-                # But double check just in case
-                valid_ticker = get_ticker(t) or (t if len(t) <= 5 and " " not in t else None)
-                if valid_ticker:
-                    target_tickers.add(valid_ticker)
-        
         if not target_tickers:
-             print("❌ No target ticker identification. Cannot perform vector search.")
-             print("✅ Returning EMPTY (will trigger web search)")
+             print(" No target tickers identified. Cannot perform vector search.")
+             print(" Returning EMPTY (will trigger web search)")
              all_documents = []
         else:
-            print(f"🔍 Searching collections for tickers: {', '.join(target_tickers)}")
+            print(f" Searching collections for tickers: {', '.join(target_tickers)}")
             
             # Iterate through all identified tickers and merge results
             for target_ticker in target_tickers:
                 try:
-                    print(f"   👉 Querying collection: ticker_{target_ticker}")
-                    db_instance = vectordb_mgr.get_instance(target_ticker)
+                    print(f"    Querying collection: ticker_{target_ticker}")
+                    # DO NOT CREATE if missing
+                    db_instance = vectordb_mgr.get_instance(target_ticker, create_if_missing=False)
                     
                     search_results = db_instance.hybrid_search(
                         query=question,
                         content_type=None,
-                        limit=10, # Reduced limit per collection to avoid flooding
+                        limit=10, 
                         dense_limit=100,
                         sparse_limit=100
                     )
@@ -839,10 +841,10 @@ def retrieve(state, config):
                                 all_documents.append(doc)
                                 current_collection_docs += 1
                                 
-                    print(f"      ✅ Found {current_collection_docs} unique docs")
+                    print(f"       Found {current_collection_docs} unique docs")
                     
                 except Exception as e:
-                    print(f"      ❌ Error searching collection for {target_ticker}: {e}")
+                    print(f"      Error searching collection for {target_ticker}: {e}")
             
             # Final stats
             content_types = {'text': 0, 'image': 0}
@@ -853,13 +855,13 @@ def retrieve(state, config):
                     content_types[ctype] = content_types.get(ctype, 0) + 1
                     companies_found.add(doc.metadata.get('company', 'Unknown'))
 
-            print(f"\n✅ Retrieved {len(all_documents)} total documents from {len(target_tickers)} collections")
-            print(f"   📄 {content_types['text']} text, 🖼️ {content_types['image']} images")
-            print(f"   🏢 {', '.join(sorted(companies_found))}")
+            print(f"\nRetrieved {len(all_documents)} total documents from {len(target_tickers)} collections")
+            print(f"    {content_types['text']} text,  {content_types['image']} images")
+            print(f"    {', '.join(sorted(companies_found))}")
 
     # Final summary
     print(f"\n{'='*80}")
-    print(f"✅ FINAL: {len(all_documents)} documents ready")
+    print(f" FINAL: {len(all_documents)} documents ready")
     print(f"{'='*80}\n")
     
     tool_call_entry = {
@@ -930,11 +932,11 @@ Please provide a clear, well-structured summary."""
             from langchain_groq import ChatGroq
             llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
             
-            print(f"🔄 Generating summary with Groq...")
+            print(f" Generating summary with Groq...")
             response = llm.invoke(prompt)
             generation = response.content
             
-            print(f"✅ Summary generated ({len(generation)} chars)")
+            print(f" Summary generated ({len(generation)} chars)")
             print(f"{'='*80}\\n")
             
             return {"messages": [generation]}

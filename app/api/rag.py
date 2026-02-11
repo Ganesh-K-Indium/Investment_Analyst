@@ -24,7 +24,6 @@ router = APIRouter(tags=["RAG"])
 class AskInput(BaseModel):
     query: str = Field(..., description="User query")
     thread_id: str = Field(..., description="Session thread_id (required for portfolio context)")
-    ticker: Optional[str] = Field(None, description="Specific ticker symbol to target (optional)")
 
 
 class CompareInput(BaseModel):
@@ -81,7 +80,6 @@ async def ask_agent(
         
         query = payload.query
         thread_id = payload.thread_id
-        ticker = payload.ticker
         
         # Get session and associated portfolio
         session = PortfolioService.get_session(db, thread_id)
@@ -129,17 +127,14 @@ async def ask_agent(
         print(f"Using portfolio-scoped context")
         print(f"   Portfolio: {portfolio.name}")
         print(f"   Tickers: {company_tickers}")
-        if ticker:
-            print(f"   Target Ticker: {ticker}")
         
         config = {"configurable": {"thread_id": thread_id}}
         
         # Check semantic cache
         if semantic_cache:
             start_time = datetime.datetime.now()
-            # Include ticker in cache key if present?
-            # Creating a composite key or just appending to query might be better
-            cache_query = f"{ticker}:{query}" if ticker else query
+            # Cache key is just the query for this thread context
+            cache_query = query
             cached_data = semantic_cache.lookup(cache_query, thread_id=thread_id)
             if cached_data:
                 print(f"Returning cached response for: {cache_query}")
@@ -171,7 +166,7 @@ async def ask_agent(
                 "citation_info": [],
                 "summary_strategy": "single_source",
                 "company_filter": company_tickers,  # Pass valid tickers for this portfolio
-                "ticker": ticker,  # Specific ticker if provided
+                "ticker": None,  # Explicitly None, relying on company_filter
                 "sub_query_analysis": {},
                 "sub_query_results": {}
             }
@@ -194,7 +189,6 @@ async def ask_agent(
                 "portfolio_id": portfolio.id,
                 "portfolio_name": portfolio.name,
                 "company_filter": company_tickers,
-                "ticker": ticker,
                 "vectorstore_searched": result.get("vectorstore_searched", False),
                 "web_searched": result.get("web_searched", False),
                 "document_count": len(result.get("documents", [])),
@@ -214,7 +208,7 @@ async def ask_agent(
             "portfolio_id": portfolio.id,
             "portfolio_name": portfolio.name,
             "company_filter": company_tickers,
-            "ticker": ticker,
+            "ticker": None,
             "messages": [
                 {
                     "type": msg.__class__.__name__,
@@ -255,7 +249,7 @@ async def ask_agent(
         
         # Update cache
         if semantic_cache:
-            cache_query = f"{ticker}:{query}" if ticker else query
+            cache_query = query
             semantic_cache.update(cache_query, response_data, thread_id=thread_id)
         
         return response_data
