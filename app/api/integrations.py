@@ -9,6 +9,7 @@ from app.database.connection import get_db_session
 from app.services.integration import IntegrationService
 from app.services.connectors.base import BaseConnector
 from app.services.file_import import FileImportService
+from app.services.portfolio import PortfolioService
 from schemas.integrations import (
     IntegrationCreate,
     IntegrationUpdate,
@@ -243,8 +244,14 @@ def browse_integration_files(
 ):
     """
     Browse files from an integration
-    
+
     This endpoint lists files from the connected data source without downloading them.
+
+    Optional: Pass portfolio_id or user_id to also fetch available tickers.
+    - portfolio_id: Returns tickers from a specific portfolio
+    - user_id: Returns all unique tickers from all user's portfolios
+
+    This allows the UI to show ticker selection options alongside file browsing.
     """
     integration = IntegrationService.get_integration(db, payload.integration_id)
     if not integration:
@@ -296,15 +303,42 @@ def browse_integration_files(
         
         print(f"Files converted: {len(file_dicts)}")
         print("=== End Debug ===\n")
-        
+
+        # Fetch available tickers from portfolio if provided
+        available_tickers = None
+        portfolio_name = None
+        portfolio_id_used = None
+
+        if payload.portfolio_id:
+            portfolio = PortfolioService.get_portfolio(db, payload.portfolio_id)
+            if portfolio:
+                # company_names contains the tickers (normalized to lowercase)
+                available_tickers = [ticker.upper() for ticker in portfolio.company_names]
+                portfolio_name = portfolio.name
+                portfolio_id_used = portfolio.id
+                print(f"Loaded {len(available_tickers)} tickers from portfolio '{portfolio_name}'")
+        elif payload.user_id:
+            # Get all portfolios for the user and collect unique tickers
+            portfolios = PortfolioService.get_user_portfolios(db, payload.user_id)
+            if portfolios:
+                # Collect all unique tickers from all portfolios
+                ticker_set = set()
+                for portfolio in portfolios:
+                    ticker_set.update(portfolio.company_names)
+                available_tickers = sorted([ticker.upper() for ticker in ticker_set])
+                print(f"Loaded {len(available_tickers)} unique tickers from {len(portfolios)} portfolios")
+
         response = BrowseFilesResponse(
             integration_id=payload.integration_id,
             vendor=integration.vendor,
             path=payload.path or "/",
             files=file_dicts,
-            total_count=len(file_dicts)
+            total_count=len(file_dicts),
+            available_tickers=available_tickers,
+            portfolio_id=portfolio_id_used,
+            portfolio_name=portfolio_name
         )
-        
+
         return response
     
     except Exception as e:
@@ -325,21 +359,29 @@ def import_files(
 ):
     """
     Import and ingest files from an integration
-    
+
     This endpoint:
     1. Downloads files from the connected data source
     2. Processes them (PDF extraction, image analysis, etc.)
-    3. Ingests them into the vector database for RAG
+    3. Ingests them into the vector database for RAG under the specified ticker collection
+
+    Note: All files in a single import request will be ingested to the same ticker collection.
     """
     try:
+        # Validate ticker format (should be uppercase alphanumeric)
+        ticker = payload.ticker.upper().strip()
+        if not ticker:
+            raise HTTPException(status_code=400, detail="Ticker symbol is required")
+
         results = FileImportService.import_files(
             db=db,
             integration_id=payload.integration_id,
-            file_paths=payload.file_paths
+            file_paths=payload.file_paths,
+            ticker=ticker
         )
-        
+
         summary = FileImportService.get_import_summary(results)
-        
+
         return FileImportResponse(
             integration_id=payload.integration_id,
             total_files=summary["total_files"],
@@ -347,7 +389,7 @@ def import_files(
             failed=summary["failed"],
             file_results=summary["file_results"]
         )
-    
+
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

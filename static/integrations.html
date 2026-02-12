@@ -367,6 +367,22 @@
                 <span class="close" onclick="closeModal('browseFilesModal')">&times;</span>
             </div>
 
+            <!-- Portfolio & Ticker Info -->
+            <div id="portfolioInfo" style="background: #e7f3ff; padding: 12px; border-radius: 6px; margin-bottom: 20px; display: none;">
+                <div style="font-weight: 600; color: #0066cc; margin-bottom: 8px;">📊 Portfolio Information</div>
+                <div id="portfolioDetails" style="font-size: 14px; color: #333;"></div>
+            </div>
+
+            <!-- Ticker Selection -->
+            <div id="tickerSelection" style="margin-bottom: 20px; display: none;">
+                <label style="display: block; margin-bottom: 8px; color: #555; font-weight: 600;">
+                    Select Ticker for Import *
+                </label>
+                <select id="tickerSelect" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
+                    <option value="">-- Choose a ticker --</option>
+                </select>
+            </div>
+
             <input type="text" class="search-box" id="fileSearch" placeholder="🔍 Search files..." onkeyup="searchFiles()">
 
             <div id="filesContainer" class="files-grid">
@@ -383,8 +399,10 @@
     <script>
         const API_BASE = 'http://localhost:8000';
         const USER_ID = 'demo_user'; // Replace with actual user ID from auth
+        const PORTFOLIO_ID = 7; // Test portfolio ID
         let currentIntegrationId = null;
         let allFiles = [];
+        let availableTickers = [];
 
         // Load integrations on page load
         window.onload = () => {
@@ -568,7 +586,10 @@
                 const response = await fetch(`${API_BASE}/integrations/browse`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ integration_id: integrationId })
+                    body: JSON.stringify({
+                        integration_id: integrationId,
+                        portfolio_id: PORTFOLIO_ID  // Include portfolio to get tickers
+                    })
                 });
 
                 if (!response.ok) {
@@ -578,9 +599,36 @@
 
                 const data = await response.json();
                 console.log('Browse response:', data);  // Debug log
-                
+
                 // Ensure files is an array
                 allFiles = Array.isArray(data.files) ? data.files : [];
+
+                // Handle available tickers
+                availableTickers = data.available_tickers || [];
+
+                // Display portfolio info if available
+                if (data.portfolio_name && availableTickers.length > 0) {
+                    document.getElementById('portfolioInfo').style.display = 'block';
+                    document.getElementById('portfolioDetails').innerHTML = `
+                        <strong>Portfolio:</strong> ${data.portfolio_name} (ID: ${data.portfolio_id})<br>
+                        <strong>Available Tickers:</strong> ${availableTickers.join(', ')}
+                    `;
+
+                    // Show ticker selection dropdown
+                    document.getElementById('tickerSelection').style.display = 'block';
+                    const tickerSelect = document.getElementById('tickerSelect');
+                    tickerSelect.innerHTML = '<option value="">-- Choose a ticker --</option>' +
+                        availableTickers.map(ticker =>
+                            `<option value="${ticker}" ${ticker === 'AMZN' ? 'selected' : ''}>${ticker}</option>`
+                        ).join('');
+                } else {
+                    document.getElementById('portfolioInfo').style.display = 'none';
+                    document.getElementById('tickerSelection').style.display = 'none';
+                    availableTickers = ['AMZN']; // Default for testing
+                    document.getElementById('tickerSelect').innerHTML =
+                        '<option value="AMZN" selected>AMZN (Default)</option>';
+                    document.getElementById('tickerSelection').style.display = 'block';
+                }
 
                 renderFiles(allFiles);
                 document.getElementById('browseFilesModal').style.display = 'block';
@@ -644,21 +692,57 @@
                 return;
             }
 
+            // Get selected ticker
+            const ticker = document.getElementById('tickerSelect').value;
+            if (!ticker) {
+                alert('Please select a ticker symbol');
+                return;
+            }
+
+            console.log('Importing files:', {
+                integration_id: currentIntegrationId,
+                file_paths: selectedFiles,
+                ticker: ticker
+            });
+
             try {
                 const response = await fetch(`${API_BASE}/integrations/import`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         integration_id: currentIntegrationId,
-                        file_paths: selectedFiles
+                        file_paths: selectedFiles,
+                        ticker: ticker
                     })
                 });
 
-                const result = await response.json();
-                alert(`Import complete!\nSuccessful: ${result.successful}\nFailed: ${result.failed}`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Import failed');
+                }
 
+                const result = await response.json();
+
+                // Build detailed result message
+                let resultMessage = `Import Complete!\n\n`;
+                resultMessage += `✅ Successful: ${result.successful}\n`;
+                resultMessage += `❌ Failed: ${result.failed}\n`;
+                resultMessage += `📊 Ticker: ${ticker}\n`;
+                resultMessage += `💾 Collection: ticker_${ticker.toLowerCase()}\n\n`;
+
+                if (result.file_results && result.file_results.length > 0) {
+                    resultMessage += 'Details:\n';
+                    result.file_results.forEach(file => {
+                        const icon = file.success ? '✅' : '❌';
+                        const chunks = file.chunks_added ? ` (${file.chunks_added} chunks)` : '';
+                        resultMessage += `${icon} ${file.file_path.split('/').pop()}${chunks}\n`;
+                    });
+                }
+
+                alert(resultMessage);
                 closeModal('browseFilesModal');
             } catch (error) {
+                console.error('Import error:', error);
                 alert(`Import failed: ${error.message}`);
             }
         }

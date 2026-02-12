@@ -21,16 +21,18 @@ class FileImportService:
     def import_files(
         db: Session,
         integration_id: int,
-        file_paths: List[str]
+        file_paths: List[str],
+        ticker: str
     ) -> List[Dict]:
         """
         Import files from an integration and ingest them into the vector database
-        
+
         Args:
             db: Database session
             integration_id: Integration ID to import from
             file_paths: List of file paths to import
-        
+            ticker: Ticker symbol for these files (e.g., AAPL, GOOGL)
+
         Returns:
             List[Dict]: List of import results for each file
         """
@@ -80,16 +82,17 @@ class FileImportService:
                 # Import the PDF processing function
                 try:
                     from ingestion.ingest_pdf import ingest_pdf
-                    
-                    # Process the file
-                    ingest_result = ingest_pdf(local_path)
-                    
+
+                    # Process the file with ticker
+                    ingest_result = ingest_pdf(local_path, ticker=ticker)
+
                     # Parse result
                     if ingest_result.get("success"):
                         result["status"] = "completed"
                         result["success"] = True
                         result["chunks_added"] = ingest_result.get("text_chunks", 0)
-                        result["message"] = f"Successfully ingested. Added {result['chunks_added']} text chunks"
+                        result["ticker"] = ticker
+                        result["message"] = f"Successfully ingested to ticker_{ticker.lower()} collection. Added {result['chunks_added']} text chunks"
                     else:
                         result["status"] = "failed"
                         result["error"] = ingest_result.get("error", "Unknown error")

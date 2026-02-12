@@ -85,6 +85,8 @@ class BrowseFilesRequest(BaseModel):
     integration_id: int = Field(..., description="Integration ID to browse files from")
     path: Optional[str] = Field(None, description="Path to browse (default: root)")
     search_query: Optional[str] = Field(None, description="Search query to filter files")
+    portfolio_id: Optional[int] = Field(None, description="Portfolio ID to fetch available tickers")
+    user_id: Optional[str] = Field(None, description="User ID to fetch portfolios and tickers")
 
 
 class BrowseFilesResponse(BaseModel):
@@ -94,6 +96,9 @@ class BrowseFilesResponse(BaseModel):
     path: str
     files: List[RemoteFile]
     total_count: int
+    available_tickers: Optional[List[str]] = Field(None, description="Available tickers from portfolio")
+    portfolio_id: Optional[int] = Field(None, description="Portfolio ID if provided")
+    portfolio_name: Optional[str] = Field(None, description="Portfolio name if available")
 
 
 # File import schemas
@@ -101,6 +106,7 @@ class FileImportRequest(BaseModel):
     """Schema for importing files from an integration"""
     integration_id: int = Field(..., description="Integration ID to import from")
     file_paths: List[str] = Field(..., description="List of file paths to import")
+    ticker: str = Field(..., description="Ticker symbol for these files (e.g., AAPL, GOOGL)")
     portfolio_id: Optional[int] = Field(None, description="Optional portfolio to associate files with")
 
 
@@ -111,6 +117,7 @@ class FileImportStatus(BaseModel):
     success: bool
     message: str
     chunks_added: Optional[int] = None
+    ticker: Optional[str] = None
     error: Optional[str] = None
 
 
