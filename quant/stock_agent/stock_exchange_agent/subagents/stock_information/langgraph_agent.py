@@ -58,6 +58,7 @@ async def create_stock_information_agent(checkpointer=None):
 - get_target_price: 1-year analyst price target
 - get_news_sentiment_and_price_prediction: Sentiment analysis and price prediction
 - get_stock_5_year_projection: 5-year growth and revenue projections
+- get_pe_ratios: P/E ratios of a stock
 
 **CRITICAL RULES - ASK USER FOR MISSING PARAMETERS:**
 
@@ -75,6 +76,9 @@ async def create_stock_information_agent(checkpointer=None):
 
 5. **get_option_chain** - If missing parameters, ASK:
    "Please provide: expiration_date (YYYY-MM-DD) and option_type (calls or puts)"
+
+6. **get_pe_ratios** - If missing parameters, ASK:
+    "Please provide : Type of P/E ratio: trailing, forward, or both "
 
 **RESPONSE RULES:**
 - Only provide data returned by tools. Do NOT invent or assume data.

@@ -6,8 +6,6 @@ from textblob import TextBlob
 from datetime import datetime
 from fastmcp import FastMCP
 
-
-
 # Define an enum for the type of financial statement
 class FinancialType(str, Enum):
     income_stmt = "income_stmt"
@@ -30,6 +28,11 @@ class HolderType(str, Enum):
 class RecommendationType(str, Enum):
     recommendations = "recommendations"
     upgrades_downgrades = "upgrades_downgrades"
+
+class PERatioType(str, Enum):
+    trailing = "trailing"
+    forward = "forward"
+    both = "both"
 
 yfinance_server = FastMCP(
     "yfinance",
@@ -555,6 +558,67 @@ async def get_stock_5_year_projection(ticker: str) -> str:
     }
 
     return json.dumps(result, indent=2)
+
+
+@yfinance_server.tool(
+    name="get_pe_ratios",
+    description="""Get P/E ratios for a given ticker symbol from Yahoo Finance.
+Includes trailing P/E (past 12 months) and forward P/E (projected earnings).
+
+Args:
+    ticker: str
+        The ticker symbol, e.g. "AAPL"
+    ratio_type: PERatioType
+        Type of P/E ratio: "trailing", "forward", or "both" (default: "both")
+    include_current_price: bool
+        Whether to include current price and EPS for context (default: True)
+""",
+)
+async def get_pe_ratios(
+    ticker: str,
+    ratio_type: PERatioType = PERatioType.both,
+    include_current_price: bool = True
+) -> str:
+    """Get P/E ratios for a given ticker symbol.
+
+    Args:
+        ticker: str
+            The ticker symbol, e.g. "AAPL"
+        ratio_type: PERatioType
+            Type of P/E ratio: "trailing", "forward", or "both" (default: "both")
+        include_current_price: bool
+            Whether to include current price and EPS for context (default: True)
+    """
+    company = yf.Ticker(ticker)
+    try:
+        if company.info is None or company.isin is None:
+            print(f"Company ticker {ticker} not found.")
+            return f"Company ticker {ticker} not found."
+    except Exception as e:
+        print(f"Error: getting P/E ratios for {ticker}: {e}")
+        return f"Error: getting P/E ratios for {ticker}: {e}"
+
+    info = company.info
+    pe_data = {}
+
+    if ratio_type in (PERatioType.trailing, PERatioType.both):
+        pe_data["trailingPE"] = info.get("trailingPE")
+        if include_current_price:
+            pe_data["currentPrice"] = info.get("currentPrice")
+            pe_data["trailingEps"] = info.get("trailingEps")
+
+    if ratio_type in (PERatioType.forward, PERatioType.both):
+        pe_data["forwardPE"] = info.get("forwardPE")
+        if include_current_price:
+            pe_data["forwardEps"] = info.get("forwardEps")
+
+    result = {
+        "ticker": ticker,
+        "pe_ratios": pe_data,
+        "as_of": info.get("lastFiscalYearEnd", None)  # Approximate date context
+    }
+    return json.dumps(result, default=str)
+
 
 if __name__ == "__main__":
     print("Starting Yahoo Finance MCP server...")
