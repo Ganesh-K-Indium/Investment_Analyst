@@ -346,6 +346,38 @@ def decide_after_web_integration(state):
 # This optimization reduces overhead by analyzing needs upfront.
 
 
+def route_after_retrieve(state):
+    """
+    Route after retrieval: skip grading for comparison mode.
+
+    Compare endpoint: retrieve → generate (no grading, no web search)
+    Normal endpoint: retrieve → grade_documents (existing flow)
+    """
+    is_comparison_mode = state.get("is_comparison_mode", False)
+
+    if is_comparison_mode:
+        print("---COMPARISON MODE: SKIPPING GRADING, DIRECT TO GENERATE---")
+        return "generate"
+    else:
+        return "grade_documents"
+
+
+def route_after_generate(state):
+    """
+    Route after generation: skip hallucination/answer grading for comparison mode.
+
+    Compare endpoint: generate → decide_chart (no grading)
+    Normal endpoint: generate → grade_generation (existing flow)
+    """
+    is_comparison_mode = state.get("is_comparison_mode", False)
+
+    if is_comparison_mode:
+        print("---COMPARISON MODE: SKIPPING GENERATION GRADING, DIRECT TO CHART DECISION---")
+        return "decide_chart"
+    else:
+        return "grade_generation"
+
+
 def decide_chart_generation(state):
     """
     Decides whether to generate a comparison chart after generation.

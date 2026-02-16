@@ -16,7 +16,8 @@ from rag.graph.nodes import (web_search, retrieve,
 from rag.graph.edges import (route_question, decide_to_generate,
                          grade_generation_v_documents_and_question,
                          decide_after_web_integration, decide_chart_generation,
-                         route_alpha_workflow)
+                         route_alpha_workflow,
+                         route_after_retrieve, route_after_generate)
 from rag.graph.benchmark import time_node, node_timer
 load_dotenv()
 os.environ["GROQ_API_KEY"]=os.getenv("GROQ_API_KEY")
@@ -94,8 +95,15 @@ class BuildingGraph:
             },
         )
 
-        # Retrieve now gets both text and images in one call - go directly to grading
-        workflow.add_edge("retrieve", "grade_documents")
+        # Retrieve: comparison mode skips grading, normal mode grades documents
+        workflow.add_conditional_edges(
+            "retrieve",
+            route_after_retrieve,
+            {
+                "generate": "generate",
+                "grade_documents": "grade_documents",
+            },
+        )
 
         workflow.add_edge("web_search", "generate")
         
@@ -127,12 +135,24 @@ class BuildingGraph:
         # Transform query goes directly back to retrieve (no more cross-reference analysis)
         workflow.add_edge("transform_query", "retrieve")
 
+        # Generate: comparison mode skips grading, normal mode checks hallucination
         workflow.add_conditional_edges(
             "generate",
+            route_after_generate,
+            {
+                "decide_chart": "decide_chart",       # comparison mode: skip grading
+                "grade_generation": "grade_generation",  # normal mode: grade first
+            },
+        )
+
+        # Grade generation (only reached in normal mode)
+        workflow.add_node("grade_generation", lambda state: state)  # Pass-through to conditional edge
+        workflow.add_conditional_edges(
+            "grade_generation",
             grade_generation_v_documents_and_question,
             {
                 "not supported": "generate",
-                "useful": "decide_chart",  # Changed: go to chart decision node
+                "useful": "decide_chart",
                 "not useful": "transform_query",
             },
         )

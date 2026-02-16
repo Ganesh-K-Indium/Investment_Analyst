@@ -11,7 +11,7 @@ from rag.vectordb.chains import (get_retrival_grader_chain, get_rag_chain,
                                                           get_financial_analyst_grader_chain,
                                                           get_financial_data_extractor_chain)
 from rag.vectordb.client import load_vector_database
-from app.utils.company_mapping import get_ticker
+from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company
 load_dotenv()
 
 # Trusted financial data domains for web search
@@ -285,15 +285,99 @@ def smart_extract_financial_data(documents, max_chars=80000):
     return extracted_docs
 
 
+def generate_comparison_subqueries(companies: list, year: str = "2024") -> dict:
+    """
+    Generate optimized sub-queries for company comparison WITHOUT LLM.
+
+    These queries are specifically designed to retrieve data from 10-K reports
+    with maximum accuracy and minimal retrieval time.
+
+    Args:
+        companies: List of company names to compare
+        year: Year for comparison (default: 2024)
+
+    Returns:
+        dict: Sub-query analysis with pre-generated queries
+    """
+    sub_queries = []
+
+    # Template structure optimized for 10-K reports
+    # Using multiple search terms and specific document sections
+
+    year_int = int(year) if isinstance(year, str) else year
+    prior_year = year_int - 1
+
+    for company in companies:
+        # 1. REVENUE - Exact 10-K language
+        sub_queries.append(
+            f"{company} total revenues net revenues year ended December 31 {year} {prior_year} consolidated statements of operations"
+        )
+
+        # 2. NET INCOME - Exact bottom-line metric
+        sub_queries.append(
+            f"{company} net income loss year ended December 31 {year} {prior_year} per share diluted basic"
+        )
+
+        # 3. OPERATING INCOME - Before tax line
+        sub_queries.append(
+            f"{company} income from operations operating income year ended December 31 {year} {prior_year}"
+        )
+
+        # 4. EARNINGS GROWTH - Explicit comparison language
+        sub_queries.append(
+            f"{company} increased decreased from {prior_year} to {year} compared to {prior_year} percentage change"
+        )
+
+        # 5. R&D EXPENSES - Operating cost breakout
+        sub_queries.append(
+            f"{company} research and development costs and expenses year ended December 31 {year} {prior_year}"
+        )
+
+        # 6. TOTAL ASSETS - Balance sheet specific date
+        sub_queries.append(
+            f"{company} total assets as of December 31 {year} {prior_year} consolidated balance sheets"
+        )
+
+        # 7. TOTAL DEBT - Long-term obligations
+        sub_queries.append(
+            f"{company} long-term debt total liabilities as of December 31 {year} {prior_year} balance sheets"
+        )
+
+        # 8. PROFIT DRIVERS - MD&A results section
+        sub_queries.append(
+            f"{company} results of operations factors affecting our performance key business drivers {year}"
+        )
+
+        # 9. RISK FACTORS - Dedicated section
+        sub_queries.append(
+            f"{company} Item 1A risk factors risks and uncertainties that could affect our business {year}"
+        )
+
+    print(f"[FIXED QUERIES] Generated {len(sub_queries)} optimized sub-queries for {len(companies)} companies")
+    print(f"[FIXED QUERIES] Skipped LLM query generation - using 10-K-optimized templates")
+
+    return {
+        "needs_sub_queries": True,
+        "query_type": "multi_company",
+        "companies_detected": companies,
+        "sub_queries": sub_queries,
+        "reasoning": f"Pre-optimized 10-K queries for {', '.join(companies)} (no LLM needed)",
+        "generation_method": "template"  # vs "llm"
+    }
+
+
 def preprocess_and_analyze_query(state):
     """
     PREPROCESSING NODE: Analyze query and generate sub-queries if needed.
     Context-free - no memory or conversation history.
-    
+
     UNIVERSAL SUB-QUERY ANALYZER:
     - Single LLM call extracts companies AND generates optimal sub-queries
     - Works for ALL query types: single-company, multi-company, financial calculations, temporal comparisons
-    
+
+    COMPARISON MODE OPTIMIZATION:
+    - For comparison queries, uses pre-optimized templates instead of LLM (faster, cheaper, better)
+
     SMART CONTEXT REUSE (NEW):
     - If documents exist from previous turn AND query appears to be a follow-up, skip analysis
     """
@@ -301,6 +385,39 @@ def preprocess_and_analyze_query(state):
     messages = state["messages"]
     question = messages[-1].content
     question_lower = question.lower()
+
+    # -------------------------------------------------------------
+    # COMPARISON MODE: Use fixed templates for known comparison queries
+    # -------------------------------------------------------------
+    is_comparison_mode = state.get("is_comparison_mode", False)
+
+    if is_comparison_mode:
+        print("📊 COMPARISON MODE DETECTED - Using pre-optimized 10-K queries")
+
+        # Extract companies from state
+        comparison_companies = []
+        if state.get("comparison_company1"):
+            comparison_companies.append(state["comparison_company1"])
+        if state.get("comparison_company2"):
+            comparison_companies.append(state["comparison_company2"])
+        if state.get("comparison_company3"):
+            comparison_companies.append(state["comparison_company3"])
+
+        print(f"📊 Companies: {', '.join(comparison_companies)}")
+
+        # Generate fixed sub-queries
+        sub_query_analysis = generate_comparison_subqueries(comparison_companies, year="2024")
+
+        return {
+            "companies_detected": comparison_companies,
+            "context_strategy": "documents",
+            "sub_query_analysis": sub_query_analysis,
+            "sub_query_results": {}
+        }
+
+    # -------------------------------------------------------------
+    # NORMAL MODE: Continue with existing logic
+    # -------------------------------------------------------------
     
     # -------------------------------------------------------------
     # SMART CONTEXT REUSE (moved from route_question for efficiency)
@@ -472,6 +589,57 @@ def extract_multiple_companies_from_question(question, llm=None):
     return detected_companies
 
 
+def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
+    """
+    Intelligently detect which tickers from the allowed set are mentioned in the query.
+
+    Detection strategies:
+    1. Exact ticker match (e.g., "AAPL" or "aapl")
+    2. Company name match (e.g., "Apple" → "AAPL", "Amazon" → "AMZN")
+    3. Partial company name match (e.g., "Microsoft's revenue" → "MSFT")
+
+    Args:
+        query_text: The sub-query or question text
+        allowed_tickers: Set of valid tickers to choose from (from company_filter)
+
+    Returns:
+        Set of matched tickers from the allowed set
+    """
+    query_lower = query_text.lower()
+    matched_tickers = set()
+
+    for ticker in allowed_tickers:
+        ticker_lower = ticker.lower()
+
+        # Strategy 1: Exact ticker match (as standalone word)
+        # Check if ticker appears as a word boundary
+        import re
+        if re.search(r'\b' + re.escape(ticker_lower) + r'\b', query_lower):
+            matched_tickers.add(ticker)
+            continue
+
+        # Strategy 2: Company name match
+        # Get the company name for this ticker
+        company_name = map_ticker_to_company(ticker_lower)
+        if company_name and company_name != ticker_lower:
+            # Check if company name appears in query
+            if company_name in query_lower:
+                matched_tickers.add(ticker)
+                continue
+
+            # Strategy 3: Partial company name match
+            # For multi-word company names, check if any significant word matches
+            company_words = company_name.split()
+            for word in company_words:
+                # Skip common words
+                if len(word) > 3 and word not in ['corporation', 'company', 'group', 'inc']:
+                    if re.search(r'\b' + re.escape(word) + r'\b', query_lower):
+                        matched_tickers.add(ticker)
+                        break
+
+    return matched_tickers
+
+
 def retrieve(state, config):
     """
     Retrieve documents relevant to the question using ticker-based collections.
@@ -561,37 +729,34 @@ def retrieve(state, config):
         print("-" * 80)
         
         for i, sq in enumerate(sub_queries, 1):
-            print(f"\n {i}/{len(sub_queries)}: {sq}")
-            
-            # Detect company/ticker for THIS sub-query from the ALLOWED set
-            sq_tickers_for_step = set()
-            
-            # Simple check: which of our valid target_tickers is mentioned in the sub-query?
-            for t_ticker in target_tickers:
-                # Check if ticker symbol is explicitly mentioned
-                if t_ticker.lower() in sq.lower().split():
-                     sq_tickers_for_step.add(t_ticker)
-                # We could check company name map here if we had it available easily, 
-                # but for simplicity we rely on the ticker symbol or just query all if unsure.
-            
-            # If no specific ticker mentioned in sub-query, query ALL allowed tickers
+            print(f"\n📍 {i}/{len(sub_queries)}: {sq}")
+
+            # Intelligently detect which tickers are mentioned in THIS sub-query
+            sq_tickers_for_step = detect_tickers_in_query(sq, target_tickers)
+
+            # If no specific ticker detected, query ALL allowed tickers
+            # (This handles cases where the sub-query doesn't explicitly mention a company)
             if not sq_tickers_for_step:
+                print(f"   ⚠️  No specific company detected, querying all: {list(target_tickers)}")
                 sq_tickers_for_step = target_tickers
+            else:
+                print(f"   🎯 Detected companies: {list(sq_tickers_for_step)}")
             
             if not sq_tickers_for_step:
-                print(f"  No allowed tickers found. Skipping vector search.")
+                print(f"   ❌ No allowed tickers found. Skipping vector search.")
                 sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
                 continue
-                
-            print(f"   Target Tickers for step: {list(sq_tickers_for_step)}")
             
             # Query each relevant ticker collection for this sub-query
             step_docs = []
             for t_ticker in sq_tickers_for_step:
                 try:
+                    company_name = map_ticker_to_company(t_ticker.lower())
+                    print(f"   🔍 Querying ticker_{t_ticker.lower()} ({company_name})...")
+
                     # Get instance for this ticker (DO NOT CREATE if missing)
                     db_instance = vectordb_mgr.get_instance(t_ticker, create_if_missing=False)
-                    
+
                     # Perform search
                     search_results = db_instance.hybrid_search(
                         query=sq,
@@ -600,8 +765,9 @@ def retrieve(state, config):
                         dense_limit=50,
                         sparse_limit=50
                     )
-                    
+
                     # Convert to Document objects
+                    docs_from_ticker = 0
                     for point in search_results:
                         if hasattr(point, 'payload'):
                             content = point.payload.get('page_content', '')
@@ -610,10 +776,16 @@ def retrieve(state, config):
                             if 'company' not in metadata: metadata['company'] = t_ticker
                             doc = Document(page_content=content, metadata=metadata)
                             step_docs.append(doc)
-                            
+                            docs_from_ticker += 1
+
+                    if docs_from_ticker > 0:
+                        print(f"      ✅ Found {docs_from_ticker} documents")
+                    else:
+                        print(f"      ⚠️  No documents found")
+
                 except Exception as e:
                      # Likely collection not found (safe to ignore in retrieval)
-                     print(f"   (Collection not found or error for {t_ticker}: {e})")
+                     print(f"      ❌ Collection not found or error: {e}")
 
             # Deduplicate and Collect results for this sub-query
             companies_found = set()
@@ -638,9 +810,11 @@ def retrieve(state, config):
                 "companies": list(companies_found),
                 "content_types": content_types
             }
-            
-            status = "Yes" if len(step_docs) > 0 else "No"
-            print(f"   {status} {len(step_docs)} docs found")
+
+            if len(step_docs) > 0:
+                print(f"   ✅ Total: {len(step_docs)} docs from {len(companies_found)} companies")
+            else:
+                print(f"   ❌ No documents found for this sub-query")
 
     else:
         # ============================================================================
@@ -957,7 +1131,24 @@ def grade_documents(state):
             
     print(f"Companies Detected: {companies_detected}")
     print(f"Documents to grade: {len(documents)}")
-    
+
+    # OPTIMIZATION: Check if we already graded these documents
+    # Avoid re-grading after web search if we only added a few documents
+    existing_grading = state.get("financial_grading")
+    if existing_grading and "documents_graded_count" in existing_grading:
+        previous_count = existing_grading["documents_graded_count"]
+        new_docs_count = len(documents) - previous_count
+
+        # If we only added < 10 new documents, skip re-grading
+        if new_docs_count < 10 and new_docs_count >= 0:
+            print(f"  ⚡ SKIPPING RE-GRADING: Only {new_docs_count} new docs added")
+            print(f"  Using cached grading result from {previous_count} docs")
+            return {
+                "documents": documents,
+                "financial_grading": existing_grading,
+                "tool_calls": state.get("tool_calls", [])
+            }
+
     # CRITICAL: Handle empty documents case (e.g., company not in DB)
     if not documents or len(documents) == 0:
         print(" NO DOCUMENTS TO GRADE")
@@ -977,67 +1168,163 @@ def grade_documents(state):
             }]
         }
     
-    # OPTIMIZATION: Smart sampling - don't send ALL docs to LLM
-    # Vectorstore docs are already relevant (retrieved by semantic search)
-    # Only need to carefully grade a representative sample
-    
+    # OPTIMIZATION: Parallel batch grading - grade ALL documents for maximum accuracy
+    # Process in batches to respect context limits while ensuring complete coverage
+
     web_docs = [d for d in documents if d.metadata.get("source", "") in ["web_search", "integrate_web_search", "financial_web_search"]]
     vectorstore_docs = [d for d in documents if d not in web_docs]
-    
+
     print(f"  Vectorstore docs: {len(vectorstore_docs)} (high quality)")
     print(f"  Web docs: {len(web_docs)} (needs careful grading)")
-    
-    # Sample intelligently: All web docs + sample of vectorstore docs
-    max_docs_to_grade = 15  # Reasonable limit for LLM context
-    
-    if len(documents) <= max_docs_to_grade:
-        docs_to_grade = documents
-        print(f"  Grading all {len(documents)} documents")
-    else:
-        # All web docs (they need careful analysis) + sample of vectorstore docs
-        vectorstore_sample_size = max(5, max_docs_to_grade - len(web_docs))
-        vectorstore_sample = vectorstore_docs[:vectorstore_sample_size]
-        docs_to_grade = web_docs + vectorstore_sample
-        print(f"  Smart sample: {len(web_docs)} web + {len(vectorstore_sample)}/{len(vectorstore_docs)} vectorstore = {len(docs_to_grade)} total")
-    
+
+    # Grade ALL documents - no sampling to avoid missing data
+    docs_to_grade = documents
+    print(f"  Grading ALL {len(documents)} documents in batches")
+
+    # Batch size for parallel processing (fit in LLM context)
+    BATCH_SIZE = 20  # Grade 20 docs per LLM call
+
     # Initialize financial analyst grader
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
     analyst_grader = get_financial_analyst_grader_chain(llm)
-    
-    # Prepare document previews for grading
-    doc_previews = []
-    preview_chars_per_doc = min(900, 45000 // len(docs_to_grade))  # Distribute budget
-    
-    for i, doc in enumerate(docs_to_grade, 1):
-        if hasattr(doc, 'page_content'):
-            content = doc.page_content[:preview_chars_per_doc]
-        elif isinstance(doc, dict) and 'page_content' in doc:
-            content = doc['page_content'][:preview_chars_per_doc]
+
+    # Split documents into batches
+    doc_batches = [docs_to_grade[i:i + BATCH_SIZE] for i in range(0, len(docs_to_grade), BATCH_SIZE)]
+    print(f"  Processing {len(doc_batches)} batches in parallel...")
+
+    # Function to grade a single batch
+    def grade_batch(batch, batch_idx):
+        doc_previews = []
+        preview_chars_per_doc = min(900, 45000 // len(batch))
+
+        for i, doc in enumerate(batch, 1):
+            if hasattr(doc, 'page_content'):
+                content = doc.page_content[:preview_chars_per_doc]
+            elif isinstance(doc, dict) and 'page_content' in doc:
+                content = doc['page_content'][:preview_chars_per_doc]
+            else:
+                content = str(doc)[:preview_chars_per_doc]
+
+            # Include metadata for context
+            metadata_str = ""
+            if hasattr(doc, 'metadata'):
+                company = doc.metadata.get("company", "Unknown")
+                source = doc.metadata.get("source", "Unknown")
+                metadata_str = f" [Company: {company}, Source: {source}]"
+
+            doc_previews.append(f"--- Document {i} ---{metadata_str}\n{content}\n")
+
+        doc_preview_text = "\n".join(doc_previews)
+
+        try:
+            grade = analyst_grader.invoke({
+                "question": question,
+                "doc_count": len(batch),
+                "doc_previews": doc_preview_text,
+                "companies_detected": ", ".join(companies_detected) if companies_detected else "None",
+                "query_type": query_type
+            })
+            print(f"    ✅ Batch {batch_idx + 1}/{len(doc_batches)}: {len(batch)} docs graded")
+            return grade
+        except Exception as e:
+            print(f"    ❌ Batch {batch_idx + 1} failed: {e}")
+            return None
+
+    # Grade batches in parallel
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    batch_grades = []
+    with ThreadPoolExecutor(max_workers=min(5, len(doc_batches))) as executor:
+        futures = {executor.submit(grade_batch, batch, idx): idx
+                   for idx, batch in enumerate(doc_batches)}
+
+        for future in as_completed(futures):
+            grade = future.result()
+            if grade:
+                batch_grades.append(grade)
+
+    print(f"  ✅ Graded {len(batch_grades)} batches successfully")
+
+    # Aggregate results from all batches
+    if not batch_grades:
+        print("  ⚠️  No successful batch grades, using fallback")
+        doc_preview_text = ""  # Will trigger fallback in next block
+    else:
+        # Merge all batch grades into a single result
+        # Take the most conservative grade (if any batch says "insufficient", overall is "insufficient")
+        all_grades = [g.overall_grade for g in batch_grades if g]
+        if "insufficient" in all_grades:
+            overall_grade = "insufficient"
+        elif "partial" in all_grades:
+            overall_grade = "partial"
         else:
-            content = str(doc)[:preview_chars_per_doc]
-        
-        # Include metadata for context
-        metadata_str = ""
-        if hasattr(doc, 'metadata'):
-            company = doc.metadata.get("company", "Unknown")
-            source = doc.metadata.get("source", "Unknown")
-            metadata_str = f" [Company: {company}, Source: {source}]"
-        
-        doc_previews.append(f"--- Document {i} ---{metadata_str}\n{content}\n")
-    
-    doc_preview_text = "\n".join(doc_previews)
-    
-    print(f"  Invoking financial analyst grader on {len(docs_to_grade)} documents...")
+            overall_grade = "excellent"
+
+        # Aggregate company coverage with proper deduplication
+        company_coverage_map = {}
+        for grade in batch_grades:
+            for cc in grade.company_coverage:
+                if cc.company not in company_coverage_map:
+                    # Create new entry with dict representation
+                    company_coverage_map[cc.company] = {
+                        "company": cc.company,
+                        "confidence": cc.confidence,
+                        "metrics_found": set(cc.metrics_found),
+                        "metrics_missing": set(cc.metrics_missing),
+                        "year_coverage": set(cc.year_coverage)
+                    }
+                else:
+                    # Merge metrics
+                    existing = company_coverage_map[cc.company]
+                    existing["metrics_found"].update(cc.metrics_found)
+                    existing["metrics_missing"].update(cc.metrics_missing)
+                    existing["year_coverage"].update(cc.year_coverage)
+
+        # Fix: Remove items from "missing" if they're in "found"
+        for company, data in company_coverage_map.items():
+            found = data["metrics_found"]
+            missing = data["metrics_missing"]
+            # Remove any metric from missing if it's in found
+            data["metrics_missing"] = missing - found
+            # Convert sets to lists
+            data["metrics_found"] = list(found)
+            data["metrics_missing"] = list(missing - found)
+            data["year_coverage"] = list(data["year_coverage"])
+
+        # Determine if we can answer based on missing data
+        can_answer = all(len(data["metrics_missing"]) == 0 for data in company_coverage_map.values())
+        if can_answer and overall_grade == "insufficient":
+            overall_grade = "excellent"
+
+        # Create aggregated analyst grade as a proper dict-like object
+        class AnalystGradeResult:
+            def __init__(self, grade_dict):
+                self._dict = grade_dict
+                self.overall_grade = grade_dict["overall_grade"]
+                self.can_answer_question = grade_dict["can_answer_question"]
+                self.reasoning = grade_dict["reasoning"]
+                self.company_coverage = grade_dict["company_coverage"]
+                self.missing_data_summary = grade_dict["missing_data_summary"]
+
+            def dict(self):
+                return self._dict
+
+        analyst_grade = AnalystGradeResult({
+            "overall_grade": overall_grade,
+            "can_answer_question": can_answer,
+            "reasoning": f"Aggregated from {len(batch_grades)} batches (parallel grading)",
+            "company_coverage": list(company_coverage_map.values()),
+            "missing_data_summary": "" if can_answer else "Some metrics still missing after aggregation"
+        })
+
+        # Set up doc_preview_text for the try block (even though we don't use it now)
+        doc_preview_text = "Aggregated from batches"
+
+    print(f"  Final analysis complete")
     
     try:
-        # Invoke financial analyst grader
-        analyst_grade = analyst_grader.invoke({
-            "question": question,
-            "doc_count": len(documents),
-            "doc_previews": doc_preview_text,
-            "companies_detected": ", ".join(companies_detected) if companies_detected else "None",
-            "query_type": query_type
-        })
+        # Analyst grade already computed above via parallel batch processing
+        # This try block now just handles the result formatting
         
         print(f"\n FINANCIAL ANALYST GRADE: {analyst_grade.overall_grade.upper()}")
         print(f"Can Answer Question: {analyst_grade.can_answer_question}")
@@ -1045,12 +1332,19 @@ def grade_documents(state):
         
         # Log per-company coverage
         for company_coverage in analyst_grade.company_coverage:
-            print(f"\n  Company: {company_coverage.company}")
-            print(f"    Confidence: {company_coverage.confidence}")
-            print(f"    Years: {', '.join(company_coverage.year_coverage) if company_coverage.year_coverage else 'Unknown'}")
-            print(f"    Metrics Found: {', '.join(company_coverage.metrics_found[:5])}{'...' if len(company_coverage.metrics_found) > 5 else ''}")
-            if company_coverage.metrics_missing:
-                print(f"      Metrics Missing: {', '.join(company_coverage.metrics_missing[:3])}{'...' if len(company_coverage.metrics_missing) > 3 else ''}")
+            # Handle both dict and object types
+            company = company_coverage.get("company") if isinstance(company_coverage, dict) else company_coverage.company
+            confidence = company_coverage.get("confidence") if isinstance(company_coverage, dict) else company_coverage.confidence
+            year_coverage = company_coverage.get("year_coverage", []) if isinstance(company_coverage, dict) else company_coverage.year_coverage
+            metrics_found = company_coverage.get("metrics_found", []) if isinstance(company_coverage, dict) else company_coverage.metrics_found
+            metrics_missing = company_coverage.get("metrics_missing", []) if isinstance(company_coverage, dict) else company_coverage.metrics_missing
+
+            print(f"\n  Company: {company}")
+            print(f"    Confidence: {confidence}")
+            print(f"    Years: {', '.join(year_coverage) if year_coverage else 'Unknown'}")
+            print(f"    Metrics Found: {', '.join(metrics_found[:5])}{'...' if len(metrics_found) > 5 else ''}")
+            if metrics_missing:
+                print(f"      Metrics Missing: {', '.join(metrics_missing[:3])}{'...' if len(metrics_missing) > 3 else ''}")
         
         if analyst_grade.missing_data_summary:
             print(f"\n   MISSING DATA: {analyst_grade.missing_data_summary}")
@@ -1061,7 +1355,8 @@ def grade_documents(state):
             "overall_grade": analyst_grade.overall_grade,
             "can_answer": analyst_grade.can_answer_question,
             "missing_data_summary": analyst_grade.missing_data_summary,
-            "company_coverage": [cc.dict() for cc in analyst_grade.company_coverage]
+            "company_coverage": analyst_grade.company_coverage,  # Already dicts, don't call .dict()
+            "documents_graded_count": len(documents)  # For caching
         }
         
         # For now, keep all documents (decision node will use grading to determine if web search needed)
