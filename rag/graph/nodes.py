@@ -1043,7 +1043,7 @@ Please provide a clear, well-structured summary."""
     # CRITICAL: Smart truncate documents to prevent context overflow
     # GPT-4o has 128k token limit (~96k chars safe limit)
     total_chars = sum(len(doc.page_content) for doc in documents)
-    MAX_TOTAL_CHARS = 80000  # Safe limit for generation
+    MAX_TOTAL_CHARS = 150000  # Safe limit for generation
     
     # Check if financial query to prioritize financial data
     sub_query_analysis = state.get("sub_query_analysis", {})
