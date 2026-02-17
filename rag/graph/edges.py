@@ -61,28 +61,7 @@ def route_question(state):
         return "web_search"
     
     # Default: go to vectorstore (let retrieval and grading decide quality)
-    
-    # Check query type from preprocess analysis
-    sub_query_analysis = state.get("sub_query_analysis", {})
-    query_type = sub_query_analysis.get("query_type")
-    
-    # SUMMARIZE queries → directly to generate (use conversation messages)
-    if query_type == "summarize":
-        print("Smart Reuse: Summarize query → generate (using messages)")
-        return "generate"
-    
-    # MORE_INFO queries → to vectorstore for incremental retrieval
-    elif query_type == "more_info":
-        print("Smart Reuse: More info query → vectorstore (incremental)")
-        return "vectorstore"
-    
-    # FOLLOW_UP queries → directly to generate (use persisted documents)
-    elif query_type == "follow_up":
-        print("Smart Reuse: Follow-up query → generate (using docs)")
-        return "generate"
-
-    # New query → normal vectorstore retrieval
-    print("New query → vectorstore")
+    print("Default → vectorstore")
     return "vectorstore"
     
 def decide_to_generate(state):

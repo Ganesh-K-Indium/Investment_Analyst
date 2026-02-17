@@ -91,7 +91,6 @@ class BuildingGraph:
             {
                 "vectorstore": "retrieve",
                 "web_search": "web_search",
-                "generate": "generate"
             },
         )
 
