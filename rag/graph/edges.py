@@ -325,17 +325,31 @@ def decide_after_web_integration(state):
 # This optimization reduces overhead by analyzing needs upfront.
 
 
+def _is_direct_vectordb_mode(state) -> bool:
+    """
+    Check if the current query should skip grading and web search,
+    going directly from retrieve → generate → show_result.
+
+    Applies to: comparison mode, segment queries, geographic queries.
+    These query types use predefined sub-queries and the 10-K is the
+    authoritative source — web search only adds noise.
+    """
+    if state.get("is_comparison_mode", False):
+        return True
+    query_type = state.get("sub_query_analysis", {}).get("query_type", "")
+    return query_type in ("segment", "geographic")
+
+
 def route_after_retrieve(state):
     """
-    Route after retrieval: skip grading for comparison mode.
+    Route after retrieval: skip grading for direct-vectordb modes.
 
-    Compare endpoint: retrieve → generate (no grading, no web search)
-    Normal endpoint: retrieve → grade_documents (existing flow)
+    Direct modes (compare/segment/geographic): retrieve → generate
+    Normal mode: retrieve → grade_documents (existing flow)
     """
-    is_comparison_mode = state.get("is_comparison_mode", False)
-
-    if is_comparison_mode:
-        print("---COMPARISON MODE: SKIPPING GRADING, DIRECT TO GENERATE---")
+    if _is_direct_vectordb_mode(state):
+        query_type = state.get("sub_query_analysis", {}).get("query_type", "comparison")
+        print(f"---{query_type.upper()} MODE: SKIPPING GRADING, DIRECT TO GENERATE---")
         return "generate"
     else:
         return "grade_documents"
@@ -343,15 +357,14 @@ def route_after_retrieve(state):
 
 def route_after_generate(state):
     """
-    Route after generation: skip hallucination/answer grading for comparison mode.
+    Route after generation: skip hallucination/answer grading for direct-vectordb modes.
 
-    Compare endpoint: generate → decide_chart (no grading)
-    Normal endpoint: generate → grade_generation (existing flow)
+    Direct modes (compare/segment/geographic): generate → decide_chart
+    Normal mode: generate → grade_generation (existing flow)
     """
-    is_comparison_mode = state.get("is_comparison_mode", False)
-
-    if is_comparison_mode:
-        print("---COMPARISON MODE: SKIPPING GENERATION GRADING, DIRECT TO CHART DECISION---")
+    if _is_direct_vectordb_mode(state):
+        query_type = state.get("sub_query_analysis", {}).get("query_type", "comparison")
+        print(f"---{query_type.upper()} MODE: SKIPPING GENERATION GRADING, DIRECT TO CHART DECISION---")
         return "decide_chart"
     else:
         return "grade_generation"
