@@ -66,6 +66,8 @@ class ChatService:
         prompt = ChatPromptTemplate.from_template("""
         Summarize the key topics, questions asked, and main insights from this investment analysis conversation.
         Focus on portfolio analysis, stock insights, document findings, and actionable takeaways.
+        Also ensure that you keep a seperate section of all the chart urls that maybe found.
+                                            
         
         Keep summary concise (2-4 sentences) but comprehensive. Use bullet points for clarity.
         
