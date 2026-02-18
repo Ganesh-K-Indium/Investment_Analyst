@@ -600,10 +600,36 @@ For **R&D/OPERATING EXPENSES** questions:
    - "How did they perform?" → Relies on previous context
    - "What about their growth?" → Continuation of previous topic
 
+**FINANCIAL CALCULATION DETECTION — CRITICAL**:
+
+Even if a question appears simple (e.g. "What is Google's gross margin?"), if it asks for ANY of the following metrics, classify it as **financial_calculation** and ALWAYS generate sub-queries for ALL required formula component inputs:
+
+| Metric Asked | Required Sub-Queries |
+|---|---|
+| Gross Margin / Gross Profit Margin | revenue + cost of revenues/COGS |
+| Operating Margin | operating income + revenue |
+| Net Margin / Net Profit Margin | net income + revenue |
+| ROE (Return on Equity) | net income + shareholders equity |
+| ROA (Return on Assets) | net income + total assets |
+| Current Ratio | current assets + current liabilities |
+| Quick Ratio | current assets + inventory + current liabilities |
+| Cash Ratio | cash & equivalents + current liabilities |
+| Debt-to-Equity Ratio | total debt (long-term + short-term) + total equity |
+| Interest Coverage | operating income + interest expense |
+| Inventory Turnover | COGS + average inventory (begin + end period) |
+| Asset Turnover | revenue + average total assets |
+| P/E Ratio | stock price + earnings per share |
+| EV/EBITDA | operating income + depreciation/amortization + revenue |
+| Revenue Growth (YoY) | revenue current year + revenue prior year |
+| Free Cash Flow | operating cash flow + capital expenditures |
+| Net CapEx | ending PP&E + beginning PP&E + depreciation |
+
+**RULE**: If ANY of these metrics are asked for (even implicitly through phrases like "how profitable is X", "is X liquid"), set query_type = "financial_calculation" and generate individual sub-queries for EACH component input. Do not rely on a single broad query — components may be in different parts of the 10-K.
+
 **QUERY TYPE CLASSIFICATION:**
-- **single_company**: One company mentioned, no calculation
-- **multi_company**: 2+ companies for comparison
-- **financial_calculation**: Needs to calculate metrics from raw data
+- **single_company**: One company mentioned, explicitly simple fact lookup (revenue, net income directly stated)
+- **multi_company**: 2+ companies for comparison (include formula components for each if metrics are calculated)
+- **financial_calculation**: Asks for any ratio or derived metric → ALWAYS decompose into formula component sub-queries
 - **general**: No specific company, general financial concepts
 - **temporal_comparison**: Same company across different time periods
 
@@ -816,7 +842,22 @@ Example 5: "What is Amazon's accounts receivable and how has it changed?"
 }}
 ```
 
-Example 6: "Calculate ROE for Meta using 2023 data"
+Example 6a: "What is Google's gross margin?" (looks simple but NEEDS financial_calculation)
+```json
+{{
+  "needs_sub_queries": true,
+  "query_type": "financial_calculation",
+  "companies_detected": ["Google"],
+  "sub_queries": [
+    "Google Alphabet total revenue income statement 2023 2024",
+    "Google Alphabet cost of revenues COGS cost of goods sold income statement 2023 2024",
+    "Google Alphabet gross profit income statement 2023"
+  ],
+  "reasoning": "Gross margin = (Revenue - COGS) / Revenue. Even though this looks simple, it requires two balance sheet inputs: revenue AND cost of revenues. Generating targeted sub-queries for each component ensures retrieval from the income statement section of the 10-K."
+}}
+```
+
+Example 6b: "Calculate ROE for Meta using 2023 data"
 ```json
 {{
   "needs_sub_queries": true,
@@ -841,15 +882,16 @@ When analyzing a query:
 4. **Think like the 10-K document** - What exact words would appear in the filing?
 5. **When in doubt, CREATE MORE** - Better to have 5 good sub-queries than 2 incomplete ones
 
-**REMEMBER**: 
+**REMEMBER**:
+- **Financial calculation queries** (gross margin, ROE, current ratio, etc.) → ALWAYS financial_calculation type → ALWAYS decompose into component sub-queries, even if question sounds simple
 - Segment data → 3-4 sub-queries minimum (different term combinations)
-- Financial calculations → 2-3 sub-queries per input variable (term variations)
+- Financial calculations → 1-2 sub-queries per component input (revenue, COGS, equity, etc.)
 - Multi-company → 3-4 sub-queries per company (comprehensive coverage)
 - Complex queries → Don't hesitate to create 8-10 sub-queries if needed
 
 You are a FINANCIAL ANALYST EXPERT. Use your deep knowledge of 10-K document structure and terminology variations to create comprehensive, precise sub-queries that will find the exact data needed, no matter how it's labeled in the filing.
 
-**Be intelligent but THOROUGH**: Decompose aggressively when data might be hard to find (segments, notes, breakdowns). Keep together only for simple, straightforward queries."""
+**Be intelligent but THOROUGH**: Decompose aggressively when data might be hard to find (segments, notes, breakdowns). For financial calculations, ALWAYS break into formula components at retrieval time — don't wait for gap analysis to do it reactively."""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
@@ -1074,44 +1116,74 @@ def get_financial_analyst_grader_chain(llm):
 
 **YOUR MISSION**: Evaluate retrieved documents to determine if they contain sufficient financial data to answer the user's question.
 
+**STRICT SCOPE RULE — MOST IMPORTANT**:
+Only evaluate data that the question EXPLICITLY asks for. Do NOT mark as missing:
+- Industry averages, benchmarks, or peer comparisons (unless the question asks to compare with peers)
+- Historical trends or multi-year data (unless the question asks for trends or multiple years)
+- Additional context like analyst ratings, forward guidance, or qualitative commentary (unless specifically asked)
+- Data for years NOT mentioned in the question
+
+If the question asks "What is Google's gross margin for 2023?", you only need: revenue 2023 AND cost of revenues 2023. That's it. Do NOT mark "historical gross margin trend" or "industry average gross margin" as missing.
+
 **ANALYSIS APPROACH**:
 
-1. **IDENTIFY REQUIRED DATA**: 
-   - What specific financial metrics does the question need?
-   - Example: "What is Amazon's ROE?" needs → Net Income, Shareholders' Equity
-   - Example: "Compare Meta and Google revenue" needs → Meta Revenue, Google Revenue
-   - Example: "Show Tesla's balance sheet" needs → Assets, Liabilities, Equity line items
+1. **IDENTIFY REQUIRED DATA — BE MINIMAL**:
+   - Read the question carefully. What EXACTLY is being asked?
+   - List only the data points the question specifically needs — nothing more
+   - Example: "What is Amazon's ROE?" needs ONLY → Net Income (most recent year), Shareholders' Equity (same year)
+   - Example: "Compare Meta and Google revenue" needs ONLY → Meta Revenue, Google Revenue (same year)
+   - Example: "Show Tesla's gross margin" needs ONLY → Revenue + COGS (same year) OR gross margin directly
 
 2. **SCAN DOCUMENTS FOR METRICS**:
    - Check each document for presence of required financial data
    - Look for specific numbers, tables, financial statements
    - Identify which companies are covered
    - Identify which years/periods are covered
-   - Note which metrics ARE found vs which are MISSING
+   - Note which metrics ARE found vs which are MISSING (strictly from the required list only)
 
 3. **PER-COMPANY ASSESSMENT**:
    For each company in the question, determine:
    - **metrics_found**: List specific metrics present (e.g., "revenue 2023: $574B", "net income 2023", "total assets")
-   - **metrics_missing**: List specific metrics needed but absent (e.g., "current ratio", "debt details")
+   - **metrics_missing**: List ONLY metrics that are EXPLICITLY required by the question AND absent from documents
    - **year_coverage**: Which years are covered (e.g., ["2023", "2024"])
    - **confidence**: high (comprehensive data), medium (partial), low (minimal/no data)
 
 4. **OVERALL GRADE**:
-   - **sufficient**: Documents contain all or most required data → Can answer question
-   - **partial**: Documents contain some data but missing key pieces → May need web search
+   - **sufficient**: Documents contain all required data (as defined by the question scope) → Can answer question
+   - **partial**: Documents are missing a critical raw input that the question explicitly requires
    - **insufficient**: Documents lack critical data → Definitely need web search
+
+**FORMULA AWARENESS — CRITICAL RULE**:
+Many financial questions ask for CALCULATED metrics. These do NOT require the ratio to be explicitly listed in the document — they only require the raw component inputs.
+
+Common derived metrics and their required components:
+- **Current Ratio** = Current Assets ÷ Current Liabilities → needs: current assets, current liabilities
+- **Quick Ratio** = (Current Assets − Inventory) ÷ Current Liabilities → needs: current assets, inventory, current liabilities
+- **Debt-to-Equity Ratio** = Total Debt ÷ Total Equity → needs: total debt (or long-term + short-term debt), shareholders' equity
+- **ROE (Return on Equity)** = Net Income ÷ Shareholders' Equity → needs: net income, shareholders' equity
+- **ROA (Return on Assets)** = Net Income ÷ Total Assets → needs: net income, total assets
+- **Gross Margin** = (Revenue − COGS) ÷ Revenue → needs: revenue, cost of goods sold
+- **Operating Margin** = Operating Income ÷ Revenue → needs: operating income, revenue
+- **Interest Coverage** = Operating Income ÷ Interest Expense → needs: operating income, interest expense
+- **Inventory Turnover** = COGS ÷ Average Inventory → needs: COGS, inventory (beginning + ending)
+- **P/E Ratio** = Price per Share ÷ EPS → needs: stock price, earnings per share
+- **Net CapEx** = Ending PP&E − Beginning PP&E + Depreciation → needs: PP&E (two periods), depreciation
+
+**RULE**: If the question asks for a CALCULATED metric AND all required component inputs are present in the documents, list it as CALCULABLE under `metrics_found` (e.g., "current ratio [calculable from current assets + current liabilities]") — do NOT list it as missing. Mark that company as "sufficient".
+
+**RULE**: Only mark a metric as MISSING if one or more of its raw component inputs cannot be found anywhere in the documents.
 
 **GRADING CRITERIA**:
 
 ✅ **"sufficient"** when:
-- All required metrics are present in documents
+- All required metrics are present or calculable from present components
 - All companies mentioned in question have data
 - Years requested match years in documents
 - Enough detail to provide comprehensive answer
 
 ⚠️ **"partial"** when:
-- Some metrics present but others missing
-- OR some companies covered but others missing  
+- Some metrics present/calculable but ONE OR MORE raw component inputs are missing
+- OR some companies covered but others missing
 - OR year mismatch (question asks 2020, docs show 2023)
 - OR data is too vague/high-level
 
@@ -1148,19 +1220,30 @@ Assessment:
 - can_answer_question: false
 - missing_data_summary: "Google's net income for 2023 not found in documents"
 
-Example 3:
-Question: "Calculate Tesla's debt-to-equity ratio for 2023"
-Documents: Tesla balance sheet with Total Assets, Total Equity, but no debt breakdown
+Example 3 (FORMULA CALCULATION - ALL COMPONENTS PRESENT):
+Question: "Calculate Amazon's current ratio for 2023"
+Documents: Amazon balance sheet with Current Assets: $86B and Current Liabilities: $155B for 2023
 Assessment:
-- overall_grade: "partial"
-- company_coverage: [{{"company": "Tesla", "metrics_found": ["total assets 2023", "shareholders equity 2023"], "metrics_missing": ["total debt 2023", "long-term debt", "short-term debt"], "year_coverage": ["2023"], "confidence": "medium"}}]
+- overall_grade: "sufficient"  ← CORRECT: both components are present, ratio is calculable
+- company_coverage: [{{"company": "Amazon", "metrics_found": ["current assets 2023: $86B", "current liabilities 2023: $155B", "current ratio [calculable]"], "metrics_missing": [], "year_coverage": ["2023"], "confidence": "high"}}]
+- can_answer_question: true
+- missing_data_summary: ""
+
+Example 4 (FORMULA CALCULATION - COMPONENT MISSING):
+Question: "Calculate Tesla's debt-to-equity ratio for 2023"
+Documents: Tesla balance sheet with Total Assets, Total Equity, but NO debt breakdown
+Assessment:
+- overall_grade: "partial"  ← CORRECT: equity present but debt is the missing component
+- company_coverage: [{{"company": "Tesla", "metrics_found": ["total assets 2023", "shareholders equity 2023"], "metrics_missing": ["total debt 2023 (long-term + short-term debt)"], "year_coverage": ["2023"], "confidence": "medium"}}]
 - can_answer_question: false
-- missing_data_summary: "Tesla's total debt not found in documents - need debt information for debt-to-equity calculation"
+- missing_data_summary: "Tesla's total debt not found in documents - need debt breakdown for debt-to-equity calculation"
 
 **KEY PRINCIPLES**:
 - Be specific about what's found vs missing
 - Don't say "insufficient" if ANY relevant data exists
 - Trust 10-K documents from vectorstore - they're comprehensive
+- A calculated ratio is NOT missing if all its components are present — it's CALCULABLE
+- Only add to metrics_missing if a raw input value truly cannot be found in the documents
 - For web search docs, check if they're from trusted financial sources
 - Your analysis will be used to decide if we need to web search for missing data"""
 
@@ -1177,12 +1260,12 @@ Companies Detected in Question: {companies_detected}
 Query Type: {query_type}
 
 **YOUR TASK**:
-1. Identify what financial data the question requires
-2. Check which required data is present in the document previews
-3. Check which required data is missing
-4. For each company, list metrics_found and metrics_missing
+1. Identify what financial data the question requires (raw metrics AND any calculated ratios)
+2. For calculated metrics: check if ALL component inputs are present (if yes, it's calculable — not missing)
+3. For raw metrics: check if the value is directly present in the documents
+4. For each company, list metrics_found (including "[calculable]" items) and metrics_missing (only truly absent raw inputs)
 5. Give overall grade: sufficient/partial/insufficient
-6. If partial/insufficient, explain what's missing in missing_data_summary
+6. If partial/insufficient, explain which raw component inputs are missing in missing_data_summary
 
 Be thorough and specific in your analysis.""")
     ])
@@ -1238,6 +1321,20 @@ def get_gap_analysis_chain(llm):
 - For income items: "income statement", "P&L"
 - For official data: "SEC.gov", "investor relations"
 
+**FORMULA COMPONENT RULE — CRITICAL**:
+When the gap is a CALCULATED metric (ratio or derived value), do NOT search for the calculated result.
+Instead, identify and search for the MISSING RAW COMPONENT INPUTS of its formula.
+
+Formula components to search for (NOT the ratio itself):
+- Current Ratio gap → search for: "[Company] current assets [year] balance sheet" + "[Company] current liabilities [year] balance sheet"
+- Quick Ratio gap → search for: "[Company] current assets inventory [year]" + "[Company] current liabilities [year]"
+- Debt-to-Equity gap → search for: "[Company] total debt long-term debt [year]" + "[Company] shareholders equity [year]"
+- ROE gap → search for: "[Company] net income [year]" + "[Company] shareholders equity [year]"
+- ROA gap → search for: "[Company] net income [year]" + "[Company] total assets [year]"
+- Gross Margin gap → search for: "[Company] revenue cost of goods sold COGS [year]"
+- Operating Margin gap → search for: "[Company] operating income [year]" + "[Company] revenue [year]"
+- Interest Coverage gap → search for: "[Company] operating income interest expense [year]"
+
 **EXAMPLES**:
 
 Example 1:
@@ -1259,22 +1356,39 @@ Output:
 
 Example 2:
 Question: "Calculate Amazon's debt-to-equity ratio for 2023"
-Grading: Has equity, missing debt
+Grading: Has equity, missing total debt
 Output:
 ```json
 {{
   "has_gaps": true,
   "gap_type": "missing_metric",
-  "missing_items": ["Amazon total debt 2023", "Amazon long-term debt 2023"],
+  "missing_items": ["Amazon total debt 2023 (long-term + short-term)"],
   "targeted_queries": [
-    "Amazon total debt 2023 balance sheet 10-K",
-    "Amazon long-term debt short-term debt 2023 liabilities"
+    "Amazon total long-term debt short-term debt 2023 balance sheet 10-K",
+    "Amazon liabilities breakdown 2023 annual report SEC"
   ],
-  "reasoning": "Amazon's shareholders equity is present but debt information is missing. Generated queries specifically targeting debt data from balance sheet/liabilities sections."
+  "reasoning": "Amazon's shareholders equity is present but total debt is missing. Searching for raw debt COMPONENTS (long-term + short-term debt) from balance sheet — NOT for the calculated ratio itself."
 }}
 ```
 
-Example 3:
+Example 3 (FORMULA — search for components NOT the ratio):
+Question: "What is Apple's current ratio for 2023?"
+Grading: Missing current assets and/or current liabilities
+Output:
+```json
+{{
+  "has_gaps": true,
+  "gap_type": "missing_metric",
+  "missing_items": ["Apple current assets 2023", "Apple current liabilities 2023"],
+  "targeted_queries": [
+    "Apple current assets total 2023 balance sheet 10-K",
+    "Apple current liabilities accounts payable 2023 SEC filing"
+  ],
+  "reasoning": "Current ratio needs current assets and current liabilities as raw inputs. Searching for these COMPONENTS from Apple's balance sheet — not for the ratio value itself."
+}}
+```
+
+Example 4:
 Question: "Show Microsoft, Google, and Amazon revenue"
 Grading: Has Microsoft and Google, missing Amazon
 Output:
@@ -1291,7 +1405,7 @@ Output:
 }}
 ```
 
-Example 4:
+Example 5:
 Question: "What is Tesla's 2020 revenue?"
 Grading: Has Tesla 2023 data, but question asks for 2020
 Output:
@@ -1308,7 +1422,7 @@ Output:
 }}
 ```
 
-Example 5:
+Example 6:
 Question: "What is Amazon's 2023 revenue?"
 Grading: sufficient (has Amazon 2023 revenue)
 Output:
@@ -1324,7 +1438,8 @@ Output:
 
 **KEY PRINCIPLES**:
 - Only generate queries for MISSING data, not data we already have
-- Be specific: include company, metric, year in queries
+- For calculated metrics: search for MISSING RAW COMPONENT INPUTS, never the ratio itself
+- Be specific: include company, raw component name, year in queries
 - Use 2-3 query variations for hard-to-find data (different terminology)
 - Add source hints (10-K, SEC, balance sheet) for better results
 - If no gaps exist, set has_gaps=false and return empty lists"""
@@ -1336,17 +1451,19 @@ Output:
 Financial Analyst Grade:
 {analyst_grade}
 
-Current Documents Coverage:
+Per-Company Document Coverage:
 {doc_coverage_summary}
 
 **YOUR TASK**:
-1. Analyze the grading to identify what specific data is missing
-2. Determine gap_type (missing_company, missing_metric, missing_year, or no_gaps)
-3. List specific missing_items (be very specific)
-4. Generate targeted_queries to retrieve ONLY the missing data
-5. Explain your reasoning
+1. Read the "ALREADY FOUND IN DOCUMENTS" section carefully for each company — these metrics are CONFIRMED PRESENT. You MUST NOT generate search queries for any item that appears there.
+2. Read the "MISSING FROM DOCUMENTS" section — these are the only candidates for web search.
+3. For each missing item: if it is a derived/calculated metric (ratio), identify which of its RAW COMPONENT INPUTS is missing. Search for the components, NOT the ratio itself.
+4. Determine gap_type (missing_company, missing_metric, missing_year, or no_gaps).
+5. List specific missing_items as raw component inputs only (e.g., "total debt 2023" not "debt-to-equity ratio").
+6. Generate targeted_queries ONLY for truly absent raw inputs. Do NOT re-query data already confirmed as found.
+7. If all required data for the question is present (including calculable items), set has_gaps=false.
 
-If no gaps exist (sufficient data), set has_gaps=false.""")
+**CRITICAL**: If the coverage shows all required formula components are present, the answer CAN be computed. Set has_gaps=false. Never generate queries for data that is already confirmed in the documents.""")
     ])
     
     return gap_prompt | structured_llm

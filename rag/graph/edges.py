@@ -2,10 +2,9 @@
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from rag.vectordb.chains import (get_question_router_chain,
-                                                          get_hallucination_chain, 
+                                                          get_hallucination_chain,
                                                           get_answer_quality_chain,
-                                                          get_document_sufficiency_chain,
-                                                          get_gap_analysis_chain)
+                                                          get_document_sufficiency_chain)
 from rag.vectordb.client import load_vector_database
 
 
@@ -66,152 +65,85 @@ def route_question(state):
     
 def decide_to_generate(state):
     """
-    GAP ANALYSIS DECISION: Intelligently determines if we have all needed data.
-    
-    NEW APPROACH:
-    1. Uses financial analyst grading from previous step
-    2. Performs gap analysis to identify specific missing data
-    3. If gaps exist, generates targeted web search queries for ONLY missing data
-    4. If no gaps, proceeds to generate answer
-    
-    This replaces generic "yes/no" decisions with precise gap identification.
+    ROUTING DECISION: Determines whether to generate, perform gap analysis, or web search.
+
+    Gap analysis itself has been moved to a dedicated 'gap_analysis' node so that
+    the targeted queries it produces are properly persisted in graph state.
+
+    Flow:
+      grade_documents → decide_to_generate
+        ├─ "generate"          (sufficient grade, or web search already done)
+        ├─ "gap_analysis"      (partial/insufficient, web search not yet done)
+        └─ "financial_web_search" (no docs after all searches)
     """
-    print("---GAP ANALYSIS DECISION---")
-    messages = state["messages"]
-    question = messages[-1].content
+    print("---DECIDE TO GENERATE---")
     filtered_documents = state["documents"]
     vectorstore_searched = state.get("vectorstore_searched", False)
     web_searched = state.get("web_searched", False)
-    
+
     doc_count = len(filtered_documents) if filtered_documents else 0
     print(f"Documents: {doc_count}")
     print(f"Vectorstore searched: {vectorstore_searched}, Web searched: {web_searched}")
-    
-    # CRITICAL: Prevent infinite loops - if web search already done, must generate
+
+    # CRITICAL: Prevent infinite loops - if both searches done, must generate
     if web_searched and vectorstore_searched:
         if not filtered_documents:
             print("---DECISION: NO DOCS AFTER BOTH SEARCHES, FALLBACK TO FINANCIAL WEB SEARCH---")
             return "financial_web_search"
-        else:
-            print(f"---DECISION: BOTH SEARCHES COMPLETE, MUST GENERATE TO AVOID LOOP---")
-            return "generate"
-    
-    # Handle edge case: No documents at all
+        print("---DECISION: BOTH SEARCHES COMPLETE, GENERATE TO AVOID LOOP---")
+        return "generate"
+
+    # No documents at all
     if not filtered_documents:
         if not web_searched and vectorstore_searched:
-            print("---DECISION: NO DOCUMENTS, TRY WEB SEARCH---")
-            return "integrate_web_search"
-        else:
-            print("---DECISION: NO DOCS AFTER ALL SEARCHES, FALLBACK---")
-            return "financial_web_search"
-    
-    # Get financial analyst grading from previous step
+            print("---DECISION: NO DOCUMENTS, PERFORM GAP ANALYSIS THEN WEB SEARCH---")
+            return "gap_analysis"
+        print("---DECISION: NO DOCS AFTER ALL SEARCHES, FALLBACK---")
+        return "financial_web_search"
+
     financial_grading = state.get("financial_grading", {})
-    
+
     if not financial_grading or "overall_grade" not in financial_grading:
         print("  No financial grading found, using fallback logic")
-        # Fallback to simple heuristic
         if doc_count >= 3:
             return "generate"
         elif not web_searched:
-            return "integrate_web_search"
-        else:
-            return "generate"
-    
+            return "gap_analysis"
+        return "generate"
+
     overall_grade = financial_grading.get("overall_grade")
     can_answer = financial_grading.get("can_answer", False)
-    missing_data_summary = financial_grading.get("missing_data_summary", "")
-    
+
     print(f"Financial Analyst Grade: {overall_grade}")
     print(f"Can Answer: {can_answer}")
-    
-    # DECISION LOGIC based on financial analyst grade:
-    
+
     # 1. SUFFICIENT grade → Generate directly
     if overall_grade == "sufficient" and can_answer:
         print("---DECISION: SUFFICIENT DATA, GENERATE ANSWER---")
         return "generate"
-    
-    # 2. INSUFFICIENT/PARTIAL grade and web search NOT done → Perform gap analysis
+
+    # 2. PARTIAL/INSUFFICIENT and web search NOT done → Gap analysis node
     if overall_grade in ["partial", "insufficient"] and not web_searched:
-        print(f"\n {overall_grade.upper()} GRADE: Performing gap analysis...")
-        
-        # Initialize gap analyzer
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-        gap_analyzer = get_gap_analysis_chain(llm)
-        
-        # Prepare document coverage summary
-        company_coverage = financial_grading.get("company_coverage", [])
-        coverage_summary = []
-        for cc in company_coverage:
-            coverage_summary.append(
-                f"Company: {cc.get('company')} | "
-                f"Confidence: {cc.get('confidence')} | "
-                f"Metrics Found: {', '.join(cc.get('metrics_found', [])[:3])} | "
-                f"Metrics Missing: {', '.join(cc.get('metrics_missing', [])[:3])}"
-            )
-        coverage_text = "\n".join(coverage_summary) if coverage_summary else "No detailed coverage data"
-        
-        try:
-            # Perform gap analysis
-            gap_result = gap_analyzer.invoke({
-                "question": question,
-                "analyst_grade": str(financial_grading),
-                "doc_coverage_summary": coverage_text
-            })
-            
-            print(f"\n GAP ANALYSIS RESULT:")
-            print(f"  Has Gaps: {gap_result.has_gaps}")
-            print(f"  Gap Type: {gap_result.gap_type}")
-            
-            if gap_result.has_gaps and gap_result.missing_items:
-                print(f"  Missing Items: {', '.join(gap_result.missing_items[:5])}")
-                print(f"  Targeted Queries Generated: {len(gap_result.targeted_queries)}")
-                for i, query in enumerate(gap_result.targeted_queries[:3], 1):
-                    print(f"    {i}. {query}")
-                print(f"  Reasoning: {gap_result.reasoning}")
-                
-                # Store targeted queries in state for web search node
-                state["targeted_gap_queries"] = gap_result.targeted_queries
-                state["gap_analysis"] = gap_result.dict()
-                
-                print(f"\n---DECISION: GAPS IDENTIFIED, WEB SEARCH FOR MISSING DATA---")
-                return "integrate_web_search"
-            
-            else:
-                print(f"  No significant gaps found")
-                print(f"  Reasoning: {gap_result.reasoning}")
-                print(f"\n---DECISION: NO MAJOR GAPS, GENERATE WITH AVAILABLE DATA---")
-                return "generate"
-        
-        except Exception as e:
-            print(f"  Gap analysis failed: {e}")
-            if missing_data_summary:
-                print(f"  Using missing data summary: {missing_data_summary[:200]}")
-                print(f"---DECISION: FALLBACK TO WEB SEARCH---")
-                return "integrate_web_search"
-            else:
-                print(f"---DECISION: FALLBACK TO GENERATE---")
-                return "generate"
-    
-    # 3. PARTIAL grade but web search already done → Generate with what we have
+        print(f"---DECISION: {overall_grade.upper()} GRADE, RUNNING GAP ANALYSIS---")
+        return "gap_analysis"
+
+    # 3. PARTIAL + web search done → Generate with available data
     if overall_grade == "partial" and web_searched:
         print("---DECISION: PARTIAL DATA + WEB SEARCH DONE, GENERATE WITH AVAILABLE---")
         return "generate"
-    
-    # 4. INSUFFICIENT grade and web search already done → Try financial web search as last resort
+
+    # 4. INSUFFICIENT + web search done → Financial web search as last resort
     if overall_grade == "insufficient" and web_searched:
         print("---DECISION: STILL INSUFFICIENT AFTER WEB SEARCH, FINANCIAL WEB SEARCH---")
         return "financial_web_search"
-    
+
     # 5. Default fallback
     print(f"---DECISION: DEFAULT FALLBACK (grade={overall_grade}, web_searched={web_searched})---")
     if doc_count >= 2:
         return "generate"
     elif not web_searched:
-        return "integrate_web_search"
-    else:
-        return "generate"
+        return "gap_analysis"
+    return "generate"
 
     
 def grade_generation_v_documents_and_question(state):
@@ -368,6 +300,31 @@ def route_after_generate(state):
         return "decide_chart"
     else:
         return "grade_generation"
+
+
+def decide_after_gap_analysis(state):
+    """
+    Routes after the gap_analysis node.
+
+    - If targeted queries were generated → integrate_web_search (fetch missing components)
+    - If no actionable gaps → generate (proceed with available data)
+    """
+    print("---DECIDE AFTER GAP ANALYSIS---")
+    targeted_gap_queries = state.get("targeted_gap_queries", [])
+    gap_analysis = state.get("gap_analysis", {})
+
+    if targeted_gap_queries:
+        print(f"---DECISION: {len(targeted_gap_queries)} TARGETED QUERIES, RUNNING WEB SEARCH---")
+        for i, q in enumerate(targeted_gap_queries[:3], 1):
+            print(f"  {i}. {q}")
+        return "integrate_web_search"
+    else:
+        has_gaps = gap_analysis.get("has_gaps", False)
+        reasoning = gap_analysis.get("reasoning", "")
+        print(f"---DECISION: NO TARGETED QUERIES (has_gaps={has_gaps}), GENERATE WITH AVAILABLE DATA---")
+        if reasoning:
+            print(f"  Reasoning: {reasoning[:200]}")
+        return "generate"
 
 
 def decide_chart_generation(state):

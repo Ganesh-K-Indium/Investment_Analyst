@@ -68,8 +68,10 @@ class GraphState(TypedDict):
     #vectordb_instance: Any  # REMOVED: Managed via VectorDBManager singleton
     company_filter: List[str]  # List of companies this DB instance is filtered for
     ticker: Optional[str]  # Ticker symbol for collection selection
+    # Gap analysis fields (populated by gap_analysis node, consumed by integrate_web_search)
+    targeted_gap_queries: List[str]  # Specific web search queries for missing data points
+    gap_analysis: Dict[str, Any]   # Full gap analysis result (has_gaps, gap_type, missing_items, reasoning)
     # ALPHA Framework fields
     alpha_mode: bool  # Whether this is an ALPHA Framework query (buy timing analysis)
     alpha_dimensions: Dict[str, Any]  # Retrieved data for each ALPHA dimension
     alpha_report: str  # Final ALPHA report combining all dimensions
-    

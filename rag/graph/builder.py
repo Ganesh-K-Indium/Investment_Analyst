@@ -12,12 +12,14 @@ from rag.graph.nodes import (web_search, retrieve,
                          evaluate_vectorstore_quality,
                          preprocess_and_analyze_query,
                          generate_comparison_chart,
-                         detect_alpha_query, alpha_dimension_retrieve, alpha_generate_report)
+                         detect_alpha_query, alpha_dimension_retrieve, alpha_generate_report,
+                         perform_gap_analysis)
 from rag.graph.edges import (route_question, decide_to_generate,
                          grade_generation_v_documents_and_question,
                          decide_after_web_integration, decide_chart_generation,
                          route_alpha_workflow,
-                         route_after_retrieve, route_after_generate)
+                         route_after_retrieve, route_after_generate,
+                         decide_after_gap_analysis)
 from rag.graph.benchmark import time_node, node_timer
 load_dotenv()
 os.environ["GROQ_API_KEY"]=os.getenv("GROQ_API_KEY")
@@ -66,6 +68,7 @@ class BuildingGraph:
         workflow.add_node("integrate_web_search", time_node("integrate_web_search")(integrate_web_search))
         workflow.add_node("evaluate_vectorstore_quality", time_node("evaluate_vectorstore_quality")(evaluate_vectorstore_quality))
         workflow.add_node("generate_chart", time_node("generate_chart")(generate_comparison_chart))
+        workflow.add_node("gap_analysis", time_node("gap_analysis")(perform_gap_analysis))
         
         # START -> detect_alpha (FIRST check for ALPHA queries)
         workflow.add_edge(START, "detect_alpha")
@@ -114,12 +117,22 @@ class BuildingGraph:
             decide_to_generate,
             {
                 "financial_web_search": "financial_web_search",
-                "generate": "generate",  # Changed: go directly to generate now
-                "integrate_web_search": "integrate_web_search",
+                "generate": "generate",
+                "gap_analysis": "gap_analysis",   # NEW: dedicated gap analysis node
             },
         )
 
-        # New edge for web integration
+        # Gap analysis node → decide whether to web search or generate
+        workflow.add_conditional_edges(
+            "gap_analysis",
+            decide_after_gap_analysis,
+            {
+                "integrate_web_search": "integrate_web_search",
+                "generate": "generate",
+            },
+        )
+
+        # After web integration, re-grade the enriched document set
         workflow.add_conditional_edges(
             "integrate_web_search",
             decide_after_web_integration,

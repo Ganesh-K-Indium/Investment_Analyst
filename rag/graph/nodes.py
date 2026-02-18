@@ -9,7 +9,8 @@ from langchain_tavily import TavilySearch
 from rag.vectordb.chains import (get_retrival_grader_chain, get_rag_chain,
                                                           get_company_name, get_question_rewriter_chain,
                                                           get_financial_analyst_grader_chain,
-                                                          get_financial_data_extractor_chain)
+                                                          get_financial_data_extractor_chain,
+                                                          get_gap_analysis_chain)
 from rag.vectordb.client import load_vector_database
 from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company
 load_dotenv()
@@ -1355,7 +1356,7 @@ def grade_documents(state):
         elif "partial" in all_grades:
             overall_grade = "partial"
         else:
-            overall_grade = "excellent"
+            overall_grade = "sufficient"
 
         # Aggregate company coverage with proper deduplication
         company_coverage_map = {}
@@ -1406,12 +1407,21 @@ def grade_documents(state):
             def dict(self):
                 return self._dict
 
+        # Build a specific missing_data_summary from actual missing metrics
+        missing_parts = []
+        for company, data in company_coverage_map.items():
+            if data["metrics_missing"]:
+                missing_parts.append(
+                    f"{company}: missing {', '.join(data['metrics_missing'][:3])}"
+                )
+        specific_missing_summary = "; ".join(missing_parts) if missing_parts else ""
+
         analyst_grade = AnalystGradeResult({
             "overall_grade": overall_grade,
             "can_answer_question": can_answer,
             "reasoning": f"Aggregated from {len(batch_grades)} batches (parallel grading)",
             "company_coverage": list(company_coverage_map.values()),
-            "missing_data_summary": "" if can_answer else "Some metrics still missing after aggregation"
+            "missing_data_summary": specific_missing_summary
         })
 
         # Set up doc_preview_text for the try block (even though we don't use it now)
@@ -1484,6 +1494,107 @@ def grade_documents(state):
             "documents": documents,
             "financial_grading": {"overall_grade": "partial", "can_answer": False, "error": str(e)},
             "tool_calls": state.get("tool_calls", []) + [{"tool": "financial_analyst_grader", "error": str(e)}]
+        }
+
+
+def perform_gap_analysis(state):
+    """
+    GAP ANALYSIS NODE: Identifies specific missing data points and generates targeted queries.
+
+    This runs AFTER grade_documents when the grade is partial/insufficient.
+    It returns targeted_gap_queries and gap_analysis into state so that
+    integrate_web_search can consume them properly.
+
+    Separating this from decide_to_generate (an edge) fixes the critical bug where
+    state mutations inside edge functions are silently discarded by LangGraph.
+    """
+    print("---PERFORM GAP ANALYSIS---")
+    messages = state["messages"]
+    question = messages[-1].content
+    financial_grading = state.get("financial_grading", {})
+
+    overall_grade = financial_grading.get("overall_grade", "partial")
+    missing_data_summary = financial_grading.get("missing_data_summary", "")
+
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    gap_analyzer = get_gap_analysis_chain(llm)
+
+    # Build per-company coverage summary with FULL metrics lists (not truncated)
+    # so the gap analysis LLM can see exactly what's present vs missing.
+    company_coverage = financial_grading.get("company_coverage", [])
+    all_found_metrics: list[str] = []
+    coverage_lines = []
+    for cc in company_coverage:
+        if isinstance(cc, dict):
+            company = cc.get("company", "Unknown")
+            confidence = cc.get("confidence", "unknown")
+            metrics_found = cc.get("metrics_found", [])
+            metrics_missing = cc.get("metrics_missing", [])
+            year_coverage = cc.get("year_coverage", [])
+        else:
+            company = getattr(cc, "company", "Unknown")
+            confidence = getattr(cc, "confidence", "unknown")
+            metrics_found = getattr(cc, "metrics_found", [])
+            metrics_missing = getattr(cc, "metrics_missing", [])
+            year_coverage = getattr(cc, "year_coverage", [])
+
+        all_found_metrics.extend(metrics_found)
+
+        # Show ALL found metrics (no truncation) so the LLM doesn't regenerate present data
+        found_str = "\n    - ".join(metrics_found) if metrics_found else "(none)"
+        missing_str = "\n    - ".join(metrics_missing) if metrics_missing else "(none)"
+        coverage_lines.append(
+            f"Company: {company} | Confidence: {confidence} | Years: {', '.join(year_coverage)}\n"
+            f"  ALREADY FOUND IN DOCUMENTS (DO NOT search for these):\n    - {found_str}\n"
+            f"  MISSING FROM DOCUMENTS (may need web search):\n    - {missing_str}"
+        )
+
+    if coverage_lines:
+        coverage_text = "\n\n".join(coverage_lines)
+    else:
+        coverage_text = "No company coverage data available"
+
+    # Include the specific missing_data_summary in the grade summary (cleaner than full dict)
+    grade_summary = (
+        f"Overall Grade: {overall_grade}\n"
+        f"Can Answer: {financial_grading.get('can_answer', False)}\n"
+        f"Missing Data Summary: {missing_data_summary if missing_data_summary else '(none specified)'}"
+    )
+
+    try:
+        gap_result = gap_analyzer.invoke({
+            "question": question,
+            "analyst_grade": grade_summary,
+            "doc_coverage_summary": coverage_text
+        })
+
+        print(f"\n GAP ANALYSIS RESULT:")
+        print(f"  Has Gaps: {gap_result.has_gaps}")
+        print(f"  Gap Type: {gap_result.gap_type}")
+        if gap_result.missing_items:
+            print(f"  Missing Items: {', '.join(gap_result.missing_items[:5])}")
+        if gap_result.targeted_queries:
+            print(f"  Targeted Queries ({len(gap_result.targeted_queries)}):")
+            for i, q in enumerate(gap_result.targeted_queries[:4], 1):
+                print(f"    {i}. {q}")
+        print(f"  Reasoning: {gap_result.reasoning}")
+
+        return {
+            "targeted_gap_queries": gap_result.targeted_queries if gap_result.has_gaps else [],
+            "gap_analysis": gap_result.dict(),
+        }
+
+    except Exception as e:
+        print(f"  Gap analysis failed: {e}")
+        # Fallback: build a simple targeted query from the missing_data_summary
+        fallback_queries = []
+        if missing_data_summary:
+            fallback_queries = [missing_data_summary[:200]]
+        return {
+            "targeted_gap_queries": fallback_queries,
+            "gap_analysis": {"has_gaps": bool(fallback_queries), "gap_type": "missing_metric",
+                             "missing_items": [], "targeted_queries": fallback_queries,
+                             "reasoning": f"Gap analysis failed: {e}"},
         }
 
 
@@ -2019,28 +2130,41 @@ def integrate_web_search(state):
             if missing_sub_queries:
                 for i, msq in enumerate(missing_sub_queries, 1):
                     print(f"     {i}. {msq}")
-                
+
                 # Convert missing sub-queries to search queries (include company name!)
                 search_queries_to_execute = []
                 for msq in missing_sub_queries:
                     if target_company:
-                        # Include company name in search for better targeting
-                        search_query = f"{target_company} {msq} financial data"
+                        search_query = f"{target_company} {msq} financial data annual report"
                         print(f"    Query: {search_query}")
                     else:
-                        search_query = f"{msq} financial data"
+                        search_query = f"{msq} financial data annual report"
                     search_queries_to_execute.append(search_query)
-                
+
                 mode = "sub_queries"
             else:
-                # No missing sub-queries
-                print("     No missing sub-queries, using general search")
-                search_queries_to_execute = [question]
+                # No missing sub-queries — build a targeted fallback query
+                print("     No missing sub-queries, building targeted fallback query")
+                if target_company:
+                    search_queries_to_execute = [
+                        f"{target_company} financial statements balance sheet income statement annual report 10-K"
+                    ]
+                else:
+                    search_queries_to_execute = [
+                        f"{question} annual report 10-K SEC filing"
+                    ]
                 mode = "general"
         else:
-            # No sub-query mode
-            print("   No sub-queries defined, using general search")
-            search_queries_to_execute = [question]
+            # No sub-query mode — build targeted fallback instead of raw question
+            print("   No sub-queries defined, building targeted fallback query")
+            if target_company:
+                search_queries_to_execute = [
+                    f"{target_company} financial statements balance sheet income statement annual report 10-K"
+                ]
+            else:
+                search_queries_to_execute = [
+                    f"{question} annual report 10-K SEC filing"
+                ]
             mode = "general"
     
     # Setup web search tool
