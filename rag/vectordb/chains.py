@@ -211,10 +211,28 @@ Present the comparison in a markdown table format.
 If any data needs to be calculated, use the formulas provided and insert the calculated values into the table.
 **VERY IMPORTANT:**
 ** We should only have numerical values under the company columns for easy chart generation.
-** Stricly keep all the numerical values other than earnings growth and operating margin in billions format convert if needed.
+** Stricly keep all the numerical values other than earnings growth and operating margin in millions format convert if needed.
 **If we have table we need to display only that table in the final answer no other text.**
 **Don't hallucinate any data for any company, only use what is provided in the documents specifically for that company mentioned.**
 **Provide proper details for all the [Brief summary] and [Key differences] don't leave them blank or just add these placeholders. Do proper comparison between all the companies.**
+
+**SEGMENT REPORTING QUERIES:**
+When the user asks about segments, reportable segments, business segments, or segment performance:
+1. **IDENTIFY all reportable segments** mentioned in the documents (e.g., "Cloud", "Advertising", "Devices")
+2. **EXTRACT segment-level financials**: revenue, operating income, assets, capex, depreciation for each segment
+3. **PRESENT in a clear table** with segments as rows and metrics as columns
+4. **INCLUDE segment trends**: growth drivers, margin changes, outlook from MD&A
+5. **REFERENCE ASC 280 disclosures** and CODM (Chief Operating Decision Maker) information if available
+6. **PROVIDE a brief narrative** summarizing how each segment contributes to overall company performance
+
+**GEOGRAPHIC / REGIONAL QUERIES:**
+When the user asks about geographic distribution, revenue by region/country, or international operations:
+1. **EXTRACT revenue breakdown** by geography/region/country from the documents
+2. **IDENTIFY domestic vs. international split** with specific dollar amounts and percentages
+3. **PRESENT in a table** with regions as rows and metrics (revenue, assets, growth) as columns
+4. **INCLUDE geographic risks**: currency exposure, regulatory risks, political risks if found
+5. **MENTION properties/facilities** by location if the query asks about physical presence
+6. **HIGHLIGHT customer or market concentration** by region if available
 
 **SINGLE COMPANY QUERIES:**
 - Provide complete financial details with ALL numerical values

@@ -366,6 +366,143 @@ def generate_comparison_subqueries(companies: list, year: str = "2024") -> dict:
     }
 
 
+def detect_segment_or_geographic_query(question: str) -> str:
+    """
+    Detect if a query is specifically about segment reporting or geographic information.
+
+    Returns:
+        "segment" if segment query, "geographic" if geographic query, "none" otherwise.
+    """
+    question_lower = question.lower()
+
+    segment_keywords = [
+        "segment", "segments", "reportable segment", "operating segment",
+        "business segment", "segment revenue", "segment income", "segment profit",
+        "revenue by segment", "income by segment", "segment assets",
+        "segment capital expenditure", "segment depreciation", "segment amortization",
+        "capex by segment", "segment performance", "segment results",
+        "segment margin", "segment outlook", "segment trend",
+        "product segment", "line of business", "disaggregation of revenue",
+        "segment ebitda", "segment operating income", "segment net sales",
+        "codm", "asc 280", "segment disclosure", "segment reporting"
+    ]
+
+    geographic_keywords = [
+        "geographic", "geography", "by region", "by country",
+        "revenue by geography", "revenue by region", "net sales by geography",
+        "geographic revenue", "geographic distribution", "region country",
+        "revenue concentration", "geographic information",
+        "foreign operations", "international operations",
+        "domestic vs international", "overseas operations", "global footprint",
+        "foreign subsidiaries", "properties by location", "facilities by geography",
+        "manufacturing locations", "data centers", "distribution centers",
+        "assets by country", "geographic risk", "country risk", "regional risk",
+        "currency risk", "foreign exchange exposure", "export controls",
+        "sanctions", "customers by region", "customer concentration geography",
+        "market concentration regional", "geographic market share",
+        "long lived assets by geography", "revenue by country"
+    ]
+
+    # Check geographic first (more specific) then segment
+    if any(kw in question_lower for kw in geographic_keywords):
+        return "geographic"
+    if any(kw in question_lower for kw in segment_keywords):
+        return "segment"
+    return "none"
+
+
+def generate_segment_subqueries(companies: list) -> dict:
+    """
+    Generate predefined sub-queries for segment reporting queries WITHOUT LLM.
+    Optimized for 10-K segment disclosures (ASC 280).
+    """
+    sub_queries = []
+
+    for company in companies:
+        # 1. Segment overview & structure
+        sub_queries.append(
+            f"{company} reportable segments operating segments business segments segment overview segment structure segment description chief operating decision maker CODM"
+        )
+        # 2. Segment financial performance
+        sub_queries.append(
+            f"{company} segment revenue segment net sales segment results segment operating income segment profit segment EBITDA revenue by segment income by segment"
+        )
+        # 3. Segment reporting notes (ASC 280)
+        sub_queries.append(
+            f"{company} note segment reporting reportable segments note ASC 280 segment disclosure segment accounting policy segment measurement basis"
+        )
+        # 4. Product / business line disaggregation
+        sub_queries.append(
+            f"{company} geographic segments product segments line of business disaggregation of revenue segment categories product line revenue"
+        )
+        # 5. Segment assets & capital allocation
+        sub_queries.append(
+            f"{company} segment assets segment capital expenditure segment depreciation segment amortization assets by segment capex by segment long lived assets by segment"
+        )
+        # 6. Segment MD&A discussion
+        sub_queries.append(
+            f"{company} segment performance discussion MD&A segment results drivers of segment growth segment margins segment trends segment outlook"
+        )
+
+    print(f"[SEGMENT QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
+    print(f"[SEGMENT QUERIES] Skipped LLM query generation - using 10-K segment templates")
+
+    return {
+        "needs_sub_queries": True,
+        "query_type": "segment",
+        "companies_detected": companies,
+        "sub_queries": sub_queries,
+        "reasoning": f"Pre-optimized segment reporting queries for {', '.join(companies)} (no LLM needed)",
+        "generation_method": "template"
+    }
+
+
+def generate_geographic_subqueries(companies: list) -> dict:
+    """
+    Generate predefined sub-queries for geographic/regional queries WITHOUT LLM.
+    Optimized for 10-K geographic disclosures.
+    """
+    sub_queries = []
+
+    for company in companies:
+        # 1. Revenue by geography
+        sub_queries.append(
+            f"{company} revenue by geography revenue by region net sales by geography geographic revenue distribution disaggregated revenue region country revenue concentration"
+        )
+        # 2. Geographic notes & ASC 280
+        sub_queries.append(
+            f"{company} geographic information note segment reporting geography ASC 280 geographic disclosure foreign domestic revenue by country long lived assets by geography"
+        )
+        # 3. Foreign / international operations
+        sub_queries.append(
+            f"{company} foreign operations international operations domestic vs international revenue foreign subsidiaries overseas operations global footprint"
+        )
+        # 4. Properties & facilities by location
+        sub_queries.append(
+            f"{company} properties by location facilities by geography manufacturing locations data centers offices distribution centers assets by country"
+        )
+        # 5. Geographic risk factors
+        sub_queries.append(
+            f"{company} geographic risk country risk regional risk political risk currency risk foreign exchange exposure international regulatory risk sanctions export controls"
+        )
+        # 6. Customer / market concentration by region
+        sub_queries.append(
+            f"{company} major customers by region customer concentration geography market concentration regional demand geographic market share"
+        )
+
+    print(f"[GEOGRAPHIC QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
+    print(f"[GEOGRAPHIC QUERIES] Skipped LLM query generation - using 10-K geographic templates")
+
+    return {
+        "needs_sub_queries": True,
+        "query_type": "geographic",
+        "companies_detected": companies,
+        "sub_queries": sub_queries,
+        "reasoning": f"Pre-optimized geographic queries for {', '.join(companies)} (no LLM needed)",
+        "generation_method": "template"
+    }
+
+
 def preprocess_and_analyze_query(state):
     """
     PREPROCESSING NODE: Analyze query and generate sub-queries if needed.
@@ -378,8 +515,8 @@ def preprocess_and_analyze_query(state):
     COMPARISON MODE OPTIMIZATION:
     - For comparison queries, uses pre-optimized templates instead of LLM (faster, cheaper, better)
 
-    SMART CONTEXT REUSE (NEW):
-    - If documents exist from previous turn AND query appears to be a follow-up, skip analysis
+    SEGMENT / GEOGRAPHIC MODE OPTIMIZATION:
+    - For segment or geographic queries, uses pre-optimized templates instead of LLM
     """
     print("---QUERY ANALYSIS---")
     messages = state["messages"]
@@ -416,9 +553,42 @@ def preprocess_and_analyze_query(state):
         }
 
     # -------------------------------------------------------------
+    # SEGMENT / GEOGRAPHIC MODE: Use fixed templates
+    # -------------------------------------------------------------
+    seg_geo_type = detect_segment_or_geographic_query(question)
+
+    if seg_geo_type != "none":
+        # Determine companies from state (company_filter / ticker)
+        companies = []
+        company_filter = state.get("company_filter", [])
+        primary_ticker = state.get("ticker")
+
+        if company_filter:
+            companies = [c for c in company_filter if c and c.strip()]
+        elif primary_ticker and primary_ticker.lower() != "string":
+            companies = [primary_ticker]
+
+        if companies:
+            if seg_geo_type == "segment":
+                print(f"📊 SEGMENT QUERY DETECTED - Using pre-optimized segment templates for {companies}")
+                sub_query_analysis = generate_segment_subqueries(companies)
+            else:
+                print(f"🌍 GEOGRAPHIC QUERY DETECTED - Using pre-optimized geographic templates for {companies}")
+                sub_query_analysis = generate_geographic_subqueries(companies)
+
+            return {
+                "companies_detected": companies,
+                "context_strategy": "documents",
+                "sub_query_analysis": sub_query_analysis,
+                "sub_query_results": {}
+            }
+        else:
+            print(f"  {seg_geo_type.upper()} query detected but no companies identified, falling through to LLM analysis")
+
+    # -------------------------------------------------------------
     # NORMAL MODE: Continue with existing logic
     # -------------------------------------------------------------
-    
+
     # UNIVERSAL APPROACH: Single LLM call for sub-query analysis
     print("---UNIVERSAL SUB-QUERY ANALYSIS---")
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
