@@ -11,7 +11,77 @@ import json
 
 class ChatService:
     """Business logic for chat history operations"""
-    
+    @staticmethod
+    def generate_chat_summary(
+        db: Session,
+        session_id: str,
+        max_messages: Optional[int] = 50,
+        llm_model: str = "gpt-4o-mini"
+    ) -> Optional[str]:
+        """
+        Generate LLM summary of chat session history.
+        
+        Args:
+            db: Database session
+            session_id: Session identifier
+            max_messages: Maximum recent messages to summarize (default: 50)
+            llm_model: LLM model to use for summarization
+            
+        Returns:
+            Summary text or None if session not found
+        """
+        from langchain_openai import ChatOpenAI
+        from langchain_core.prompts  import ChatPromptTemplate
+        # from langchain.prompts import ChatPromptTemplate
+        from langchain_core.output_parsers import StrOutputParser
+        
+        # Get chat session and recent messages
+        chat_session = db.query(ChatSession).filter(
+            ChatSession.session_id == session_id
+        ).first()
+        
+        if not chat_session:
+            return None
+        
+        messages = ChatService.get_session_messages(
+            db=db,
+            session_id=session_id,
+            limit=max_messages
+        )
+        
+        if not messages:
+            return "No messages in this chat session."
+        
+        # Format conversation for LLM
+        conversation = []
+        for msg in reversed(messages):  # Most recent first for better context
+            role = "Human" if msg.role == "user" else "Assistant"
+            content_preview = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+            conversation.append(f"{role}: {content_preview}")
+        
+        conversation_text = "\n\n".join(conversation[-20:])  # Last 20 exchanges max
+        
+        # LLM summarization chain
+        llm = ChatOpenAI(model=llm_model, temperature=0.1)
+        prompt = ChatPromptTemplate.from_template("""
+        Summarize the key topics, questions asked, and main insights from this investment analysis conversation.
+        Focus on portfolio analysis, stock insights, document findings, and actionable takeaways.
+        
+        Keep summary concise (2-4 sentences) but comprehensive. Use bullet points for clarity.
+        
+        Conversation:
+        {conversation}
+        
+        Summary:""")
+        
+        chain = prompt | llm | StrOutputParser()
+        
+        try:
+            summary = chain.invoke({"conversation": conversation_text})
+            return summary.strip()
+        except Exception as e:
+            return f"Summary generation failed: {str(e)}"
+
     # ==================== Chat Session Management ====================
     
     @staticmethod

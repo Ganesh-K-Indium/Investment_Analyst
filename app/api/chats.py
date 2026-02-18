@@ -56,6 +56,44 @@ class ChatStatsResponse(BaseModel):
     quant_sessions: int
     total_messages: int
 
+# Add new Pydantic model
+class ChatSummaryRequest(BaseModel):
+    max_messages: Optional[int] = Field(50, ge=10, le=100, description="Max messages to summarize")
+    llm_model: Optional[str] = Field("gpt-4o-mini", description="LLM model for summarization")
+
+# Add this new endpoint (place after existing endpoints)
+@router.post("/session/{session_id}/summary", response_model=str)
+def generate_session_summary(
+    session_id: str,
+    request: ChatSummaryRequest,
+    db: Session = Depends(get_db_session)
+):
+    """
+    Generate LLM-powered summary of chat session.
+    
+    Request Body:
+    - max_messages: Number of recent messages to include (10-100)
+    - llm_model: LLM model to use (default: gpt-4o-mini)
+    """
+    try:
+        summary = ChatService.generate_chat_summary(
+            db=db,
+            session_id=session_id,
+            max_messages=request.max_messages,
+            llm_model=request.llm_model
+        )
+        
+        if not summary:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+            
+        return summary
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
+
+
 
 @router.get("/user/{user_id}/sessions", response_model=List[ChatSessionResponse])
 def get_user_chat_sessions(
