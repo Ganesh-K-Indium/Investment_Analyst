@@ -117,31 +117,35 @@ class BaseConnector(ABC):
     def get_connector(vendor: str, credentials: Dict[str, str], url: Optional[str] = None):
         """
         Factory method to get the appropriate connector based on vendor
-        
+
         Args:
-            vendor: Vendor type (sharepoint, google_drive, azure_blob, aws_s3, sftp)
+            vendor: Vendor type (sharepoint, google_drive, onedrive, confluence, azure_blob, aws_s3, sftp)
             credentials: Authentication credentials
             url: Optional connection URL
-        
+
         Returns:
             BaseConnector: Appropriate connector instance
         """
         from .sharepoint import SharePointConnector
         from .google_drive import GoogleDriveConnector
+        from .onedrive import OneDriveConnector
+        from .confluence import ConfluenceConnector
         from .azure_blob import AzureBlobConnector
         from .aws_s3 import AWSS3Connector
         from .sftp import SFTPConnector
-        
+
         connectors = {
             "sharepoint": SharePointConnector,
             "google_drive": GoogleDriveConnector,
+            "onedrive": OneDriveConnector,
+            "confluence": ConfluenceConnector,
             "azure_blob": AzureBlobConnector,
             "aws_s3": AWSS3Connector,
             "sftp": SFTPConnector
         }
-        
+
         connector_class = connectors.get(vendor)
         if not connector_class:
             raise ValueError(f"Unknown vendor: {vendor}")
-        
+
         return connector_class(credentials, url)

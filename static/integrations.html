@@ -191,6 +191,8 @@
 
         .vendor-sharepoint { background: #0078d4; }
         .vendor-google_drive { background: #4285f4; }
+        .vendor-onedrive { background: #0078d4; }
+        .vendor-confluence { background: #172b4d; }
         .vendor-azure_blob { background: #0089d6; }
         .vendor-aws_s3 { background: #ff9900; }
         .vendor-sftp { background: #6c757d; }
@@ -427,6 +429,8 @@
                         <option value="">Select vendor...</option>
                         <option value="sharepoint">SharePoint</option>
                         <option value="google_drive">Google Drive</option>
+                        <option value="onedrive">OneDrive</option>
+                        <option value="confluence">Confluence</option>
                         <option value="azure_blob">Azure Blob Storage</option>
                         <option value="aws_s3">AWS S3</option>
                         <option value="sftp">SFTP Server</option>
@@ -591,6 +595,17 @@
                       placeholder: 'Paste your Google Service Account JSON here\n{"type":"service_account",...}' },
                     { name: 'folder_path', label: 'Starting Folder ID (optional)', type: 'text',
                       placeholder: 'Leave blank to start at Drive root' }
+                ],
+                onedrive: [
+                    { name: 'tenant_id',     label: 'Tenant ID',     type: 'text',     required: true },
+                    { name: 'client_id',     label: 'Client ID',     type: 'text',     required: true },
+                    { name: 'client_secret', label: 'Client Secret', type: 'password', required: true },
+                    { name: 'folder_path',   label: 'Starting Folder Path (optional)', type: 'text', placeholder: 'e.g., Documents (leave blank for drive root)' }
+                ],
+                confluence: [
+                    { name: 'username',    label: 'Email Address',   type: 'text',     required: true, placeholder: 'user@company.com' },
+                    { name: 'api_token',   label: 'API Token',       type: 'password', required: true, placeholder: 'Generate from Atlassian Account' },
+                    { name: 'folder_path', label: 'Starting Space Key (optional)', type: 'text',     placeholder: 'e.g., PROJ (leave blank to list all spaces)' }
                 ],
                 azure_blob: [
                     { name: 'account_name', label: 'Account Name', type: 'text',     required: true },

@@ -20,6 +20,8 @@ All endpoints are prefixed with `/integrations`.
 |---|---|
 | `sharepoint` | SharePoint Online |
 | `google_drive` | Google Drive |
+| `onedrive` | Microsoft OneDrive |
+| `confluence` | Atlassian Confluence |
 | `azure_blob` | Azure Blob Storage |
 | `aws_s3` | AWS S3 |
 | `sftp` | SFTP Server |
@@ -108,6 +110,34 @@ Content-Type: application/json
 - `service_account_json` — full JSON string of the Google Service Account key file.
 - `folder_path` — a **Google Drive folder ID** to start from (e.g. `"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"`). Leave blank or omit to start at Drive root.
 - Alternatively, provide OAuth2 credentials: `client_id`, `client_secret`, `refresh_token`.
+
+##### OneDrive
+```json
+{
+  "tenant_id": "your-tenant-id",
+  "client_id": "your-client-id",
+  "client_secret": "your-client-secret",
+  "folder_path": "Documents"
+}
+```
+- `tenant_id` — Azure AD tenant ID.
+- `client_id` — Azure AD application (client) ID.
+- `client_secret` — Azure AD application client secret.
+- `folder_path` — optional path to start browsing from (e.g. `"Documents"`, `"Documents/Reports"`). Leave blank for drive root.
+- No `url` field needed (always uses user's OneDrive).
+
+##### Confluence
+```json
+{
+  "username": "user@company.com",
+  "api_token": "your-api-token",
+  "folder_path": ""
+}
+```
+- `username` — Atlassian Cloud email address.
+- `api_token` — Personal API token (generate in Atlassian Account Settings).
+- `folder_path` — optional space key to start from (e.g., `"PROJ"` for a space with key PROJ). Leave blank to list all spaces.
+- `url` (top-level field, not in credentials) — the Confluence Cloud URL e.g. `https://company.atlassian.net/wiki`.
 
 ##### Azure Blob Storage
 ```json
@@ -209,6 +239,8 @@ Content-Type: application/json
 |---|---|---|
 | **SharePoint** | `null` or `""` | Human-readable path string: `"Documents"`, `"Documents/Reports"` |
 | **Google Drive** | `null` or `""` | Google Drive **folder ID** (opaque string): `"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"` |
+| **OneDrive** | `null` or `""` | Folder path string: `"Documents"`, `"Documents/Reports"` |
+| **Confluence** | `null` or `""` | Space key: `"PROJ"`, or page path: `"PROJ/123456"` (space_key/page_id) |
 | **Azure Blob** | `null` | Blob prefix with trailing slash: `"reports/"`, `"reports/2024/"` |
 | **AWS S3** | `null` | S3 key prefix with trailing slash: `"reports/"`, `"archive/2024/"` |
 | **SFTP** | `null` | Unix path: `"/home/user/reports"` |
@@ -383,6 +415,37 @@ To authenticate via a Service Account:
 3. Share the target Drive folder (or entire Drive) with the service account email.
 4. Paste the full JSON content into the "Service Account JSON" field when creating the integration.
 5. Optionally, copy the **folder ID** from the Drive URL (`https://drive.google.com/drive/folders/<folder_id>`) and enter it as the "Starting Folder ID".
+
+---
+
+## OneDrive — OAuth2 Application setup
+
+To authenticate with Microsoft OneDrive:
+
+1. Sign in to [Azure Portal](https://portal.azure.com).
+2. Navigate to **Azure Active Directory > App registrations > New registration**.
+3. Register an application (e.g., "Investment Analyst OneDrive Integration").
+4. Once created, copy the **Application (client) ID** and **Directory (tenant) ID**.
+5. Under **Certificates & secrets**, create a new Client Secret and copy its value.
+6. Under **API permissions**, add **Microsoft Graph > Files.Read** (or **Files.Read.All** for broader access).
+7. Use the `tenant_id`, `client_id`, and `client_secret` when creating the OneDrive integration.
+8. Optionally, specify a starting folder path (e.g., `"Documents"`) in the credentials.
+
+---
+
+## Confluence — API Token setup
+
+To authenticate with Confluence Cloud:
+
+1. Sign in to your [Atlassian Account](https://id.atlassian.com/manage/api-tokens).
+2. Click **Create API token** and give it a name (e.g., "Investment Analyst").
+3. Copy the generated API token (you'll only see it once).
+4. Your username is your Atlassian Cloud email address.
+5. Your Confluence URL is typically `https://company.atlassian.net/wiki` (visible in your browser when logged into Confluence).
+6. Use the `username`, `api_token`, and URL when creating the Confluence integration.
+7. Optionally, specify a starting space key (e.g., `"PROJ"`) in the credentials to start browsing from that space instead of listing all spaces.
+
+**Note**: The connector exports Confluence pages as PDFs. Pages with child pages are shown as "folders" for navigation; leaf pages are downloadable as PDFs for ingestion.
 
 ---
 
