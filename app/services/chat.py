@@ -6,36 +6,125 @@ from sqlalchemy.orm import Session
 from app.database.models import ChatSession, ChatMessage, Portfolio, AgentType, MessageRole
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 import json
 
 
 class ChatService:
     """Business logic for chat history operations"""
     @staticmethod
+    def get_session_summary(
+        db: Session,
+        session_id: str
+    ) -> Optional[str]:
+        """Get cached summary from database"""
+        chat_session = db.query(ChatSession).filter(
+            ChatSession.session_id == session_id
+        ).first()
+        return chat_session.summary if chat_session else None
+
+    # @staticmethod
+    # def generate_chat_summary(
+    #     db: Session,
+    #     session_id: str,
+    #     max_messages: Optional[int] = 50,
+    #     llm_model: str = "gpt-4o-mini",
+    #     store_in_db: bool = True
+    # ) -> Optional[str]:
+    #     """
+    #     Generate LLM summary of chat session history.
+        
+    #     Args:
+    #         db: Database session
+    #         session_id: Session identifier
+    #         max_messages: Maximum recent messages to summarize (default: 50)
+    #         llm_model: LLM model to use for summarization
+            
+    #     Returns:
+    #         Summary text or None if session not found
+    #     """
+    #     from langchain_openai import ChatOpenAI
+    #     from langchain_core.prompts  import ChatPromptTemplate
+    #     # from langchain.prompts import ChatPromptTemplate
+    #     from langchain_core.output_parsers import StrOutputParser
+        
+    #     # Get chat session and recent messages
+    #     chat_session = db.query(ChatSession).filter(
+    #         ChatSession.session_id == session_id
+    #     ).first()
+        
+    #     if not chat_session:
+    #         return None
+        
+    #     messages = ChatService.get_session_messages(
+    #         db=db,
+    #         session_id=session_id,
+    #         limit=max_messages
+    #     )
+        
+    #     if not messages:
+    #         return "No messages in this chat session."
+        
+    #     # Format conversation for LLM
+    #     conversation = []
+    #     for msg in reversed(messages):  # Most recent first for better context
+    #         role = "Human" if msg.role == "user" else "Assistant"
+    #         content_preview = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+    #         conversation.append(f"{role}: {content_preview}")
+        
+    #     conversation_text = "\n\n".join(conversation[-20:])  # Last 20 exchanges max
+        
+    #     # LLM summarization chain
+    #     llm = ChatOpenAI(model=llm_model, temperature=0.1)
+    #     prompt = ChatPromptTemplate.from_template("""
+    #     Summarize the key topics, questions asked, and main insights from this investment analysis conversation.
+    #     Focus on portfolio analysis, stock insights, document findings, and actionable takeaways.
+    #     Also ensure that you keep a seperate section of all the chart urls that maybe found.
+                                            
+        
+    #     Keep summary concise (2-4 sentences) but comprehensive. Use bullet points for clarity.
+        
+    #     Conversation:
+    #     {conversation}
+        
+    #     Summary:""")
+        
+    #     chain = prompt | llm | StrOutputParser()
+        
+    #     try:
+    #         summary = chain.invoke({"conversation": conversation_text})
+    #         return summary.strip()
+    #         # Store in database if requested
+    #         if store_in_db:
+    #             chat_session = db.query(ChatSession).filter(
+    #                 ChatSession.session_id == session_id
+    #             ).first()
+                
+    #             if chat_session:
+    #                 chat_session.summary = summary
+    #                 chat_session.summary_updated_at = datetime.utcnow()
+    #                 db.commit()
+    #                 db.refresh(chat_session)
+    #         return summary
+    #     except Exception as e:
+    #         return f"Summary generation failed: {str(e)}"
+
+    
+
+    # ... inside your class ...
+
+    @staticmethod
     def generate_chat_summary(
         db: Session,
         session_id: str,
         max_messages: Optional[int] = 50,
-        llm_model: str = "gpt-4o-mini"
+        llm_model: str = "gpt-4o-mini",
+        store_in_db: bool = True
     ) -> Optional[str]:
-        """
-        Generate LLM summary of chat session history.
         
-        Args:
-            db: Database session
-            session_id: Session identifier
-            max_messages: Maximum recent messages to summarize (default: 50)
-            llm_model: LLM model to use for summarization
-            
-        Returns:
-            Summary text or None if session not found
-        """
-        from langchain_openai import ChatOpenAI
-        from langchain_core.prompts  import ChatPromptTemplate
-        # from langchain.prompts import ChatPromptTemplate
-        from langchain_core.output_parsers import StrOutputParser
-        
-        # Get chat session and recent messages
+        # 1. Get chat session
         chat_session = db.query(ChatSession).filter(
             ChatSession.session_id == session_id
         ).first()
@@ -52,22 +141,20 @@ class ChatService:
         if not messages:
             return "No messages in this chat session."
         
-        # Format conversation for LLM
+        # 2. Format conversation (reversed to chronological for the LLM)
         conversation = []
-        for msg in reversed(messages):  # Most recent first for better context
+        for msg in reversed(messages): 
             role = "Human" if msg.role == "user" else "Assistant"
-            content_preview = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
-            conversation.append(f"{role}: {content_preview}")
+            conversation.append(f"{role}: {msg.content}") # Let the LLM see the full context
         
-        conversation_text = "\n\n".join(conversation[-20:])  # Last 20 exchanges max
+        conversation_text = "\n\n".join(conversation[-20:]) 
         
-        # LLM summarization chain
+        # 3. LLM Setup
         llm = ChatOpenAI(model=llm_model, temperature=0.1)
         prompt = ChatPromptTemplate.from_template("""
         Summarize the key topics, questions asked, and main insights from this investment analysis conversation.
-        Focus on portfolio analysis, stock insights, document findings, and actionable takeaways.
-        Also ensure that you keep a seperate section of all the chart urls that maybe found.
-                                            
+        Focus on portfolio analysis, stock insights, and actionable takeaways.
+        IMPORTANT: List all chart URLs found in the conversation in a separate section.
         
         Keep summary concise (2-4 sentences) but comprehensive. Use bullet points for clarity.
         
@@ -79,9 +166,19 @@ class ChatService:
         chain = prompt | llm | StrOutputParser()
         
         try:
-            summary = chain.invoke({"conversation": conversation_text})
-            return summary.strip()
+            summary = chain.invoke({"conversation": conversation_text}).strip()
+            
+            # 4. Storage Logic (Must happen BEFORE return)
+            if store_in_db:
+                chat_session.summary = summary
+                chat_session.summary_updated_at = datetime.utcnow()
+                db.commit()
+                db.refresh(chat_session)
+                
+            return summary
+            
         except Exception as e:
+            # Consider logging the error here instead of just returning a string
             return f"Summary generation failed: {str(e)}"
 
     # ==================== Chat Session Management ====================
