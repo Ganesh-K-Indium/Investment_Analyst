@@ -211,7 +211,8 @@ Present the comparison in a markdown table format.
 If any data needs to be calculated, use the formulas provided and insert the calculated values into the table.
 **VERY IMPORTANT:**
 ** We should only have numerical values under the company columns for easy chart generation.
-** Stricly keep all the numerical values other than earnings growth and operating margin in millions format convert if needed.
+** Stricly keep all the numerical values other than earnings growth and operating margin in billions format convert if needed only when we are comparing companies.
+** Stricly keep all the numerical values of all other queries except for comparison queries in millions format convert if needed.
 **If we have table we need to display only that table in the final answer no other text.**
 **Don't hallucinate any data for any company, only use what is provided in the documents specifically for that company mentioned.**
 **Provide proper details for all the [Brief summary] and [Key differences] don't leave them blank or just add these placeholders. Do proper comparison between all the companies.**

@@ -15,6 +15,11 @@ import pytesseract
 
 load_dotenv()
 
+# Use the explicit binary path if set (required for Docker/ECS environments)
+_tesseract_cmd = os.environ.get("TESSERACT_CMD")
+if _tesseract_cmd:
+    pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
+
 class ImageDescription:
     "This method is used to get the description of the image."
     def __init__(self,pdf_path):

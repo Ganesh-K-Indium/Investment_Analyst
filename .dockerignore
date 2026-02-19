@@ -1,7 +1,59 @@
+# =============================================================================
+# .dockerignore - Investment Analyst API
+# =============================================================================
+
+# Virtual environment (install inside image via requirements.txt instead)
 venv/
+
+# Version control
 .git/
+.gitignore
+
+# Python bytecode & cache
 __pycache__/
+**/__pycache__/
 *.pyc
+*.pyo
+*.pyd
 .pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Environment / secrets (pass as docker env vars or secrets)
 .env
+.env.*
+
+# SQLite databases & LangGraph checkpoints (runtime data, not source)
 *.db
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Runtime-generated output directories
+logs/
+output/
+generated_charts/
+
+# IDE / OS artifacts
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test files
+tests/
+test_*.py
+
+# Documentation
+docs/
+*.md
+
+# Temporary / generated images at project root
+graph_output.png
+image.png
+
+# Scripts (only needed locally, not inside the container)
+scripts/
+START_SERVER.sh
