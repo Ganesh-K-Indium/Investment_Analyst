@@ -103,6 +103,11 @@
             overflow-y: auto;
         }
 
+        /* Wider modal for file browsing */
+        .modal-content-wide {
+            max-width: 800px;
+        }
+
         .modal-header {
             display: flex;
             justify-content: space-between;
@@ -214,8 +219,49 @@
             font-size: 12px;
         }
 
+        /* ===== Breadcrumb ===== */
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 2px;
+            padding: 10px 12px;
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            min-height: 38px;
+        }
+
+        .breadcrumb-item {
+            color: #667eea;
+            cursor: pointer;
+            text-decoration: none;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+
+        .breadcrumb-item:hover {
+            background: #e8f0fe;
+            text-decoration: underline;
+        }
+
+        .breadcrumb-sep {
+            color: #aaa;
+            padding: 0 2px;
+            user-select: none;
+        }
+
+        .breadcrumb-current {
+            color: #333;
+            font-weight: 600;
+            padding: 2px 4px;
+        }
+
+        /* ===== File list ===== */
         .files-grid {
-            margin-top: 20px;
+            margin-top: 4px;
         }
 
         .file-item {
@@ -224,39 +270,72 @@
             padding: 12px;
             border: 1px solid #e0e0e0;
             border-radius: 6px;
-            margin-bottom: 10px;
-            cursor: pointer;
-            transition: background 0.2s;
+            margin-bottom: 8px;
+            transition: background 0.15s, border-color 0.15s;
         }
 
-        .file-item:hover {
+        /* Folders are navigable, not selectable */
+        .file-item.folder-item {
+            cursor: pointer;
+            background: #fafafa;
+        }
+
+        .file-item.folder-item:hover {
+            background: #e8f0fe;
+            border-color: #667eea;
+        }
+
+        /* Regular files are selectable */
+        .file-item.file-selectable {
+            cursor: pointer;
+        }
+
+        .file-item.file-selectable:hover {
             background: #f8f9fa;
         }
 
         .file-item input[type="checkbox"] {
             margin-right: 12px;
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+            flex-shrink: 0;
         }
 
         .file-icon {
             margin-right: 12px;
-            font-size: 24px;
+            font-size: 22px;
+            flex-shrink: 0;
         }
 
         .file-info {
             flex: 1;
+            min-width: 0;
         }
 
         .file-name {
             font-weight: 600;
             color: #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .file-meta {
             font-size: 12px;
             color: #6c757d;
-            margin-top: 4px;
+            margin-top: 3px;
         }
 
+        .folder-arrow {
+            color: #aaa;
+            font-size: 20px;
+            font-weight: bold;
+            padding-left: 8px;
+            flex-shrink: 0;
+        }
+
+        /* ===== Alerts ===== */
         .alert {
             padding: 12px 20px;
             border-radius: 6px;
@@ -277,16 +356,38 @@
 
         .search-box {
             width: 100%;
-            padding: 12px;
+            padding: 10px 12px;
             border: 2px solid #e0e0e0;
             border-radius: 6px;
             font-size: 14px;
-            margin-bottom: 20px;
+            margin-bottom: 12px;
         }
 
         .search-box:focus {
             outline: none;
             border-color: #667eea;
+        }
+
+        /* Loading state */
+        .loading-msg {
+            text-align: center;
+            color: #6c757d;
+            padding: 24px;
+        }
+
+        /* Empty state */
+        .empty-msg {
+            text-align: center;
+            color: #6c757d;
+            padding: 24px;
+        }
+
+        /* Selected file count badge */
+        #selectedCount {
+            font-size: 13px;
+            color: #667eea;
+            font-weight: 600;
+            margin-right: 12px;
         }
     </style>
 </head>
@@ -306,13 +407,13 @@
                 </div>
 
                 <div id="integrations-container" class="integrations-grid">
-                    <!-- Integrations will be loaded here -->
+                    <!-- Integrations loaded here -->
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Create Integration Modal -->
+    <!-- ===== Create Integration Modal ===== -->
     <div id="createIntegrationModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
@@ -359,63 +460,78 @@
         </div>
     </div>
 
-    <!-- Browse Files Modal -->
+    <!-- ===== Browse Files Modal ===== -->
     <div id="browseFilesModal" class="modal">
-        <div class="modal-content">
+        <div class="modal-content modal-content-wide">
             <div class="modal-header">
-                <h3>Import Files</h3>
+                <h3 id="browseModalTitle">Browse Files</h3>
                 <span class="close" onclick="closeModal('browseFilesModal')">&times;</span>
             </div>
 
-            <!-- Portfolio & Ticker Info -->
-            <div id="portfolioInfo" style="background: #e7f3ff; padding: 12px; border-radius: 6px; margin-bottom: 20px; display: none;">
-                <div style="font-weight: 600; color: #0066cc; margin-bottom: 8px;">📊 Portfolio Information</div>
+            <!-- Portfolio & Ticker Info (shown only when portfolio data is available) -->
+            <div id="portfolioInfo" style="background: #e7f3ff; padding: 12px; border-radius: 6px; margin-bottom: 16px; display: none;">
+                <div style="font-weight: 600; color: #0066cc; margin-bottom: 8px;">📊 Portfolio</div>
                 <div id="portfolioDetails" style="font-size: 14px; color: #333;"></div>
             </div>
 
             <!-- Ticker Selection -->
-            <div id="tickerSelection" style="margin-bottom: 20px; display: none;">
-                <label style="display: block; margin-bottom: 8px; color: #555; font-weight: 600;">
-                    Select Ticker for Import *
+            <div id="tickerSelection" style="margin-bottom: 16px; display: none;">
+                <label style="display: block; margin-bottom: 6px; color: #555; font-weight: 600;">
+                    Import into ticker collection *
                 </label>
                 <select id="tickerSelect" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
                     <option value="">-- Choose a ticker --</option>
                 </select>
             </div>
 
-            <input type="text" class="search-box" id="fileSearch" placeholder="🔍 Search files..." onkeyup="searchFiles()">
-
-            <div id="filesContainer" class="files-grid">
-                <!-- Files will be loaded here -->
+            <!-- Breadcrumb navigation -->
+            <div id="breadcrumb" class="breadcrumb">
+                <span class="breadcrumb-current">Root</span>
             </div>
 
-            <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+            <!-- Search box -->
+            <input type="text" class="search-box" id="fileSearch" placeholder="🔍 Search files and folders..." oninput="searchFiles()">
+
+            <!-- File list -->
+            <div id="filesContainer" class="files-grid">
+                <div class="loading-msg">Loading...</div>
+            </div>
+
+            <!-- Footer actions -->
+            <div style="margin-top: 20px; display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
+                <span id="selectedCount"></span>
                 <button class="btn btn-secondary" onclick="closeModal('browseFilesModal')">Cancel</button>
-                <button class="btn" onclick="importSelectedFiles()">Import Selection</button>
+                <button class="btn" onclick="importSelectedFiles()">Import Selected Files</button>
             </div>
         </div>
     </div>
 
     <script>
         const API_BASE = 'http://localhost:8000';
-        const USER_ID = 'demo_user'; // Replace with actual user ID from auth
-        const PORTFOLIO_ID = 7; // Test portfolio ID
+        const USER_ID = 'demo_user';       // Replace with actual user ID from auth
+        const PORTFOLIO_ID = 7;            // Replace with actual portfolio ID
+
+        // ===== State =====
         let currentIntegrationId = null;
-        let allFiles = [];
+        let allFiles = [];                 // All files returned by the current browse call
         let availableTickers = [];
 
-        // Load integrations on page load
-        window.onload = () => {
-            loadIntegrations();
-        };
+        // Navigation state
+        let navigationStack = [];          // Array of { path, name } — history before current
+        let currentPath = null;            // null = root of the integration
+        let currentFolderName = 'Root';
 
+        // ===== Bootstrap =====
+        window.onload = () => loadIntegrations();
+
+        // ===== Load integration cards =====
         async function loadIntegrations() {
             try {
                 const response = await fetch(`${API_BASE}/integrations/user/${USER_ID}`);
                 const integrations = await response.json();
 
                 const container = document.getElementById('integrations-container');
-                if (integrations.length === 0) {
+                if (!integrations.length) {
                     container.innerHTML = '<p style="text-align: center; color: #6c757d;">No integrations yet. Create one to get started!</p>';
                     return;
                 }
@@ -424,20 +540,20 @@
                     <div class="integration-card">
                         <div class="integration-header">
                             <div>
-                                <h3>${integration.name}</h3>
+                                <h3>${escapeHtml(integration.name)}</h3>
                                 <span class="integration-vendor vendor-${integration.vendor}">
-                                    ${integration.vendor.replace('_', ' ').toUpperCase()}
+                                    ${integration.vendor.replace(/_/g, ' ').toUpperCase()}
                                 </span>
                             </div>
                             <div>
-                                <span class="integration-status status-${integration.status}"></span>
+                                <span class="integration-status status-${integration.status}" title="${integration.status}"></span>
                             </div>
                         </div>
                         <p style="color: #6c757d; font-size: 14px; margin: 10px 0;">
-                            ${integration.description || 'No description'}
+                            ${escapeHtml(integration.description || 'No description')}
                         </p>
                         <div class="integration-actions">
-                            <button class="btn" onclick="browseFiles(${integration.id})">Browse Files</button>
+                            <button class="btn" onclick="openBrowseModal(${integration.id}, '${escapeAttr(integration.name)}')">Browse Files</button>
                             <button class="btn btn-secondary" onclick="testConnection(${integration.id})">Test</button>
                             <button class="btn btn-danger" onclick="deleteIntegration(${integration.id})">Delete</button>
                         </div>
@@ -448,6 +564,7 @@
             }
         }
 
+        // ===== Modal helpers =====
         function showCreateIntegrationModal() {
             document.getElementById('createIntegrationModal').style.display = 'block';
         }
@@ -456,75 +573,64 @@
             document.getElementById(modalId).style.display = 'none';
         }
 
+        // ===== Create Integration form — dynamic credential fields =====
         function updateCredentialFields() {
             const vendor = document.getElementById('vendor').value;
             const container = document.getElementById('credentialFields');
 
             const fields = {
                 sharepoint: [
-                    { name: 'tenant_id', label: 'Tenant ID', type: 'text', required: true },
-                    { name: 'client_id', label: 'Client ID', type: 'text', required: true },
+                    { name: 'tenant_id',     label: 'Tenant ID',     type: 'text',     required: true },
+                    { name: 'client_id',     label: 'Client ID',     type: 'text',     required: true },
                     { name: 'client_secret', label: 'Client Secret', type: 'password', required: true },
-                    { name: 'site_name', label: 'Site Name', type: 'text', placeholder: 'e.g., mysite' },
-                    { name: 'folder_path', label: 'Folder Path', type: 'text', placeholder: 'Documents' }
+                    { name: 'site_name',     label: 'Site Name',     type: 'text',     placeholder: 'e.g., mysite' },
+                    { name: 'folder_path',   label: 'Starting Folder Path', type: 'text', placeholder: 'Documents  (leave blank for drive root)' }
                 ],
                 google_drive: [
-                    { name: 'service_account_json', label: 'Service Account JSON', type: 'textarea', required: true, 
+                    { name: 'service_account_json', label: 'Service Account JSON', type: 'textarea', required: true,
                       placeholder: 'Paste your Google Service Account JSON here\n{"type":"service_account",...}' },
-                    { name: 'folder_path', label: 'Folder ID (optional)', type: 'text', placeholder: 'Leave empty for root' }
+                    { name: 'folder_path', label: 'Starting Folder ID (optional)', type: 'text',
+                      placeholder: 'Leave blank to start at Drive root' }
                 ],
                 azure_blob: [
-                    { name: 'account_name', label: 'Account Name', type: 'text', required: true },
-                    { name: 'account_key', label: 'Account Key', type: 'password', required: true },
-                    { name: 'folder_path', label: 'Container Name', type: 'text', placeholder: 'documents', required: true }
+                    { name: 'account_name', label: 'Account Name', type: 'text',     required: true },
+                    { name: 'account_key',  label: 'Account Key',  type: 'password', required: true },
+                    { name: 'folder_path',  label: 'Container Name', type: 'text',   placeholder: 'documents', required: true }
                 ],
                 aws_s3: [
-                    { name: 'bucket_name', label: 'Bucket Name', type: 'text', required: true },
-                    { name: 'access_key_id', label: 'Access Key ID', type: 'text', required: true },
+                    { name: 'bucket_name',       label: 'Bucket Name',     type: 'text',     required: true },
+                    { name: 'access_key_id',     label: 'Access Key ID',   type: 'text',     required: true },
                     { name: 'secret_access_key', label: 'Secret Access Key', type: 'password', required: true },
-                    { name: 'region', label: 'Region', type: 'text', placeholder: 'us-east-1' },
-                    { name: 'folder_path', label: 'Prefix/Folder', type: 'text', placeholder: 'Optional prefix' }
+                    { name: 'region',       label: 'Region',         type: 'text',     placeholder: 'us-east-1' },
+                    { name: 'folder_path',  label: 'Prefix / Folder', type: 'text',   placeholder: 'Optional prefix' }
                 ],
                 sftp: [
-                    { name: 'username', label: 'Username', type: 'text', required: true },
-                    { name: 'password', label: 'Password', type: 'password', required: true },
-                    { name: 'folder_path', label: 'Remote Path', type: 'text', placeholder: '/', required: true }
+                    { name: 'username',    label: 'Username',     type: 'text',     required: true },
+                    { name: 'password',    label: 'Password',     type: 'password', required: true },
+                    { name: 'folder_path', label: 'Remote Path',  type: 'text',     placeholder: '/', required: true }
                 ]
             };
 
-            if (!vendor || !fields[vendor]) {
-                container.innerHTML = '';
-                return;
-            }
+            if (!vendor || !fields[vendor]) { container.innerHTML = ''; return; }
 
             container.innerHTML = fields[vendor].map(field => {
                 if (field.type === 'textarea') {
                     return `
                         <div class="form-group">
-                            <label>${field.label} ${field.required ? '*' : ''}</label>
-                            <textarea 
-                                id="cred_${field.name}" 
-                                name="${field.name}"
+                            <label>${escapeHtml(field.label)} ${field.required ? '*' : ''}</label>
+                            <textarea id="cred_${field.name}" name="${field.name}"
                                 placeholder="${field.placeholder || ''}"
                                 ${field.required ? 'required' : ''}
-                                style="min-height: 150px; font-family: monospace; font-size: 12px;"
-                            ></textarea>
-                        </div>
-                    `;
-                } else {
-                    return `
-                        <div class="form-group">
-                            <label>${field.label} ${field.required ? '*' : ''}</label>
-                            <input 
-                                type="${field.type}" 
-                                id="cred_${field.name}" 
-                                name="${field.name}"
-                                placeholder="${field.placeholder || ''}"
-                                ${field.required ? 'required' : ''}
-                            >
-                        </div>
-                    `;
+                                style="min-height: 150px; font-family: monospace; font-size: 12px;"></textarea>
+                        </div>`;
                 }
+                return `
+                    <div class="form-group">
+                        <label>${escapeHtml(field.label)} ${field.required ? '*' : ''}</label>
+                        <input type="${field.type}" id="cred_${field.name}" name="${field.name}"
+                            placeholder="${field.placeholder || ''}"
+                            ${field.required ? 'required' : ''}>
+                    </div>`;
             }).join('');
         }
 
@@ -534,27 +640,19 @@
             const vendor = document.getElementById('vendor').value;
             const credentials = {};
 
-            // Collect inputs
             document.querySelectorAll('#credentialFields input').forEach(input => {
-                if (input.value) {
-                    credentials[input.name] = input.value;
-                }
+                if (input.value) credentials[input.name] = input.value;
             });
-
-            // Collect textareas (for service_account_json)
             document.querySelectorAll('#credentialFields textarea').forEach(textarea => {
-                if (textarea.value) {
-                    // For service_account_json, keep it as string (will be parsed server-side)
-                    credentials[textarea.name] = textarea.value.trim();
-                }
+                if (textarea.value) credentials[textarea.name] = textarea.value.trim();
             });
 
             const data = {
                 user_id: USER_ID,
-                vendor: vendor,
+                vendor,
                 name: document.getElementById('name').value,
                 url: document.getElementById('url').value,
-                credentials: credentials,
+                credentials,
                 description: document.getElementById('description').value
             };
 
@@ -568,6 +666,7 @@
                 if (response.ok) {
                     closeModal('createIntegrationModal');
                     document.getElementById('createIntegrationForm').reset();
+                    document.getElementById('credentialFields').innerHTML = '';
                     loadIntegrations();
                     alert('Integration created successfully!');
                 } else {
@@ -579,17 +678,73 @@
             }
         }
 
-        async function browseFiles(integrationId) {
+        // ===== Browse / folder navigation =====
+
+        /**
+         * Open the browse modal fresh from an integration card.
+         * Resets all navigation state and fetches the root level.
+         */
+        async function openBrowseModal(integrationId, integrationName) {
             currentIntegrationId = integrationId;
+            navigationStack = [];
+            currentPath = null;
+            currentFolderName = 'Root';
+
+            document.getElementById('browseModalTitle').textContent = `Browse — ${integrationName || 'Files'}`;
+            document.getElementById('fileSearch').value = '';
+            document.getElementById('selectedCount').textContent = '';
+
+            // Reset ticker panel (will be filled by fetchFiles)
+            document.getElementById('portfolioInfo').style.display = 'none';
+            document.getElementById('tickerSelection').style.display = 'none';
+            document.getElementById('filesContainer').innerHTML = '<div class="loading-msg">Loading...</div>';
+
+            document.getElementById('browseFilesModal').style.display = 'block';
+
+            await fetchFiles(null, /* fetchPortfolioInfo= */ true);
+        }
+
+        /**
+         * Navigate into a folder (called when the user clicks a folder item).
+         */
+        async function navigateIntoFolder(folderPath, folderName) {
+            navigationStack.push({ path: currentPath, name: currentFolderName });
+            currentPath = folderPath;
+            currentFolderName = folderName;
+            document.getElementById('fileSearch').value = '';
+            await fetchFiles(folderPath, false);
+        }
+
+        /**
+         * Jump to a specific point in the breadcrumb trail.
+         * index is into the full breadcrumb array: [...navigationStack, current]
+         */
+        async function navigateToBreadcrumb(index) {
+            const fullHistory = [...navigationStack, { path: currentPath, name: currentFolderName }];
+            const target = fullHistory[index];
+            navigationStack = fullHistory.slice(0, index);
+            currentPath = target.path;
+            currentFolderName = target.name;
+            document.getElementById('fileSearch').value = '';
+            await fetchFiles(target.path, false);
+        }
+
+        /**
+         * Internal: fetch files from the API for a given path and refresh the UI.
+         * fetchPortfolioInfo=true on first open to load ticker data.
+         */
+        async function fetchFiles(path, fetchPortfolioInfo) {
+            document.getElementById('filesContainer').innerHTML = '<div class="loading-msg">Loading...</div>';
+            document.getElementById('selectedCount').textContent = '';
 
             try {
+                const body = { integration_id: currentIntegrationId, path };
+                if (fetchPortfolioInfo) body.portfolio_id = PORTFOLIO_ID;
+
                 const response = await fetch(`${API_BASE}/integrations/browse`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        integration_id: integrationId,
-                        portfolio_id: PORTFOLIO_ID  // Include portfolio to get tickers
-                    })
+                    body: JSON.stringify(body)
                 });
 
                 if (!response.ok) {
@@ -598,122 +753,161 @@
                 }
 
                 const data = await response.json();
-                console.log('Browse response:', data);  // Debug log
+                console.log('Browse response:', data);
 
-                // Ensure files is an array
                 allFiles = Array.isArray(data.files) ? data.files : [];
 
-                // Handle available tickers
-                availableTickers = data.available_tickers || [];
+                // Only populate ticker panel on the initial open
+                if (fetchPortfolioInfo) {
+                    availableTickers = data.available_tickers || [];
 
-                // Display portfolio info if available
-                if (data.portfolio_name && availableTickers.length > 0) {
-                    document.getElementById('portfolioInfo').style.display = 'block';
-                    document.getElementById('portfolioDetails').innerHTML = `
-                        <strong>Portfolio:</strong> ${data.portfolio_name} (ID: ${data.portfolio_id})<br>
-                        <strong>Available Tickers:</strong> ${availableTickers.join(', ')}
-                    `;
+                    if (data.portfolio_name && availableTickers.length > 0) {
+                        document.getElementById('portfolioInfo').style.display = 'block';
+                        document.getElementById('portfolioDetails').innerHTML =
+                            `<strong>Portfolio:</strong> ${escapeHtml(data.portfolio_name)} (ID: ${data.portfolio_id})<br>
+                             <strong>Available Tickers:</strong> ${availableTickers.map(escapeHtml).join(', ')}`;
 
-                    // Show ticker selection dropdown
-                    document.getElementById('tickerSelection').style.display = 'block';
-                    const tickerSelect = document.getElementById('tickerSelect');
-                    tickerSelect.innerHTML = '<option value="">-- Choose a ticker --</option>' +
-                        availableTickers.map(ticker =>
-                            `<option value="${ticker}" ${ticker === 'AMZN' ? 'selected' : ''}>${ticker}</option>`
-                        ).join('');
-                } else {
-                    document.getElementById('portfolioInfo').style.display = 'none';
-                    document.getElementById('tickerSelection').style.display = 'none';
-                    availableTickers = ['AMZN']; // Default for testing
-                    document.getElementById('tickerSelect').innerHTML =
-                        '<option value="AMZN" selected>AMZN (Default)</option>';
-                    document.getElementById('tickerSelection').style.display = 'block';
+                        document.getElementById('tickerSelection').style.display = 'block';
+                        document.getElementById('tickerSelect').innerHTML =
+                            '<option value="">-- Choose a ticker --</option>' +
+                            availableTickers.map(t =>
+                                `<option value="${escapeAttr(t)}" ${t === 'AMZN' ? 'selected' : ''}>${escapeHtml(t)}</option>`
+                            ).join('');
+                    } else {
+                        // Fallback default ticker for testing
+                        availableTickers = ['AMZN'];
+                        document.getElementById('tickerSelection').style.display = 'block';
+                        document.getElementById('tickerSelect').innerHTML =
+                            '<option value="AMZN" selected>AMZN (Default)</option>';
+                    }
                 }
 
+                updateBreadcrumb();
                 renderFiles(allFiles);
-                document.getElementById('browseFilesModal').style.display = 'block';
+
             } catch (error) {
                 console.error('Browse error:', error);
-                alert(`Failed to browse files: ${error.message}`);
+                document.getElementById('filesContainer').innerHTML =
+                    `<div class="empty-msg" style="color: #dc3545;">Error: ${escapeHtml(error.message)}</div>`;
             }
         }
+
+        // ===== Breadcrumb =====
+
+        function updateBreadcrumb() {
+            const breadcrumb = document.getElementById('breadcrumb');
+            // Full trail = all history + current position
+            const fullHistory = [...navigationStack, { path: currentPath, name: currentFolderName }];
+
+            breadcrumb.innerHTML = fullHistory.map((item, index) => {
+                const isLast = index === fullHistory.length - 1;
+                if (isLast) {
+                    return `<span class="breadcrumb-current">${escapeHtml(item.name)}</span>`;
+                }
+                return `<a class="breadcrumb-item" href="#" onclick="navigateToBreadcrumb(${index}); return false;">${escapeHtml(item.name)}</a><span class="breadcrumb-sep">›</span>`;
+            }).join('');
+        }
+
+        // ===== File rendering =====
 
         function renderFiles(files) {
             const container = document.getElementById('filesContainer');
 
-            // Ensure files is an array
             if (!Array.isArray(files) || files.length === 0) {
-                container.innerHTML = '<p style="text-align: center; color: #6c757d;">No files found</p>';
+                container.innerHTML = '<div class="empty-msg">No files or folders found here.</div>';
                 return;
             }
 
-            container.innerHTML = files.map((file, index) => `
-                <div class="file-item" onclick="toggleFileSelection(${index})">
-                    <input type="checkbox" id="file_${index}" onclick="event.stopPropagation()">
-                    <div class="file-icon">${file.is_directory ? '📁' : '📄'}</div>
-                    <div class="file-info">
-                        <div class="file-name">${file.name || 'Unnamed'}</div>
-                        <div class="file-meta">
-                            ${formatFileSize(file.size)} • ${formatDate(file.last_modified)}
-                        </div>
-                    </div>
-                </div>
-            `).join('');
+            // Folders first, then files
+            const folders = files.filter(f => f.is_directory);
+            const regularFiles = files.filter(f => !f.is_directory);
+            const sorted = [...folders, ...regularFiles];
+
+            container.innerHTML = sorted.map(file => {
+                if (file.is_directory) {
+                    // Clickable folder — navigates into it, no checkbox
+                    return `
+                        <div class="file-item folder-item"
+                             data-folder-path="${escapeAttr(file.path)}"
+                             data-folder-name="${escapeAttr(file.name)}"
+                             onclick="handleFolderClick(this)">
+                            <div class="file-icon">📁</div>
+                            <div class="file-info">
+                                <div class="file-name">${escapeHtml(file.name)}</div>
+                                <div class="file-meta">Folder — click to browse</div>
+                            </div>
+                            <div class="folder-arrow">›</div>
+                        </div>`;
+                } else {
+                    // Selectable file with checkbox
+                    const ext = (file.name || '').split('.').pop().toLowerCase();
+                    const icon = ext === 'pdf' ? '📕' : (ext === 'xlsx' || ext === 'xls' ? '📗' : (ext === 'docx' || ext === 'doc' ? '📘' : '📄'));
+                    return `
+                        <div class="file-item file-selectable" onclick="toggleCheckbox(this)">
+                            <input type="checkbox" data-path="${escapeAttr(file.path)}" onclick="event.stopPropagation(); updateSelectedCount();">
+                            <div class="file-icon">${icon}</div>
+                            <div class="file-info">
+                                <div class="file-name">${escapeHtml(file.name)}</div>
+                                <div class="file-meta">${formatFileSize(file.size)} • ${formatDate(file.last_modified)}</div>
+                            </div>
+                        </div>`;
+                }
+            }).join('');
         }
 
-        function toggleFileSelection(index) {
-            const checkbox = document.getElementById(`file_${index}`);
-            checkbox.checked = !checkbox.checked;
+        function handleFolderClick(element) {
+            const folderPath = element.dataset.folderPath;
+            const folderName = element.dataset.folderName;
+            navigateIntoFolder(folderPath, folderName);
+        }
+
+        function toggleCheckbox(item) {
+            const cb = item.querySelector('input[type="checkbox"]');
+            if (cb) {
+                cb.checked = !cb.checked;
+                updateSelectedCount();
+            }
+        }
+
+        function updateSelectedCount() {
+            const n = document.querySelectorAll('#filesContainer input[type="checkbox"]:checked').length;
+            document.getElementById('selectedCount').textContent = n > 0 ? `${n} file(s) selected` : '';
         }
 
         function searchFiles() {
             const query = document.getElementById('fileSearch').value.toLowerCase();
-            
-            // Ensure allFiles is an array
-            if (!Array.isArray(allFiles)) {
-                allFiles = [];
-            }
-            
-            const filtered = allFiles.filter(file =>
-                file && file.name && file.name.toLowerCase().includes(query)
+            const filtered = (Array.isArray(allFiles) ? allFiles : []).filter(
+                f => f && f.name && f.name.toLowerCase().includes(query)
             );
             renderFiles(filtered);
         }
 
+        // ===== Import =====
+
         async function importSelectedFiles() {
-            const selectedFiles = [];
-            document.querySelectorAll('#filesContainer input[type="checkbox"]:checked').forEach((checkbox, index) => {
-                const fileIndex = parseInt(checkbox.id.split('_')[1]);
-                selectedFiles.push(allFiles[fileIndex].path);
+            const selectedPaths = [];
+            document.querySelectorAll('#filesContainer input[type="checkbox"]:checked').forEach(cb => {
+                selectedPaths.push(cb.dataset.path);
             });
 
-            if (selectedFiles.length === 0) {
-                alert('Please select at least one file to import');
+            if (!selectedPaths.length) {
+                alert('Please select at least one file to import.');
                 return;
             }
 
-            // Get selected ticker
             const ticker = document.getElementById('tickerSelect').value;
             if (!ticker) {
-                alert('Please select a ticker symbol');
+                alert('Please select a ticker symbol.');
                 return;
             }
 
-            console.log('Importing files:', {
-                integration_id: currentIntegrationId,
-                file_paths: selectedFiles,
-                ticker: ticker
-            });
+            console.log('Importing:', { integration_id: currentIntegrationId, file_paths: selectedPaths, ticker });
 
             try {
                 const response = await fetch(`${API_BASE}/integrations/import`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        integration_id: currentIntegrationId,
-                        file_paths: selectedFiles,
-                        ticker: ticker
-                    })
+                    body: JSON.stringify({ integration_id: currentIntegrationId, file_paths: selectedPaths, ticker })
                 });
 
                 if (!response.ok) {
@@ -723,23 +917,23 @@
 
                 const result = await response.json();
 
-                // Build detailed result message
-                let resultMessage = `Import Complete!\n\n`;
-                resultMessage += `✅ Successful: ${result.successful}\n`;
-                resultMessage += `❌ Failed: ${result.failed}\n`;
-                resultMessage += `📊 Ticker: ${ticker}\n`;
-                resultMessage += `💾 Collection: ticker_${ticker.toLowerCase()}\n\n`;
+                let msg = `Import Complete!\n\n`;
+                msg += `✅ Successful: ${result.successful}\n`;
+                msg += `❌ Failed: ${result.failed}\n`;
+                msg += `📊 Ticker: ${ticker}\n`;
+                msg += `💾 Collection: ticker_${ticker.toLowerCase()}\n\n`;
 
-                if (result.file_results && result.file_results.length > 0) {
-                    resultMessage += 'Details:\n';
-                    result.file_results.forEach(file => {
-                        const icon = file.success ? '✅' : '❌';
-                        const chunks = file.chunks_added ? ` (${file.chunks_added} chunks)` : '';
-                        resultMessage += `${icon} ${file.file_path.split('/').pop()}${chunks}\n`;
+                if (result.file_results && result.file_results.length) {
+                    msg += 'Details:\n';
+                    result.file_results.forEach(f => {
+                        const icon = f.success ? '✅' : '❌';
+                        const chunks = f.chunks_added ? ` (${f.chunks_added} chunks)` : '';
+                        msg += `${icon} ${f.file_path.split('/').pop()}${chunks}\n`;
+                        if (!f.success && f.error) msg += `   ↳ ${f.error}\n`;
                     });
                 }
 
-                alert(resultMessage);
+                alert(msg);
                 closeModal('browseFilesModal');
             } catch (error) {
                 console.error('Import error:', error);
@@ -747,15 +941,14 @@
             }
         }
 
+        // ===== Test connection =====
+
         async function testConnection(integrationId) {
             try {
-                const response = await fetch(`${API_BASE}/integrations/${integrationId}/test`, {
-                    method: 'POST'
-                });
-
+                const response = await fetch(`${API_BASE}/integrations/${integrationId}/test`, { method: 'POST' });
                 const result = await response.json();
                 if (result.success) {
-                    alert(`✅ ${result.message}\nFiles found: ${result.files_found || 'N/A'}`);
+                    alert(`✅ ${result.message}\nFiles found: ${result.files_found ?? 'N/A'}`);
                 } else {
                     alert(`❌ ${result.message}`);
                 }
@@ -764,16 +957,13 @@
             }
         }
 
+        // ===== Delete integration =====
+
         async function deleteIntegration(integrationId) {
-            if (!confirm('Are you sure you want to delete this integration?')) {
-                return;
-            }
+            if (!confirm('Are you sure you want to delete this integration?')) return;
 
             try {
-                const response = await fetch(`${API_BASE}/integrations/${integrationId}`, {
-                    method: 'DELETE'
-                });
-
+                const response = await fetch(`${API_BASE}/integrations/${integrationId}`, { method: 'DELETE' });
                 if (response.ok) {
                     alert('Integration deleted successfully');
                     loadIntegrations();
@@ -785,17 +975,35 @@
             }
         }
 
+        // ===== Utilities =====
+
         function formatFileSize(bytes) {
             if (!bytes) return '--';
             const sizes = ['B', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(1024));
-            return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + sizes[i];
+            return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + sizes[i];
         }
 
         function formatDate(dateString) {
             if (!dateString) return '--';
-            const date = new Date(dateString);
-            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+            const d = new Date(dateString);
+            return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function escapeAttr(text) {
+            if (text === null || text === undefined) return '';
+            // Used inside HTML attribute values — escape quotes
+            return String(text).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
         }
     </script>
 </body>
