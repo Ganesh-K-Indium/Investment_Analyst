@@ -186,7 +186,7 @@ class SharePointConnector(BaseConnector):
                 try:
                     # Check if it's a folder
                     is_folder = 'folder' in item
-                    
+
                     # Parse modified time
                     modified_time = None
                     if 'lastModifiedDateTime' in item:
@@ -194,9 +194,17 @@ class SharePointConnector(BaseConnector):
                             modified_time = datetime.fromisoformat(item['lastModifiedDateTime'].replace('Z', '+00:00'))
                         except:
                             pass
-                    
-                    # Use item ID as path (more reliable than webUrl)
-                    file_path = item.get('id')
+
+                    # Folders use path strings for navigation (so list_files can navigate into them).
+                    # Files use item IDs for download via the Graph API items endpoint.
+                    if is_folder:
+                        # Construct navigable path string: base/subfolder_name
+                        if should_use_root:
+                            file_path = item['name']
+                        else:
+                            file_path = f"{folder_path}/{item['name']}"
+                    else:
+                        file_path = item.get('id')
                     
                     remote_file = RemoteFile(
                         name=item['name'],

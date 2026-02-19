@@ -143,10 +143,20 @@ class ChatService:
         
         # 2. Format conversation (reversed to chronological for the LLM)
         conversation = []
-        for msg in reversed(messages): 
+        for msg in reversed(messages):
             role = "Human" if msg.role == "user" else "Assistant"
-            conversation.append(f"{role}: {msg.content}") # Let the LLM see the full context
-        
+            content = msg.content
+
+            # Include metadata chart URLs (for compare chats where chart_url is in metadata)
+            if msg.message_metadata:
+                metadata = msg.message_metadata if isinstance(msg.message_metadata, dict) else {}
+                if metadata.get("chart_url"):
+                    content += f"\n[Chart URL: {metadata['chart_url']}]"
+                if metadata.get("chart_filename"):
+                    content += f"\n[Chart File: {metadata['chart_filename']}]"
+
+            conversation.append(f"{role}: {content}")
+
         conversation_text = "\n\n".join(conversation[-20:]) 
         
         # 3. LLM Setup

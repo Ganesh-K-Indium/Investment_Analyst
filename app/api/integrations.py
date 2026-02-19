@@ -34,10 +34,12 @@ def create_integration(
 ):
     """
     Create a new data source integration
-    
+
     Supported vendors:
     - sharepoint: SharePoint Online
     - google_drive: Google Drive
+    - onedrive: Microsoft OneDrive
+    - confluence: Atlassian Confluence
     - azure_blob: Azure Blob Storage
     - aws_s3: AWS S3
     - sftp: SFTP Server
