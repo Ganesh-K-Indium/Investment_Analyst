@@ -7,7 +7,9 @@ from typing import List, Optional, Any
 from sqlalchemy.orm import Session
 from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
+from app.services.chat import ChatService
 from app.services.vectordb_manager import get_vectordb_manager
+from app.database.models import AgentType
 from datetime import datetime
 
 router = APIRouter(prefix="/portfolios", tags=["Portfolios"])
@@ -259,18 +261,29 @@ def create_session(
         user_id=payload.user_id,
         thread_id=payload.thread_id
     )
-    
+
+    # Also register a ChatSession so the session is immediately deletable
+    # via DELETE /chats/session/{session_id} even before any message is sent.
+    ChatService.create_or_get_chat_session(
+        db=db,
+        session_id=session.id,
+        user_id=payload.user_id,
+        agent_type=AgentType.RAG,
+        portfolio_id=payload.portfolio_id,
+        title=f"RAG: {portfolio.name}"
+    )
+
     # Register this session to the portfolio's Vector DB context
     vectordb_mgr = get_vectordb_manager()
     vectordb_mgr.register_session(
         thread_id=session.id,
         portfolio_id=portfolio.id
     )
-    
+
     # Lazy initialization logic is handled by VectorDBManager on retrieval
     # No need to explicitly initialize or check for portfolio DB instance here
     print(f"Session registered with VectorDBManager")
-    
+
     print(f"Session created and registered to portfolio Vector DB")
     print(f"   Session ID: {session.id}")
     print(f"   Portfolio ID: {portfolio.id}")

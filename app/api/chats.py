@@ -56,7 +56,15 @@ class ChatStatsResponse(BaseModel):
     quant_sessions: int
     total_messages: int
 
-# Add new Pydantic model
+
+class CreateChatSessionRequest(BaseModel):
+    session_id: str = Field(..., description="Unique session identifier (frontend-generated)")
+    user_id: str = Field(..., description="User identifier")
+    agent_type: str = Field(..., description="Agent type: 'rag' or 'quant'")
+    portfolio_id: Optional[int] = Field(None, description="Optional portfolio to link the session to")
+    title: Optional[str] = Field(None, description="Optional session title")
+
+
 class ChatSummaryRequest(BaseModel):
     max_messages: Optional[int] = Field(50, ge=10, le=100, description="Max messages to summarize")
     llm_model: Optional[str] = Field("gpt-4o-mini", description="LLM model for summarization")
@@ -93,6 +101,44 @@ def generate_session_summary(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
 
+
+@router.post("/session")
+def create_chat_session(
+    payload: CreateChatSessionRequest,
+    db: Session = Depends(get_db_session)
+):
+    """
+    Register a new chat session in the database before any messages are sent.
+    Call this when the user opens a new chat so the session can be deleted
+    even if no messages have been sent yet.
+    """
+    try:
+        agent_type_enum = AgentType(payload.agent_type.lower())
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid agent_type '{payload.agent_type}'. Must be 'rag' or 'quant'."
+        )
+
+    try:
+        chat_session = ChatService.create_or_get_chat_session(
+            db=db,
+            session_id=payload.session_id,
+            user_id=payload.user_id,
+            agent_type=agent_type_enum,
+            portfolio_id=payload.portfolio_id,
+            title=payload.title
+        )
+        return {
+            "session_id": chat_session.session_id,
+            "user_id": chat_session.user_id,
+            "agent_type": chat_session.agent_type.value,
+            "portfolio_id": chat_session.portfolio_id,
+            "title": chat_session.title,
+            "created_at": chat_session.created_at.isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/user/{user_id}/sessions", response_model=List[ChatSessionResponse])
