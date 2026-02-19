@@ -5,6 +5,7 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
+from typing import Optional
 import enum
 
 Base = declarative_base()
@@ -63,6 +64,10 @@ class ChatSession(Base):
     user_id = Column(String, nullable=False, index=True)
     portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=True)  # Optional
     agent_type = Column(SQLEnum(AgentType), nullable=False, index=True)  # rag or quant
+    # Summarised 
+    summary: Optional[str] = Column(String(2000), nullable=True, comment="LLM-generated session summary")
+    summary_updated_at: Optional[DateTime] = Column(DateTime, nullable=True, comment="Last summary update timestamp")
+
     
     # Session metadata
     title = Column(String, nullable=True)  # Auto-generated or user-provided title

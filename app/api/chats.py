@@ -2,7 +2,7 @@
 Chat History API endpoints
 Manages chat sessions, history retrieval, export, and clearing across all agents
 """
-from fastapi import APIRouter, HTTPException, Depends, Response
+from fastapi import APIRouter, HTTPException, Depends, Response,Query
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
@@ -69,11 +69,49 @@ class ChatSummaryRequest(BaseModel):
     max_messages: Optional[int] = Field(50, ge=10, le=100, description="Max messages to summarize")
     llm_model: Optional[str] = Field("gpt-4o-mini", description="LLM model for summarization")
 
+class ChatSummaryResponse(BaseModel):
+    session_id: str
+    summary: str
+    summary_updated_at: str
+    message_count: int
+
+@router.get("/session/{session_id}/summary", response_model=ChatSummaryResponse)
+def get_session_summary(
+    session_id: str,
+    agent_type: Optional[str] = None,
+    db: Session = Depends(get_db_session)
+):
+    """
+    Get cached chat summary from database (fast, no LLM call).
+    
+    Use POST endpoint to generate/store new summary.
+    """
+    summary = ChatService.get_session_summary(db, session_id)
+    
+    if not summary:
+        raise HTTPException(
+            status_code=404, 
+            detail="No summary available. Generate one using POST /chats/session/{session_id}/summary"
+        )
+    
+    chat_session = db.query(ChatSession).filter(
+        ChatSession.session_id == session_id
+    ).first()
+    
+    return ChatSummaryResponse(
+        session_id=session_id,
+        summary=summary,
+        summary_updated_at=chat_session.summary_updated_at.isoformat(),
+        message_count=len(chat_session.messages) if chat_session.messages else 0
+    )
+
+
 # Add this new endpoint (place after existing endpoints)
 @router.post("/session/{session_id}/summary", response_model=str)
 def generate_session_summary(
     session_id: str,
     request: ChatSummaryRequest,
+    agent_type: Optional[str] = Query(None, description="Agent type (rag/quant)"),
     db: Session = Depends(get_db_session)
 ):
     """
@@ -88,7 +126,8 @@ def generate_session_summary(
             db=db,
             session_id=session_id,
             max_messages=request.max_messages,
-            llm_model=request.llm_model
+            llm_model=request.llm_model,
+            store_in_db=True
         )
         
         if not summary:
