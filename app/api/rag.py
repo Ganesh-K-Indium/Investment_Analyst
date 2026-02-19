@@ -296,8 +296,15 @@ async def compare_companies(
         
         print(f"Mapped companies {companies} to tickers: {tickers}")
         
-        # Generate session ID if not provided
-        thread_id = payload.thread_id or f"comparison_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Generate a stable session ID based on user + companies if not provided.
+        # Using a deterministic hash ensures the same comparison always continues
+        # the same session rather than creating a new one on every call.
+        if payload.thread_id:
+            thread_id = payload.thread_id
+        else:
+            import hashlib
+            companies_key = "_".join(sorted(companies))  # sorted for order-independence
+            thread_id = f"compare_{user_id}_{hashlib.md5(companies_key.encode()).hexdigest()[:12]}"
         
         # Create or get chat session for persistence
         chat_session = ChatService.create_or_get_chat_session(

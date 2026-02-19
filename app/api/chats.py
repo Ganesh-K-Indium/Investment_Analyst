@@ -310,10 +310,10 @@ def clear_session_messages(
     """
     try:
         count = ChatService.clear_session_messages(db, session_id)
-        
-        if count == 0:
-            raise HTTPException(status_code=404, detail="Chat session not found or already empty")
-        
+
+        if count == -1:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
         return {
             "message": "Session messages cleared successfully",
             "session_id": session_id,

@@ -334,20 +334,20 @@ class ChatService:
         chat_session = db.query(ChatSession).filter(
             ChatSession.session_id == session_id
         ).first()
-        
+
         if not chat_session:
-            return 0
-        
+            return -1  # Sentinel: session does not exist
+
         count = db.query(ChatMessage).filter(
             ChatMessage.chat_session_id == chat_session.id
         ).count()
-        
+
         db.query(ChatMessage).filter(
             ChatMessage.chat_session_id == chat_session.id
         ).delete()
-        
+
         db.commit()
-        return count
+        return count  # 0 means session existed but was already empty
     
     @staticmethod
     def delete_session(
@@ -356,25 +356,41 @@ class ChatService:
     ) -> bool:
         """
         Permanently delete a session and all its messages.
-        
+
+        Also handles the case where a portfolio session was created (Session table)
+        but no messages were ever sent, so no ChatSession record exists yet.
+
         Args:
             db: Database session
             session_id: Session identifier
-            
+
         Returns:
             True if deleted, False if not found
         """
+        from app.database.models import Session as PortfolioSession
+
         chat_session = db.query(ChatSession).filter(
             ChatSession.session_id == session_id
         ).first()
-        
-        if not chat_session:
-            return False
-        
-        # Messages will be cascade deleted
-        db.delete(chat_session)
-        db.commit()
-        return True
+
+        if chat_session:
+            # Messages are cascade-deleted via relationship
+            db.delete(chat_session)
+            db.commit()
+            return True
+
+        # No ChatSession found — the user may have created a portfolio session
+        # (Session table) but never sent a message, so ChatSession was never created.
+        portfolio_session = db.query(PortfolioSession).filter(
+            PortfolioSession.id == session_id
+        ).first()
+
+        if portfolio_session:
+            db.delete(portfolio_session)
+            db.commit()
+            return True
+
+        return False
     
     @staticmethod
     def export_session(
