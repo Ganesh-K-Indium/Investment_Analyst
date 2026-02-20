@@ -90,29 +90,7 @@ async def ask_agent(
             )
         
         portfolio = session.portfolio
-        
-        # Create or get chat session for persistence
-        chat_session = ChatService.create_or_get_chat_session(
-            db=db,
-            session_id=thread_id,
-            user_id=session.user_id,
-            agent_type=AgentType.RAG,
-            portfolio_id=portfolio.id,
-            title=f"RAG: {portfolio.name}"
-        )
-        
-        # Save user message
-        ChatService.add_message(
-            db=db,
-            session_id=thread_id,
-            role=MessageRole.USER,
-            content=query
-        )
-        
-        # Register session with VectorDBManager (for context tracking)
-        vectordb_mgr = get_vectordb_manager()
-        vectordb_mgr.register_session(thread_id, portfolio.id)
-        
+
         # Map portfolio companies to tickers for the filter
         # This helps the agent know which tickers are valid for this portfolio
         company_tickers = []
@@ -123,6 +101,34 @@ async def ask_agent(
             else:
                 # Fallback to company name if no ticker found
                 company_tickers.append(company)
+
+        # Create or get chat session for persistence
+        chat_session = ChatService.create_or_get_chat_session(
+            db=db,
+            session_id=thread_id,
+            user_id=session.user_id,
+            agent_type=AgentType.RAG,
+            portfolio_id=portfolio.id,
+            title=f"RAG: {portfolio.name}",
+            session_metadata={
+                "type": "ask",
+                "portfolio_name": portfolio.name,
+                "companies": portfolio.company_names,
+                "tickers": company_tickers
+            }
+        )
+
+        # Save user message
+        ChatService.add_message(
+            db=db,
+            session_id=thread_id,
+            role=MessageRole.USER,
+            content=query
+        )
+
+        # Register session with VectorDBManager (for context tracking)
+        vectordb_mgr = get_vectordb_manager()
+        vectordb_mgr.register_session(thread_id, portfolio.id)
                 
         print(f"Using portfolio-scoped context")
         print(f"   Portfolio: {portfolio.name}")
@@ -313,7 +319,12 @@ async def compare_companies(
             user_id=user_id,
             agent_type=AgentType.RAG,
             portfolio_id=None,  # Comparisons are not portfolio-linked
-            title=f"Comparison: {comparison_str}"
+            title=f"Comparison: {comparison_str}",
+            session_metadata={
+                "type": "compare",
+                "companies": companies,
+                "tickers": tickers
+            }
         )
         
         # Predefined comparison prompt

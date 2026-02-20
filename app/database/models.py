@@ -72,6 +72,7 @@ class ChatSession(Base):
     # Session metadata
     title = Column(String, nullable=True)  # Auto-generated or user-provided title
     is_active = Column(Boolean, default=True)
+    session_metadata = Column(JSON, nullable=True)  # Extra context: {type, companies, portfolio_name}
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, index=True)

@@ -26,6 +26,7 @@ class ChatSessionResponse(BaseModel):
     message_count: int
     created_at: str
     last_message_at: Optional[str]
+    session_metadata: Optional[Dict[str, Any]] = None
 
 
 class ChatMessageResponse(BaseModel):
@@ -55,6 +56,21 @@ class ChatStatsResponse(BaseModel):
     rag_sessions: int
     quant_sessions: int
     total_messages: int
+
+
+class SummaryItem(BaseModel):
+    session_id: str
+    title: str
+    summary: str
+    summary_updated_at: Optional[str]
+    message_count: int
+    created_at: str
+    last_message_at: Optional[str]
+
+
+class SummariesByAgentResponse(BaseModel):
+    rag: List[SummaryItem]
+    quant: List[SummaryItem]
 
 
 class CreateChatSessionRequest(BaseModel):
@@ -116,7 +132,7 @@ def generate_session_summary(
 ):
     """
     Generate LLM-powered summary of chat session.
-    
+
     Request Body:
     - max_messages: Number of recent messages to include (10-100)
     - llm_model: LLM model to use (default: gpt-4o-mini)
@@ -129,16 +145,32 @@ def generate_session_summary(
             llm_model=request.llm_model,
             store_in_db=True
         )
-        
+
         if not summary:
             raise HTTPException(status_code=404, detail="Chat session not found")
-            
+
         return summary
-        
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
+
+
+@router.get("/user/{user_id}/summaries", response_model=SummariesByAgentResponse)
+def get_user_summaries(
+    user_id: str,
+    db: Session = Depends(get_db_session)
+):
+    """
+    Get all cached summaries for a user grouped by agent type (rag and quant).
+    Returns only sessions with summaries that are active.
+    """
+    try:
+        summaries = ChatService.get_user_summaries_by_agent(db, user_id)
+        return SummariesByAgentResponse(**summaries)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/session")
@@ -223,11 +255,12 @@ def get_user_chat_sessions(
                 is_active=session.is_active,
                 message_count=message_count,
                 created_at=session.created_at.isoformat(),
-                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None
+                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
+                session_metadata=session.session_metadata
             ))
-        
+
         return result
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -533,10 +566,11 @@ def get_portfolio_chat_sessions(
                 is_active=session.is_active,
                 message_count=message_count,
                 created_at=session.created_at.isoformat(),
-                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None
+                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
+                session_metadata=session.session_metadata
             ))
-        
+
         return result
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -25,6 +25,66 @@ class ChatService:
         ).first()
         return chat_session.summary if chat_session else None
 
+    @staticmethod
+    def get_user_summaries_by_agent(
+        db: Session,
+        user_id: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get all cached summaries for a user grouped by agent type.
+
+        Args:
+            db: Database session
+            user_id: User identifier
+
+        Returns:
+            Dictionary with 'rag' and 'quant' keys, each containing list of summaries
+        """
+        rag_sessions = db.query(ChatSession).filter(
+            ChatSession.user_id == user_id,
+            ChatSession.agent_type == AgentType.RAG,
+            ChatSession.is_active == True,
+            ChatSession.summary.isnot(None)
+        ).order_by(ChatSession.last_message_at.desc()).all()
+
+        quant_sessions = db.query(ChatSession).filter(
+            ChatSession.user_id == user_id,
+            ChatSession.agent_type == AgentType.QUANT,
+            ChatSession.is_active == True,
+            ChatSession.summary.isnot(None)
+        ).order_by(ChatSession.last_message_at.desc()).all()
+
+        rag_summaries = [
+            {
+                "session_id": session.session_id,
+                "title": session.title,
+                "summary": session.summary,
+                "summary_updated_at": session.summary_updated_at.isoformat() if session.summary_updated_at else None,
+                "message_count": len(session.messages) if session.messages else 0,
+                "created_at": session.created_at.isoformat(),
+                "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None
+            }
+            for session in rag_sessions
+        ]
+
+        quant_summaries = [
+            {
+                "session_id": session.session_id,
+                "title": session.title,
+                "summary": session.summary,
+                "summary_updated_at": session.summary_updated_at.isoformat() if session.summary_updated_at else None,
+                "message_count": len(session.messages) if session.messages else 0,
+                "created_at": session.created_at.isoformat(),
+                "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None
+            }
+            for session in quant_sessions
+        ]
+
+        return {
+            "rag": rag_summaries,
+            "quant": quant_summaries
+        }
+
     # @staticmethod
     # def generate_chat_summary(
     #     db: Session,
@@ -200,11 +260,12 @@ class ChatService:
         user_id: str,
         agent_type: AgentType,
         portfolio_id: Optional[int] = None,
-        title: Optional[str] = None
+        title: Optional[str] = None,
+        session_metadata: Optional[Dict[str, Any]] = None
     ) -> ChatSession:
         """
         Create a new chat session or get existing one.
-        
+
         Args:
             db: Database session
             session_id: Unique session identifier (thread_id)
@@ -212,7 +273,8 @@ class ChatService:
             agent_type: Type of agent (rag or quant)
             portfolio_id: Optional portfolio ID
             title: Optional session title
-            
+            session_metadata: Optional extra context e.g. {type, companies, portfolio_name}
+
         Returns:
             ChatSession object
         """
@@ -220,21 +282,24 @@ class ChatService:
         existing = db.query(ChatSession).filter(
             ChatSession.session_id == session_id
         ).first()
-        
+
         if existing:
-            # Update last_message_at
+            # Update last_message_at and backfill session_metadata if not yet set
             existing.last_message_at = datetime.utcnow()
+            if existing.session_metadata is None and session_metadata is not None:
+                existing.session_metadata = session_metadata
             db.commit()
             db.refresh(existing)
             return existing
-        
+
         # Create new session
         chat_session = ChatSession(
             session_id=session_id,
             user_id=user_id,
             portfolio_id=portfolio_id,
             agent_type=agent_type,
-            title=title or f"{agent_type.value.upper()} Chat - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+            title=title or f"{agent_type.value.upper()} Chat - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+            session_metadata=session_metadata
         )
         db.add(chat_session)
         db.commit()
