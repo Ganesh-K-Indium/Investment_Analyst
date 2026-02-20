@@ -90,7 +90,18 @@ async def ask_agent(
             )
         
         portfolio = session.portfolio
-        
+
+        # Map portfolio companies to tickers for the filter
+        # This helps the agent know which tickers are valid for this portfolio
+        company_tickers = []
+        for company in portfolio.company_names:
+            t = get_ticker(company)
+            if t:
+                company_tickers.append(t)
+            else:
+                # Fallback to company name if no ticker found
+                company_tickers.append(company)
+
         # Create or get chat session for persistence
         chat_session = ChatService.create_or_get_chat_session(
             db=db,
@@ -106,7 +117,7 @@ async def ask_agent(
                 "tickers": company_tickers
             }
         )
-        
+
         # Save user message
         ChatService.add_message(
             db=db,
@@ -114,21 +125,10 @@ async def ask_agent(
             role=MessageRole.USER,
             content=query
         )
-        
+
         # Register session with VectorDBManager (for context tracking)
         vectordb_mgr = get_vectordb_manager()
         vectordb_mgr.register_session(thread_id, portfolio.id)
-        
-        # Map portfolio companies to tickers for the filter
-        # This helps the agent know which tickers are valid for this portfolio
-        company_tickers = []
-        for company in portfolio.company_names:
-            t = get_ticker(company)
-            if t:
-                company_tickers.append(t)
-            else:
-                # Fallback to company name if no ticker found
-                company_tickers.append(company)
                 
         print(f"Using portfolio-scoped context")
         print(f"   Portfolio: {portfolio.name}")

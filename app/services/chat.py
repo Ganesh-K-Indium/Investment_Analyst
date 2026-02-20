@@ -284,8 +284,10 @@ class ChatService:
         ).first()
 
         if existing:
-            # Update last_message_at
+            # Update last_message_at and backfill session_metadata if not yet set
             existing.last_message_at = datetime.utcnow()
+            if existing.session_metadata is None and session_metadata is not None:
+                existing.session_metadata = session_metadata
             db.commit()
             db.refresh(existing)
             return existing
