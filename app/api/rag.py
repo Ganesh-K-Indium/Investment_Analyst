@@ -98,7 +98,13 @@ async def ask_agent(
             user_id=session.user_id,
             agent_type=AgentType.RAG,
             portfolio_id=portfolio.id,
-            title=f"RAG: {portfolio.name}"
+            title=f"RAG: {portfolio.name}",
+            session_metadata={
+                "type": "ask",
+                "portfolio_name": portfolio.name,
+                "companies": portfolio.company_names,
+                "tickers": company_tickers
+            }
         )
         
         # Save user message
@@ -313,7 +319,12 @@ async def compare_companies(
             user_id=user_id,
             agent_type=AgentType.RAG,
             portfolio_id=None,  # Comparisons are not portfolio-linked
-            title=f"Comparison: {comparison_str}"
+            title=f"Comparison: {comparison_str}",
+            session_metadata={
+                "type": "compare",
+                "companies": companies,
+                "tickers": tickers
+            }
         )
         
         # Predefined comparison prompt

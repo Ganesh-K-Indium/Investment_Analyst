@@ -260,11 +260,12 @@ class ChatService:
         user_id: str,
         agent_type: AgentType,
         portfolio_id: Optional[int] = None,
-        title: Optional[str] = None
+        title: Optional[str] = None,
+        session_metadata: Optional[Dict[str, Any]] = None
     ) -> ChatSession:
         """
         Create a new chat session or get existing one.
-        
+
         Args:
             db: Database session
             session_id: Unique session identifier (thread_id)
@@ -272,7 +273,8 @@ class ChatService:
             agent_type: Type of agent (rag or quant)
             portfolio_id: Optional portfolio ID
             title: Optional session title
-            
+            session_metadata: Optional extra context e.g. {type, companies, portfolio_name}
+
         Returns:
             ChatSession object
         """
@@ -280,21 +282,22 @@ class ChatService:
         existing = db.query(ChatSession).filter(
             ChatSession.session_id == session_id
         ).first()
-        
+
         if existing:
             # Update last_message_at
             existing.last_message_at = datetime.utcnow()
             db.commit()
             db.refresh(existing)
             return existing
-        
+
         # Create new session
         chat_session = ChatSession(
             session_id=session_id,
             user_id=user_id,
             portfolio_id=portfolio_id,
             agent_type=agent_type,
-            title=title or f"{agent_type.value.upper()} Chat - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+            title=title or f"{agent_type.value.upper()} Chat - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+            session_metadata=session_metadata
         )
         db.add(chat_session)
         db.commit()

@@ -26,6 +26,7 @@ class ChatSessionResponse(BaseModel):
     message_count: int
     created_at: str
     last_message_at: Optional[str]
+    session_metadata: Optional[Dict[str, Any]] = None
 
 
 class ChatMessageResponse(BaseModel):
@@ -254,11 +255,12 @@ def get_user_chat_sessions(
                 is_active=session.is_active,
                 message_count=message_count,
                 created_at=session.created_at.isoformat(),
-                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None
+                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
+                session_metadata=session.session_metadata
             ))
-        
+
         return result
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -564,10 +566,11 @@ def get_portfolio_chat_sessions(
                 is_active=session.is_active,
                 message_count=message_count,
                 created_at=session.created_at.isoformat(),
-                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None
+                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
+                session_metadata=session.session_metadata
             ))
-        
+
         return result
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
