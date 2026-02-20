@@ -25,6 +25,66 @@ class ChatService:
         ).first()
         return chat_session.summary if chat_session else None
 
+    @staticmethod
+    def get_user_summaries_by_agent(
+        db: Session,
+        user_id: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get all cached summaries for a user grouped by agent type.
+
+        Args:
+            db: Database session
+            user_id: User identifier
+
+        Returns:
+            Dictionary with 'rag' and 'quant' keys, each containing list of summaries
+        """
+        rag_sessions = db.query(ChatSession).filter(
+            ChatSession.user_id == user_id,
+            ChatSession.agent_type == AgentType.RAG,
+            ChatSession.is_active == True,
+            ChatSession.summary.isnot(None)
+        ).order_by(ChatSession.last_message_at.desc()).all()
+
+        quant_sessions = db.query(ChatSession).filter(
+            ChatSession.user_id == user_id,
+            ChatSession.agent_type == AgentType.QUANT,
+            ChatSession.is_active == True,
+            ChatSession.summary.isnot(None)
+        ).order_by(ChatSession.last_message_at.desc()).all()
+
+        rag_summaries = [
+            {
+                "session_id": session.session_id,
+                "title": session.title,
+                "summary": session.summary,
+                "summary_updated_at": session.summary_updated_at.isoformat() if session.summary_updated_at else None,
+                "message_count": len(session.messages) if session.messages else 0,
+                "created_at": session.created_at.isoformat(),
+                "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None
+            }
+            for session in rag_sessions
+        ]
+
+        quant_summaries = [
+            {
+                "session_id": session.session_id,
+                "title": session.title,
+                "summary": session.summary,
+                "summary_updated_at": session.summary_updated_at.isoformat() if session.summary_updated_at else None,
+                "message_count": len(session.messages) if session.messages else 0,
+                "created_at": session.created_at.isoformat(),
+                "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None
+            }
+            for session in quant_sessions
+        ]
+
+        return {
+            "rag": rag_summaries,
+            "quant": quant_summaries
+        }
+
     # @staticmethod
     # def generate_chat_summary(
     #     db: Session,

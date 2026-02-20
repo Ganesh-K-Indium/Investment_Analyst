@@ -57,6 +57,21 @@ class ChatStatsResponse(BaseModel):
     total_messages: int
 
 
+class SummaryItem(BaseModel):
+    session_id: str
+    title: str
+    summary: str
+    summary_updated_at: Optional[str]
+    message_count: int
+    created_at: str
+    last_message_at: Optional[str]
+
+
+class SummariesByAgentResponse(BaseModel):
+    rag: List[SummaryItem]
+    quant: List[SummaryItem]
+
+
 class CreateChatSessionRequest(BaseModel):
     session_id: str = Field(..., description="Unique session identifier (frontend-generated)")
     user_id: str = Field(..., description="User identifier")
@@ -116,7 +131,7 @@ def generate_session_summary(
 ):
     """
     Generate LLM-powered summary of chat session.
-    
+
     Request Body:
     - max_messages: Number of recent messages to include (10-100)
     - llm_model: LLM model to use (default: gpt-4o-mini)
@@ -129,16 +144,32 @@ def generate_session_summary(
             llm_model=request.llm_model,
             store_in_db=True
         )
-        
+
         if not summary:
             raise HTTPException(status_code=404, detail="Chat session not found")
-            
+
         return summary
-        
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
+
+
+@router.get("/user/{user_id}/summaries", response_model=SummariesByAgentResponse)
+def get_user_summaries(
+    user_id: str,
+    db: Session = Depends(get_db_session)
+):
+    """
+    Get all cached summaries for a user grouped by agent type (rag and quant).
+    Returns only sessions with summaries that are active.
+    """
+    try:
+        summaries = ChatService.get_user_summaries_by_agent(db, user_id)
+        return SummariesByAgentResponse(**summaries)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/session")
