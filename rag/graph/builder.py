@@ -13,7 +13,8 @@ from rag.graph.nodes import (web_search, retrieve,
                          preprocess_and_analyze_query,
                          generate_comparison_chart,
                          detect_alpha_query, alpha_dimension_retrieve, alpha_generate_report,
-                         perform_gap_analysis)
+                         perform_gap_analysis,
+                         detect_scenario_query, scenario_data_retrieve, scenario_generate_report)
 from rag.graph.edges import (route_question, decide_to_generate,
                          grade_generation_v_documents_and_question,
                          decide_after_web_integration, decide_chart_generation,
@@ -56,6 +57,11 @@ class BuildingGraph:
         workflow.add_node("detect_alpha", time_node("detect_alpha")(detect_alpha_query))
         workflow.add_node("alpha_retrieve", time_node("alpha_retrieve")(alpha_dimension_retrieve))
         workflow.add_node("alpha_generate", time_node("alpha_generate")(alpha_generate_report))
+
+        # Add Scenario Framework nodes (Bull / Bear / Base)
+        workflow.add_node("detect_scenario", time_node("detect_scenario")(detect_scenario_query))
+        workflow.add_node("scenario_retrieve", time_node("scenario_retrieve")(scenario_data_retrieve))
+        workflow.add_node("scenario_generate", time_node("scenario_generate")(scenario_generate_report))
         
         # Add nodes with timing decorators
         workflow.add_node("web_search", time_node("web_search")(web_search))
@@ -70,22 +76,30 @@ class BuildingGraph:
         workflow.add_node("generate_chart", time_node("generate_chart")(generate_comparison_chart))
         workflow.add_node("gap_analysis", time_node("gap_analysis")(perform_gap_analysis))
         
-        # START -> detect_alpha (FIRST check for ALPHA queries)
+        # START -> detect_alpha (first: check for ALPHA buy-timing queries)
         workflow.add_edge(START, "detect_alpha")
-        
-        # ALPHA routing: detect_alpha -> alpha_retrieve OR preprocess
+
+        # detect_alpha -> detect_scenario (second: check for Bull/Bear/Base scenario queries)
+        workflow.add_edge("detect_alpha", "detect_scenario")
+
+        # detect_scenario -> route_alpha_workflow: alpha | scenario | normal
         workflow.add_conditional_edges(
-            "detect_alpha",
+            "detect_scenario",
             route_alpha_workflow,
-           {
+            {
                 "alpha": "alpha_retrieve",
-                "normal": "preprocess"
+                "scenario": "scenario_retrieve",
+                "normal": "preprocess",
             },
         )
-        
-        # ALPHA workflow: retrieve -> generate -> show_result -> END
+
+        # ALPHA workflow: alpha_retrieve -> alpha_generate -> show_result -> END
         workflow.add_edge("alpha_retrieve", "alpha_generate")
         workflow.add_edge("alpha_generate", "show_result")
+
+        # Scenario workflow: scenario_retrieve -> scenario_generate -> show_result -> END
+        workflow.add_edge("scenario_retrieve", "scenario_generate")
+        workflow.add_edge("scenario_generate", "show_result")
         
         # Preprocess -> Router (Vectorstore vs WebSearch)
         workflow.add_conditional_edges(

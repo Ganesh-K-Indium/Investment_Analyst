@@ -3049,9 +3049,469 @@ def alpha_generate_report(state):
     
     # Return final report as AIMessage
     from langchain_core.messages import AIMessage
-    
+
     return {
         "messages": [AIMessage(content=final_report)],
         "alpha_report": final_report,
         "Intermediate_message": final_report  # For compatibility with show_result node
+    }
+
+
+# ============================================================================
+# SCENARIO FRAMEWORK – Bull / Bear / Base Case (web-search only)
+# ============================================================================
+
+# Domains specifically useful for analyst ratings & brokerage research aggregators
+SCENARIO_SEARCH_DOMAINS = [
+    # Analyst-rating aggregators
+    "tipranks.com",
+    "marketbeat.com",
+    "benzinga.com",
+    "barrons.com",
+    "thestreet.com",
+    "zacks.com",
+    "finviz.com",
+    # Credit-rating agencies (public pages)
+    "spglobal.com",
+    "moodys.com",
+    "fitchratings.com",
+    "dbrs.com",
+    # Already-trusted general financial domains
+    "seekingalpha.com",
+    "finance.yahoo.com",
+    "bloomberg.com",
+    "reuters.com",
+    "wsj.com",
+    "ft.com",
+    "marketwatch.com",
+    "morningstar.com",
+    "stockanalysis.com",
+    "fool.com",
+    "cnbc.com",
+    "investopedia.com",
+    "gurufocus.com",
+    "macrotrends.net",
+]
+
+# Scenario detection keyword patterns
+SCENARIO_PATTERNS = [
+    "bull case",
+    "bear case",
+    "base case",
+    "bull scenario",
+    "bear scenario",
+    "base scenario",
+    "upside case",
+    "downside case",
+    "bull and bear",
+    "bull/bear",
+    "bull bear base",
+    "scenarios for",
+    "investment scenario",
+    "price target scenario",
+    "upside downside",
+    "scenario analysis",
+    "three scenarios",
+    "3 scenarios",
+]
+
+
+def detect_scenario_query(state):
+    """
+    Detect if the query is asking for Bull / Bear / Base scenario analysis.
+
+    This node is chained AFTER detect_alpha_query so that alpha queries are
+    handled first; scenario detection only fires when alpha_mode is False.
+
+    Returns:
+        scenario_mode: True   → graph routes to scenario_retrieve
+        scenario_mode: False  → graph routes normally
+    """
+    print("=" * 80)
+    print(" SCENARIO QUERY DETECTION")
+    print("=" * 80)
+
+    # If alpha mode already active, skip scenario detection
+    if state.get("alpha_mode", False):
+        print(" Alpha mode active – skipping scenario detection")
+        print("=" * 80 + "\n")
+        return {"scenario_mode": False}
+
+    messages = state["messages"]
+    question = messages[-1].content.lower()
+
+    is_scenario_query = any(pattern in question for pattern in SCENARIO_PATTERNS)
+
+    if is_scenario_query:
+        print(" SCENARIO MODE ACTIVATED")
+        print(f"   Query: {question}")
+
+        # Resolve ticker from state (set by portfolio/session context)
+        ticker = state.get("ticker")
+        company_filter = state.get("company_filter", [])
+
+        if not ticker and company_filter:
+            ticker = company_filter[0].upper()
+
+        if not ticker:
+            # Fallback: look for an all-caps word ≤5 chars in the question
+            words = question.upper().split()
+            for word in words:
+                cleaned = word.strip(",.?!\"'")
+                if 2 <= len(cleaned) <= 5 and cleaned.isalpha():
+                    ticker = cleaned
+                    break
+
+        if not ticker:
+            ticker = "UNKNOWN"
+
+        print(f"   Target ticker: {ticker}")
+        print("=" * 80 + "\n")
+        return {
+            "scenario_mode": True,
+            "ticker": ticker,
+            "scenario_data": {},
+            "scenario_report": "",
+        }
+    else:
+        print(" Normal query (not a Scenario request)")
+        print("=" * 80 + "\n")
+        return {"scenario_mode": False}
+
+
+def scenario_data_retrieve(state):
+    """
+    Retrieve data for Bull / Bear / Base scenario analysis using Tavily web search.
+
+    Data buckets collected:
+      1. analyst_data   – ratings, price targets, brokerage views
+      2. valuation_data – P/E, EV/EBITDA, DCF, historical valuation
+      3. catalyst_data  – growth drivers, new products, market expansion
+      4. risk_data      – downside risks, competition, regulatory
+      5. credit_data    – S&P, Moody's, Fitch, DBRS rating commentary
+      6. macro_data     – sector trends, interest rates, macro environment
+    """
+    print("=" * 80)
+    print(" SCENARIO DATA RETRIEVAL (Web-Search Only)")
+    print("=" * 80)
+
+    ticker = state.get("ticker", "UNKNOWN").upper()
+    print(f" Target: {ticker}\n")
+
+    web_search_tool = TavilySearch(
+        max_results=4,
+        include_raw_content=True,
+        include_domains=SCENARIO_SEARCH_DOMAINS,
+    )
+
+    scenario_data = {
+        "analyst_data": [],
+        "valuation_data": [],
+        "catalyst_data": [],
+        "risk_data": [],
+        "credit_data": [],
+        "macro_data": [],
+    }
+
+    # -------------------------------------------------------------------------
+    # 1. Analyst Ratings & Brokerage Price Targets
+    # -------------------------------------------------------------------------
+    print(" [1/6] Analyst ratings & brokerage price targets")
+    analyst_queries = [
+        f"{ticker} analyst rating consensus buy sell hold price target 2025",
+        f"{ticker} Goldman Sachs Morgan Stanley JPMorgan BofA Citi analyst recommendation",
+        f"{ticker} Wells Fargo Barclays UBS Bernstein Wolfe Evercore analyst price target",
+        f"{ticker} analyst upgrade downgrade rating change latest",
+    ]
+    for q in analyst_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _parse_tavily_response(results, q)
+            for s in sources:
+                scenario_data["analyst_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"][:1500],
+                })
+        except Exception as e:
+            print(f"    Warning: {e}")
+    print(f"    {len(scenario_data['analyst_data'])} analyst sources collected")
+
+    # -------------------------------------------------------------------------
+    # 2. Valuation Metrics
+    # -------------------------------------------------------------------------
+    print(" [2/6] Valuation metrics")
+    valuation_queries = [
+        f"{ticker} P/E ratio EV/EBITDA price to sales valuation 2025",
+        f"{ticker} fair value DCF intrinsic value analyst estimate",
+    ]
+    for q in valuation_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _parse_tavily_response(results, q)
+            for s in sources:
+                scenario_data["valuation_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"][:1500],
+                })
+        except Exception as e:
+            print(f"    Warning: {e}")
+    print(f"    {len(scenario_data['valuation_data'])} valuation sources collected")
+
+    # -------------------------------------------------------------------------
+    # 3. Growth Catalysts (Bull drivers)
+    # -------------------------------------------------------------------------
+    print(" [3/6] Growth catalysts & bull drivers")
+    catalyst_queries = [
+        f"{ticker} growth drivers catalysts bullish case upside 2025 2026",
+        f"{ticker} new product launch market expansion revenue growth opportunity",
+        f"{ticker} competitive advantage pricing power margin expansion",
+    ]
+    for q in catalyst_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _parse_tavily_response(results, q)
+            for s in sources:
+                scenario_data["catalyst_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"][:1500],
+                })
+        except Exception as e:
+            print(f"    Warning: {e}")
+    print(f"    {len(scenario_data['catalyst_data'])} catalyst sources collected")
+
+    # -------------------------------------------------------------------------
+    # 4. Downside Risks (Bear drivers)
+    # -------------------------------------------------------------------------
+    print(" [4/6] Downside risks & bear headwinds")
+    risk_queries = [
+        f"{ticker} risks headwinds bearish case downside 2025",
+        f"{ticker} competition market share loss regulatory risk",
+        f"{ticker} margin compression debt leverage concern analyst warning",
+    ]
+    for q in risk_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _parse_tavily_response(results, q)
+            for s in sources:
+                scenario_data["risk_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"][:1500],
+                })
+        except Exception as e:
+            print(f"    Warning: {e}")
+    print(f"    {len(scenario_data['risk_data'])} risk sources collected")
+
+    # -------------------------------------------------------------------------
+    # 5. Credit Ratings
+    # -------------------------------------------------------------------------
+    print(" [5/6] Credit rating agency reports")
+    credit_queries = [
+        f"{ticker} credit rating S&P Moody's Fitch rating outlook 2025",
+        f"{ticker} bond rating investment grade speculative debt outlook",
+    ]
+    for q in credit_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _parse_tavily_response(results, q)
+            for s in sources:
+                scenario_data["credit_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"][:1500],
+                })
+        except Exception as e:
+            print(f"    Warning: {e}")
+    print(f"    {len(scenario_data['credit_data'])} credit sources collected")
+
+    # -------------------------------------------------------------------------
+    # 6. Macro & Sector Environment
+    # -------------------------------------------------------------------------
+    print(" [6/6] Macro & sector environment")
+    macro_queries = [
+        f"{ticker} sector macro outlook interest rate impact 2025",
+        f"{ticker} industry trends tailwinds headwinds economic environment",
+    ]
+    for q in macro_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _parse_tavily_response(results, q)
+            for s in sources:
+                scenario_data["macro_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"][:1500],
+                })
+        except Exception as e:
+            print(f"    Warning: {e}")
+    print(f"    {len(scenario_data['macro_data'])} macro sources collected")
+
+    total = sum(len(v) for v in scenario_data.values())
+    print(f"\n Retrieval complete: {total} total sources across 6 buckets")
+    print("=" * 80 + "\n")
+
+    return {"scenario_data": scenario_data}
+
+
+def scenario_generate_report(state):
+    """
+    Generate the final Bull / Bear / Base scenario report from collected web data.
+
+    Steps:
+      1. Format each data bucket into readable text
+      2. Run Bull / Bear / Base case chains in sequence
+      3. Run the combiner chain to produce the final markdown report
+      4. Return as AIMessage for show_result compatibility
+    """
+    print("=" * 80)
+    print(" SCENARIO REPORT GENERATION")
+    print("=" * 80 + "\n")
+
+    ticker = state.get("ticker", "UNKNOWN").upper()
+    scenario_data = state.get("scenario_data", {})
+
+    from langchain_openai import ChatOpenAI
+    from rag.vectordb.chains import (
+        get_scenario_bull_chain,
+        get_scenario_bear_chain,
+        get_scenario_base_chain,
+        get_scenario_report_combiner_chain,
+    )
+
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+    def _format_bucket(bucket_key, max_items=6, max_chars=1200):
+        """Format a data bucket into a single readable string."""
+        items = scenario_data.get(bucket_key, [])
+        if not items:
+            return "No data available from web search."
+        parts = []
+        for item in items[:max_items]:
+            title = item.get("title", "Source")
+            url = item.get("url", "")
+            content = item.get("content", "")[:max_chars]
+            parts.append(f"**{title}**\n{url}\n{content}")
+        return "\n\n---\n\n".join(parts)
+
+    analyst_text = _format_bucket("analyst_data")
+    valuation_text = _format_bucket("valuation_data")
+    catalyst_text = _format_bucket("catalyst_data")
+    risk_text = _format_bucket("risk_data")
+    credit_text = _format_bucket("credit_data")
+    macro_text = _format_bucket("macro_data")
+
+    # ── Bull Case ─────────────────────────────────────────────────────────────
+    print(" Generating Bull Case...")
+    bull_result = None
+    try:
+        bull_chain = get_scenario_bull_chain(llm)
+        bull_result = bull_chain.invoke({
+            "ticker": ticker,
+            "analyst_data": analyst_text,
+            "valuation_data": valuation_text,
+            "catalyst_data": catalyst_text,
+        })
+        print(f"    Bull target: {bull_result.price_target}  upside: {bull_result.upside_downside}")
+    except Exception as e:
+        print(f"    Error: {e}")
+
+    # ── Bear Case ─────────────────────────────────────────────────────────────
+    print(" Generating Bear Case...")
+    bear_result = None
+    try:
+        bear_chain = get_scenario_bear_chain(llm)
+        bear_result = bear_chain.invoke({
+            "ticker": ticker,
+            "analyst_data": analyst_text,
+            "risk_data": risk_text,
+            "credit_data": credit_text,
+        })
+        print(f"    Bear target: {bear_result.price_target}  downside: {bear_result.upside_downside}")
+    except Exception as e:
+        print(f"    Error: {e}")
+
+    # ── Base Case ─────────────────────────────────────────────────────────────
+    print(" Generating Base Case...")
+    base_result = None
+    try:
+        base_chain = get_scenario_base_chain(llm)
+        base_result = base_chain.invoke({
+            "ticker": ticker,
+            "analyst_data": analyst_text,
+            "valuation_data": valuation_text,
+            "macro_data": macro_text,
+        })
+        print(f"    Base target: {base_result.price_target}  return: {base_result.upside_downside}")
+    except Exception as e:
+        print(f"    Error: {e}")
+
+    def _fmt_list(lst):
+        if not lst:
+            return "N/A"
+        return "\n".join(f"• {item}" for item in lst)
+
+    # Fallback defaults if any case failed
+    def _safe(result, field, default="N/A"):
+        if result is None:
+            return default
+        return getattr(result, field, default) or default
+
+    # ── Combine into final report ─────────────────────────────────────────────
+    print("\n Combining into final scenario report...")
+    final_report = ""
+    try:
+        combiner_chain = get_scenario_report_combiner_chain(llm)
+        final_report = combiner_chain.invoke({
+            "ticker": ticker,
+            # Bull
+            "bull_target": _safe(bull_result, "price_target"),
+            "bull_upside": _safe(bull_result, "upside_downside"),
+            "bull_probability": _safe(bull_result, "probability"),
+            "bull_drivers": _fmt_list(_safe(bull_result, "key_drivers", [])),
+            "bull_assumptions": _fmt_list(_safe(bull_result, "assumptions", [])),
+            "bull_analysis": _safe(bull_result, "analysis"),
+            # Base
+            "base_target": _safe(base_result, "price_target"),
+            "base_upside": _safe(base_result, "upside_downside"),
+            "base_probability": _safe(base_result, "probability"),
+            "base_drivers": _fmt_list(_safe(base_result, "key_drivers", [])),
+            "base_assumptions": _fmt_list(_safe(base_result, "assumptions", [])),
+            "base_analysis": _safe(base_result, "analysis"),
+            # Bear
+            "bear_target": _safe(bear_result, "price_target"),
+            "bear_upside": _safe(bear_result, "upside_downside"),
+            "bear_probability": _safe(bear_result, "probability"),
+            "bear_drivers": _fmt_list(_safe(bear_result, "key_drivers", [])),
+            "bear_assumptions": _fmt_list(_safe(bear_result, "assumptions", [])),
+            "bear_analysis": _safe(bear_result, "analysis"),
+            # Summaries
+            "analyst_summary": analyst_text[:2000] if analyst_text else "N/A",
+            "credit_summary": credit_text[:1000] if credit_text else "N/A",
+        })
+        print(f"    Final report: {len(final_report)} chars")
+    except Exception as e:
+        print(f"    Error generating combined report: {e}")
+        final_report = (
+            f"# Bull / Bear / Base Scenario Analysis: {ticker}\n\n"
+            f"Error generating combined report: {e}\n\n"
+            f"**Bull Case**: Target {_safe(bull_result, 'price_target')} "
+            f"({_safe(bull_result, 'upside_downside')} upside)\n\n"
+            f"**Base Case**: Target {_safe(base_result, 'price_target')} "
+            f"({_safe(base_result, 'upside_downside')})\n\n"
+            f"**Bear Case**: Target {_safe(bear_result, 'price_target')} "
+            f"({_safe(bear_result, 'upside_downside')} downside)\n"
+        )
+
+    print("\n" + "=" * 80)
+    print(" SCENARIO REPORT COMPLETE")
+    print("=" * 80 + "\n")
+
+    return {
+        "messages": [AIMessage(content=final_report)],
+        "scenario_report": final_report,
+        "Intermediate_message": final_report,
+        "web_searched": True,
     }
