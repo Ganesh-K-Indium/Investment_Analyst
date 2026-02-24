@@ -284,8 +284,15 @@ class ChatService:
         ).first()
 
         if existing:
-            # Update last_message_at and backfill session_metadata if not yet set
+            # Update last_message_at
             existing.last_message_at = datetime.utcnow()
+            # Correct agent_type if it was pre-created with the wrong type
+            # (e.g. POST /portfolios/sessions always used to default to RAG)
+            if existing.agent_type != agent_type:
+                existing.agent_type = agent_type
+                if title:
+                    existing.title = title
+            # Backfill session_metadata if not yet set
             if existing.session_metadata is None and session_metadata is not None:
                 existing.session_metadata = session_metadata
             db.commit()

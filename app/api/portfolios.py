@@ -71,6 +71,7 @@ class SessionCreateRequest(BaseModel):
     portfolio_id: int = Field(..., description="Portfolio ID to create session for")
     user_id: str = Field(..., description="User identifier")
     thread_id: Optional[str] = Field(None, description="Optional custom thread_id")
+    agent_type: Optional[str] = Field("rag", description="Agent type: 'rag' or 'quant'")
 
 
 class SessionResponse(BaseModel):
@@ -262,15 +263,23 @@ def create_session(
         thread_id=payload.thread_id
     )
 
+    # Resolve agent type from payload (default to RAG for backward-compatibility)
+    try:
+        agent_type_enum = AgentType((payload.agent_type or "rag").lower())
+    except ValueError:
+        agent_type_enum = AgentType.RAG
+
+    title_prefix = "Quant" if agent_type_enum == AgentType.QUANT else "RAG"
+
     # Also register a ChatSession so the session is immediately deletable
     # via DELETE /chats/session/{session_id} even before any message is sent.
     ChatService.create_or_get_chat_session(
         db=db,
         session_id=session.id,
         user_id=payload.user_id,
-        agent_type=AgentType.RAG,
+        agent_type=agent_type_enum,
         portfolio_id=payload.portfolio_id,
-        title=f"RAG: {portfolio.name}"
+        title=f"{title_prefix}: {portfolio.name}"
     )
 
     # Register this session to the portfolio's Vector DB context
