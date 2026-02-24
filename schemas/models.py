@@ -203,3 +203,30 @@ class AlphaDimensionOutput(BaseModel):
         default_factory=list,
         description="Key bullet points from the analysis (3-5 points)"
     )
+
+
+class ScenarioCaseOutput(BaseModel):
+    """Output for a single Bull / Bear / Base scenario case"""
+    price_target: str = Field(
+        default="N/A",
+        description="Price target for this scenario (e.g. '$250' or 'N/A')"
+    )
+    upside_downside: str = Field(
+        default="N/A",
+        description="Estimated percentage upside or downside (e.g. '+35%' or '-20%')"
+    )
+    key_drivers: list[str] = Field(
+        default_factory=list,
+        description="Top 3-5 key drivers or risks for this scenario"
+    )
+    assumptions: list[str] = Field(
+        default_factory=list,
+        description="Core assumptions underlying this scenario (2-4 bullets)"
+    )
+    probability: str = Field(
+        default="N/A",
+        description="Estimated probability of this scenario materialising (e.g. '30%')"
+    )
+    analysis: str = Field(
+        description="Narrative analysis for this scenario (max 150 words)"
+    )

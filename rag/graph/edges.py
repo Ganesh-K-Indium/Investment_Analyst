@@ -10,16 +10,25 @@ from rag.vectordb.client import load_vector_database
 
 def route_alpha_workflow(state):
     """
-    Route to ALPHA workflow if alpha_mode is enabled.
-    
+    Route to ALPHA workflow, Scenario workflow, or normal RAG.
+
+    Priority:
+        1. alpha_mode  → "alpha"   (buy-timing ALPHA Framework)
+        2. scenario_mode → "scenario" (Bull/Bear/Base scenario analysis)
+        3. else        → "normal"  (standard RAG pipeline)
+
     Returns:
-        str: "alpha" if alpha_mode is True, else "normal"
+        str: "alpha" | "scenario" | "normal"
     """
     alpha_mode = state.get("alpha_mode", False)
-    
+    scenario_mode = state.get("scenario_mode", False)
+
     if alpha_mode:
         print(" Routing to ALPHA Framework workflow")
         return "alpha"
+    elif scenario_mode:
+        print(" Routing to Scenario (Bull/Bear/Base) workflow")
+        return "scenario"
     else:
         print(" Routing to normal RAG workflow")
         return "normal"

@@ -75,3 +75,7 @@ class GraphState(TypedDict):
     alpha_mode: bool  # Whether this is an ALPHA Framework query (buy timing analysis)
     alpha_dimensions: Dict[str, Any]  # Retrieved data for each ALPHA dimension
     alpha_report: str  # Final ALPHA report combining all dimensions
+    # Scenario Framework fields (Bull / Bear / Base)
+    scenario_mode: bool  # Whether this is a Bull/Bear/Base scenario query
+    scenario_data: Dict[str, Any]  # Web-collected data buckets for scenario analysis
+    scenario_report: str  # Final scenario report combining all three cases

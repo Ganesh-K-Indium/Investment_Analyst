@@ -1849,3 +1849,262 @@ Create a comprehensive ALPHA Framework report combining all dimensions.""")
     
     return prompt | llm | StrOutputParser()
 
+
+# ============================================================================
+# SCENARIO FRAMEWORK – Bull / Bear / Base Case Analysis
+# ============================================================================
+
+def get_scenario_bull_chain(llm):
+    """
+    Scenario Framework – Bull Case
+    Synthesises upside catalysts, optimistic analyst targets, and growth drivers.
+    """
+    from schemas.models import ScenarioCaseOutput
+    structured_llm = llm.with_structured_output(ScenarioCaseOutput)
+
+    SYSTEM_PROMPT = """You are a senior equity research analyst building the BULL CASE for a stock.
+
+**Your task**: Given web-sourced analyst reports, brokerage research, credit-rating commentary,
+and company data, construct the most credible upside scenario.
+
+**Focus areas**:
+1. Highest analyst price targets from named brokerages (Goldman Sachs, Morgan Stanley, etc.)
+2. Revenue / earnings growth catalysts (new products, market expansion, margin improvement)
+3. Macro tailwinds (interest-rate cuts, sector rotation, favourable regulation)
+4. Competitive advantages that could compound above consensus
+5. Any positive credit-rating actions or outlooks
+
+**Output requirements**:
+- price_target: highest credible price target seen in the data (e.g. "$350")
+- upside_downside: estimated % upside from current levels (e.g. "+40%")
+- key_drivers: 3-5 specific, named catalysts
+- assumptions: 2-4 optimistic assumptions that must hold for bull case to play out
+- probability: your estimated probability (e.g. "25%")
+- analysis: max 150 words narrative — be specific, cite brokerage names where available
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Ticker: {ticker}
+
+Analyst & Research Data:
+{analyst_data}
+
+Valuation & Fundamentals Data:
+{valuation_data}
+
+Growth & Catalyst Data:
+{catalyst_data}
+
+Construct the BULL CASE scenario. Be specific and cite sources where possible.""")
+    ])
+
+    return prompt | structured_llm
+
+
+def get_scenario_bear_chain(llm):
+    """
+    Scenario Framework – Bear Case
+    Synthesises downside risks, pessimistic analyst targets, and headwinds.
+    """
+    from schemas.models import ScenarioCaseOutput
+    structured_llm = llm.with_structured_output(ScenarioCaseOutput)
+
+    SYSTEM_PROMPT = """You are a senior equity research analyst building the BEAR CASE for a stock.
+
+**Your task**: Given web-sourced analyst reports, brokerage research, credit-rating commentary,
+and company data, construct the most credible downside scenario.
+
+**Focus areas**:
+1. Lowest analyst price targets and any sell / underweight ratings from named brokerages
+2. Key risks: competitive threats, margin compression, regulatory headwinds, leverage
+3. Macro headwinds (rising rates, recession risk, FX, commodity costs)
+4. Credit-rating downgrade risks or negative outlook actions
+5. Any structural challenges (disruption, market-share loss, ESG concerns)
+
+**Output requirements**:
+- price_target: lowest credible price target seen in the data (e.g. "$120")
+- upside_downside: estimated % downside from current levels (e.g. "-30%")
+- key_drivers: 3-5 specific risks or headwinds
+- assumptions: 2-4 pessimistic assumptions that must hold for bear case to materialise
+- probability: your estimated probability (e.g. "20%")
+- analysis: max 150 words narrative — be specific, cite brokerage names where available
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Ticker: {ticker}
+
+Analyst & Research Data:
+{analyst_data}
+
+Risk & Headwind Data:
+{risk_data}
+
+Credit Rating Data:
+{credit_data}
+
+Construct the BEAR CASE scenario. Be specific and cite sources where possible.""")
+    ])
+
+    return prompt | structured_llm
+
+
+def get_scenario_base_chain(llm):
+    """
+    Scenario Framework – Base Case
+    Synthesises consensus analyst estimates and moderate assumptions.
+    """
+    from schemas.models import ScenarioCaseOutput
+    structured_llm = llm.with_structured_output(ScenarioCaseOutput)
+
+    SYSTEM_PROMPT = """You are a senior equity research analyst building the BASE CASE for a stock.
+
+**Your task**: Given web-sourced analyst reports, brokerage research, and company data,
+construct the most probable consensus scenario.
+
+**Focus areas**:
+1. Median / consensus analyst price target from the data
+2. Consensus revenue and earnings growth expectations
+3. Steady-state margin assumptions (no extreme expansion or contraction)
+4. Current credit rating and stable outlook
+5. Moderate macro assumptions (soft landing, gradual rate normalisation)
+
+**Output requirements**:
+- price_target: consensus / median price target seen in the data (e.g. "$210")
+- upside_downside: estimated % from current levels based on consensus (e.g. "+12%")
+- key_drivers: 3-5 key assumptions underpinning the base case
+- assumptions: 2-4 moderate assumptions that represent consensus thinking
+- probability: your estimated probability (e.g. "50%")
+- analysis: max 150 words narrative — be specific, reference consensus data where available
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Ticker: {ticker}
+
+Analyst Consensus Data:
+{analyst_data}
+
+Valuation & Fundamentals Data:
+{valuation_data}
+
+Macro & Sector Data:
+{macro_data}
+
+Construct the BASE CASE scenario. Be specific and reference consensus data where available.""")
+    ])
+
+    return prompt | structured_llm
+
+
+def get_scenario_report_combiner_chain(llm):
+    """
+    Combines Bull / Bear / Base cases into a final structured scenario report.
+    """
+    SYSTEM_PROMPT = """You are a senior investment analyst producing a final Bull / Bear / Base scenario report.
+
+**Report structure** (use markdown, keep it clear and actionable):
+
+# Bull / Bear / Base Scenario Analysis: {ticker}
+
+## Analyst Consensus Snapshot
+[Summarise the analyst ratings breakdown, consensus price target, and key brokerage views
+sourced from the data. Mention specific brokerages by name where available.]
+
+## Credit Ratings
+[Summarise current credit ratings from S&P, Moody's, Fitch, or any other agencies found.
+If not available, state "Not found in available sources."]
+
+---
+
+## Bull Case — {bull_upside} upside
+**Price Target**: {bull_target}  |  **Probability**: {bull_probability}
+
+**Key Drivers**:
+{bull_drivers}
+
+**Core Assumptions**:
+{bull_assumptions}
+
+**Analysis**:
+{bull_analysis}
+
+---
+
+## Base Case — {base_upside} (consensus)
+**Price Target**: {base_target}  |  **Probability**: {base_probability}
+
+**Key Drivers**:
+{base_drivers}
+
+**Core Assumptions**:
+{base_assumptions}
+
+**Analysis**:
+{base_analysis}
+
+---
+
+## Bear Case — {bear_upside} downside
+**Price Target**: {bear_target}  |  **Probability**: {bear_probability}
+
+**Key Risks**:
+{bear_drivers}
+
+**Core Assumptions**:
+{bear_assumptions}
+
+**Analysis**:
+{bear_analysis}
+
+---
+
+## Key Risks to Monitor
+[Top 3-5 risks that could shift the scenario balance — be specific.]
+
+---
+*Data sourced from publicly available analyst reports, brokerage research summaries, and
+credit-rating agency commentary. This is for informational purposes only and does not
+constitute investment advice.*
+"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Ticker: {ticker}
+
+Bull Case:
+- Price Target: {bull_target}
+- Upside: {bull_upside}
+- Probability: {bull_probability}
+- Key Drivers: {bull_drivers}
+- Assumptions: {bull_assumptions}
+- Analysis: {bull_analysis}
+
+Base Case:
+- Price Target: {base_target}
+- Upside/Downside: {base_upside}
+- Probability: {base_probability}
+- Key Drivers: {base_drivers}
+- Assumptions: {base_assumptions}
+- Analysis: {base_analysis}
+
+Bear Case:
+- Price Target: {bear_target}
+- Downside: {bear_upside}
+- Probability: {bear_probability}
+- Key Risks: {bear_drivers}
+- Assumptions: {bear_assumptions}
+- Analysis: {bear_analysis}
+
+Analyst Consensus Summary:
+{analyst_summary}
+
+Credit Ratings Summary:
+{credit_summary}
+
+Produce the final comprehensive scenario report.""")
+    ])
+
+    return prompt | llm | StrOutputParser()
+
