@@ -222,16 +222,32 @@ class ChatService:
         # 3. LLM Setup
         llm = ChatOpenAI(model=llm_model, temperature=0.1)
         prompt = ChatPromptTemplate.from_template("""
-        Summarize the key topics, questions asked, and main insights from this investment analysis conversation.
-        Focus on portfolio analysis, stock insights, and actionable takeaways.
-        IMPORTANT: List all chart URLs found in the conversation in a separate section.
-        
-        Keep summary concise (2-4 sentences) but comprehensive. Use bullet points for clarity.
-        
-        Conversation:
-        {conversation}
-        
-        Summary:""")
+            Generate a structured report summarizing this investment analysis conversation.
+
+            Focus on portfolio analysis, stock insights, actionable takeaways, and all relevant context.
+
+            IMPORTANT: 
+            - List all chart URLs found in the conversation in a separate section.
+            - In key topics, include comprehensive context from the questions (e.g., if questions mention timelines like 30 & 60 days chart plottings, explicitly note "Timeline: 30-day and 60-day chart generation" within the paragraph).
+
+            Structure the report exactly as follows:
+
+            ## Key Topics
+            A single comprehensive paragraph (3-5 sentences) covering ONLY the main topics and context extracted directly from the questions asked, including timelines, stocks, metrics, and analysis requests.
+            ## Main Insights
+            Comprehensive summary of key portfolio/stock takeaways and detailed actionable recommendations.
+
+            ## Charts
+            - List all chart URLs verbatim.
+
+            ## Questions Asked
+            - Raw exact text of each question from the conversation, one per bullet.
+
+            Conversation:
+            {conversation}
+
+            Report:
+        """)
         
         chain = prompt | llm | StrOutputParser()
         
@@ -250,6 +266,142 @@ class ChatService:
         except Exception as e:
             # Consider logging the error here instead of just returning a string
             return f"Summary generation failed: {str(e)}"
+
+    @staticmethod
+    def generate_consolidated_summary(
+        db: Session,
+        session_ids: List[str],
+        max_messages_per_session: int = 30,
+        llm_model: str = "gpt-4o-mini"
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Generate a single consolidated summary across multiple chat sessions.
+
+        Agent type and focus are auto-detected from each session's agent_type +
+        session_metadata.type:
+          - AgentType.QUANT                          → "quant"
+          - AgentType.RAG + metadata.type="compare"  → "compare"
+          - AgentType.RAG + metadata.type="ask"      → "rag"
+
+        Args:
+            db: Database session
+            session_ids: List of session identifiers to consolidate
+            max_messages_per_session: Max messages to pull per session
+            llm_model: LLM model for summarization
+
+        Returns:
+            Dict {"summary": str, "detected_type": str}, or None if no valid sessions
+        """
+        sessions_data = []
+
+        for session_id in session_ids:
+            chat_session = db.query(ChatSession).filter(
+                ChatSession.session_id == session_id
+            ).first()
+
+            if not chat_session:
+                continue
+
+            messages = ChatService.get_session_messages(
+                db=db,
+                session_id=session_id,
+                limit=max_messages_per_session
+            )
+
+            if not messages:
+                continue
+
+            # Detect session type from metadata first, then agent_type enum
+            meta = chat_session.session_metadata or {}
+            meta_type = meta.get("type", "").lower()  # "ask", "compare", or ""
+            if chat_session.agent_type == AgentType.QUANT:
+                session_type = "quant"
+            elif meta_type == "compare":
+                session_type = "compare"
+            else:
+                session_type = "rag"
+
+            conversation = []
+            for msg in reversed(messages):
+                role = "Human" if msg.role == "user" else "Assistant"
+                content = msg.content
+                if msg.message_metadata:
+                    metadata = msg.message_metadata if isinstance(msg.message_metadata, dict) else {}
+                    if metadata.get("chart_url"):
+                        content += f"\n[Chart URL: {metadata['chart_url']}]"
+                    if metadata.get("chart_filename"):
+                        content += f"\n[Chart File: {metadata['chart_filename']}]"
+                conversation.append(f"{role}: {content}")
+
+            sessions_data.append({
+                "session_id": session_id,
+                "title": chat_session.title or session_id,
+                "session_type": session_type,
+                "conversation": "\n\n".join(conversation[-15:])
+            })
+
+        if not sessions_data:
+            return None
+
+        # Determine dominant type by majority across sessions
+        type_counts: Dict[str, int] = {}
+        for s in sessions_data:
+            type_counts[s["session_type"]] = type_counts.get(s["session_type"], 0) + 1
+        detected_type = max(type_counts, key=lambda t: type_counts[t])
+
+        # Build combined sessions block
+        sessions_text = ""
+        for i, session in enumerate(sessions_data, 1):
+            sessions_text += f"\n\n### Session {i}: {session['title']}\n"
+            sessions_text += session["conversation"]
+
+        if detected_type == "compare":
+            focus = "comparative stock/company analysis, highlighting differences, similarities, and relative metrics across entities"
+        elif detected_type == "quant":
+            focus = "quantitative analysis, technical indicators, chart patterns, and numerical metrics"
+        else:
+            focus = "document-based research, portfolio analysis, and knowledge base insights"
+
+        llm = ChatOpenAI(model=llm_model, temperature=0.1)
+        prompt = ChatPromptTemplate.from_template("""
+            Generate a consolidated investment analysis report from multiple chat sessions.
+            Focus on: {focus}
+
+            IMPORTANT:
+            - Synthesize insights across all sessions, not just list them separately.
+            - List all chart URLs found across all sessions in a dedicated section.
+            - Note recurring themes, conflicting findings, and overall conclusions.
+
+            Structure the report exactly as follows:
+
+            ## Overview
+            A single paragraph summarizing the combined scope and purpose across all sessions.
+
+            ## Key Topics (Across All Sessions)
+            A comprehensive paragraph covering all major topics, timelines, stocks/assets, and analysis requests found across sessions.
+
+            ## Consolidated Insights
+            Synthesized takeaways combining findings from all sessions — patterns, trends, and actionable recommendations.
+
+            ## Charts
+            - List all chart URLs verbatim from all sessions.
+
+            ## Questions Asked (All Sessions)
+            - All unique questions from all sessions, one per bullet.
+
+            Sessions:
+            {sessions_text}
+
+            Consolidated Report:
+        """)
+
+        chain = prompt | llm | StrOutputParser()
+
+        try:
+            summary = chain.invoke({"focus": focus, "sessions_text": sessions_text}).strip()
+            return {"summary": summary, "detected_type": detected_type}
+        except Exception as e:
+            return {"summary": f"Consolidated summary generation failed: {str(e)}", "detected_type": detected_type}
 
     # ==================== Chat Session Management ====================
     
