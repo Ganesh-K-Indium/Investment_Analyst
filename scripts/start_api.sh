@@ -214,7 +214,7 @@ start_api() {
     if [ "$DEV_MODE" = true ]; then
         print_info "Development mode: Auto-reload enabled"
         echo ""
-        python -m uvicorn app.main:app --reload --port $API_PORT --host 0.0.0.0
+        python -m uvicorn app.main:app --reload --reload-dir app --reload-dir rag --reload-dir quant --reload-dir schemas --reload-dir ingestion --port $API_PORT --host 0.0.0.0
     else
         print_info "Production mode"
         echo ""
