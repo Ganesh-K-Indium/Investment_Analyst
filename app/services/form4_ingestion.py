@@ -13,12 +13,12 @@ from typing import Optional
 
 from sqlalchemy import select
 
-# Add ingestion/Form4 Ingestion/ to sys.path so we can import fetch.py and parse.py.
+# Add ingestion/Form4_Ingestion/ to sys.path so we can import fetch.py and parse.py.
 # settings.py (imported by fetch.py) lives at the project root, which is already on
 # sys.path when the FastAPI app runs.
 _form4_dir = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "ingestion", "Form4 Ingestion"
+    "ingestion", "Form4_Ingestion"
 )
 if _form4_dir not in sys.path:
     sys.path.insert(0, _form4_dir)
@@ -96,7 +96,7 @@ def run_form4_ingestion(
     # ------------------------------------------------------------------ #
     # 1. Fetch all filing XML URLs from SEC EDGAR (paginated)             #
     # ------------------------------------------------------------------ #
-    xml_urls = fetcher.fetch_latest_filings(ticker=ticker)
+    xml_urls = fetcher.fetch_latest_filings(ticker=ticker, start_date=start_date, end_date=end_date)
 
     if not xml_urls:
         logger.warning(f"No Form 4 filings found on SEC EDGAR for '{ticker}'.")

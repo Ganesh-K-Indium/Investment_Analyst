@@ -1,7 +1,8 @@
 import requests
 import time
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from datetime import date, datetime
 from settings import SEC_USER_AGENT, SEC_REQUEST_RATE_LIMIT, SEC_BASE_URL
 
 logger = logging.getLogger(__name__)
@@ -64,10 +65,11 @@ class SecEdgarFetcher:
             logger.error(f"Error converting ticker to CIK: {e}")
             return None
 
-    def fetch_latest_filings(self, ticker: Optional[str] = None, limit: Optional[int] = None) -> List[str]:
+    def fetch_latest_filings(self, ticker: Optional[str] = None, start_date: Optional[date] = None, end_date: Optional[date] = None, limit: Optional[int] = None) -> List[str]:
         """
-        Fetches ALL available Form 4 filing URLs with pagination.
-        SEC EDGAR returns max ~40 results per page, so we paginate until no more data.
+        Fetches ALL available Form 4 filing URLs with pagination within the specified date range.
+        SEC EDGAR returns max ~40 results per page, so we paginate until no more data
+        or until we hit filings older than start_date.
         
         Returns a list of URLs to the XML files (latest to oldest).
         """
@@ -109,15 +111,18 @@ class SecEdgarFetcher:
                 response = requests.get(self.BASE_URL, params=params, headers=self.headers)
                 response.raise_for_status()
                 
-                batch_urls = self._extract_xml_links_from_atom(response.text)
+                batch_urls, num_entries, stop_pagination = self._extract_xml_links_from_atom(response.text, start_date, end_date)
                 
-                if not batch_urls:
-                    logger.info(f"No more filings found. Total fetched: {len(all_xml_urls)}")
+                if num_entries == 0:
+                    logger.info(f"No more filings found in SEC feed. Total fetched: {len(all_xml_urls)}")
                     break
                 
                 all_xml_urls.extend(batch_urls)
-                start += len(batch_urls)
-                logger.info(f"Fetched page (start={start - len(batch_urls)}): got {len(batch_urls)} filings. Total so far: {len(all_xml_urls)}")
+                start += num_entries
+                logger.info(f"Fetched page (start={start - num_entries}): got {num_entries} feed items, yielded {len(batch_urls)} valid filings. Total valid so far: {len(all_xml_urls)}")
+                
+                if stop_pagination or num_entries < PAGE_SIZE:
+                    break
                 
             except requests.RequestException as e:
                 logger.error(f"Error fetching filings (page start={start}): {e}")
@@ -125,21 +130,53 @@ class SecEdgarFetcher:
         
         return all_xml_urls
 
-    def _extract_xml_links_from_atom(self, atom_content: str) -> List[str]:
+    def _extract_xml_links_from_atom(self, atom_content: str, start_date: Optional[date] = None, end_date: Optional[date] = None) -> Tuple[List[str], int, bool]:
         """
         Extracts the link to the filing index from the ATOM feed, 
         then fetches that index to find the primary XML file.
+        Returns a tuple of (lists of xml_urls, number of atom entries parsed, boolean to stop pagination).
         """
         import xml.etree.ElementTree as ET
         
         links = []
+        num_entries = 0
+        stop_pagination = False
+        
         try:
             # Remove namespace for easier parsing
             atom_content = atom_content.replace('xmlns="http://www.w3.org/2005/Atom"', '')
             root = ET.fromstring(atom_content)
             
             entries = root.findall('entry')
+            num_entries = len(entries)
+            
             for entry in entries:
+                # 1. Check title to filter out non Form 4/4A (e.g. 424B2)
+                title_node = entry.find('title')
+                title = title_node.text.strip() if title_node is not None and title_node.text else ""
+                if not (title.startswith('4 ') or title.startswith('4/A ')):
+                    continue
+                
+                # 2. Check date
+                updated_node = entry.find('updated')
+                if updated_node is not None and updated_node.text:
+                    # e.g. "2026-02-25T19:17:50-05:00" -> extract "YYYY-MM-DD"
+                    updated_str = updated_node.text[:10]
+                    try:
+                        filing_date = datetime.strptime(updated_str, '%Y-%m-%d').date()
+                        
+                        if start_date and filing_date < start_date:
+                            logger.info(f"Found filing date {filing_date} older than start_date {start_date}. Stopping pagination.")
+                            stop_pagination = True
+                            break
+                            
+                        if end_date and filing_date > end_date:
+                            # Skip this record, it's too new
+                            continue
+                            
+                    except ValueError:
+                        pass
+                
                 link_node = entry.find('link')
                 if link_node is not None:
                     index_url = link_node.get('href')
@@ -152,7 +189,7 @@ class SecEdgarFetcher:
         except Exception as e:
             logger.error(f"Error parsing ATOM feed: {e}")
             
-        return links
+        return links, num_entries, stop_pagination
 
     def _get_primary_document_url(self, index_url: str) -> Optional[str]:
         """

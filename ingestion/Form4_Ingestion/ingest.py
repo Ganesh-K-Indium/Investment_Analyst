@@ -25,7 +25,7 @@ logger.addHandler(console_handler)
 try:
     from settings import LOG_LEVEL
     from sqlalchemy import select
-    from database import reset_db, get_db, Form4Transaction, init_db
+    from rag.utils.Insights_Form4.database import reset_db, get_db, Form4Transaction, init, init_db
     from fetch import SecEdgarFetcher
     from parse import Form4Parser
     from analytics import TransactionAnalytics
@@ -87,10 +87,6 @@ def is_common_stock(security_title: str, is_derivative: bool) -> bool:
     return False
 
 
-# Date cutoff: fetch all filings from this date forward
-CUTOFF_DATE = date(2025, 1, 1)
-
-
 def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_database=False):
     """
     Fetches and ingests ALL Form 4 filings from SEC EDGAR since start_date.
@@ -107,7 +103,7 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
         return
 
     if start_date is None:
-        start_date = date(2025, 1, 1)
+        start_date = date(2026, 2, 10)
     if end_date is None:
         end_date = date.today()
 
@@ -144,11 +140,13 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
     logger.info(f"Fetching all filings for {ticker}...")
     
     try:
-        # We fetch all filing URLs for pagination. The fetcher could be optimized to stop at a date,
-        # but for simplicity, we'll fetch them and stop processing when we hit an older date.
-        # It's better to process a reasonable limit so we don't query 10 years of data randomly.
-        xml_urls = fetcher.fetch_latest_filings(ticker=ticker)
-        logger.info(f"SEC returned {len(xml_urls)} filing URLs total. Processing up to date {start_date}.")
+        xml_urls = fetcher.fetch_latest_filings(
+            ticker=ticker, 
+            start_date=start_date, 
+            end_date=end_date,
+            limit=500
+        )
+        logger.info(f"SEC returned {len(xml_urls)} valid Form 4 filing URLs total within date range {start_date} to {end_date}.")
     except Exception as e:
         logger.error(f"Failed to fetch filings from SEC: {e}")
         return
@@ -193,21 +191,6 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
                     logger.warning(f"  -> Failed to parse XML. Skipping.")
                     fail_count += 1
                     continue
-                
-                # Date Check: Stop if filing is older than start_date, skip if newer than end_date
-                period_of_report = data.get('period_of_report', '')
-                if period_of_report:
-                    try:
-                        filing_date_obj = datetime.strptime(period_of_report, '%Y-%m-%d').date()
-                        if filing_date_obj < start_date:
-                            logger.info(f"  -> Filing date {filing_date_obj} is before start date {start_date}. Stopping.")
-                            break
-                        if filing_date_obj > end_date:
-                            logger.info(f"  -> Filing date {filing_date_obj} is after end date {end_date}. Skipping.")
-                            skip_count += 1
-                            continue
-                    except ValueError:
-                        pass
                 
                 # Save XML file locally for verification
                 filing_date = None
@@ -287,13 +270,5 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
         logger.error(f"Failed to calculate analytics: {e}")
 
 if __name__ == "__main__":
-    from midcap_tickers import MIDCAP_TICKERS
-    import time
-    
-    for ticker_input in MIDCAP_TICKERS:
-        try:
-            logger.info(f"\n{'='*50}\nStarting ingestion for {ticker_input}\n{'='*50}")
-            run_form4_ingestion(ticker=ticker_input)
-            time.sleep(2) # Pause briefly between companies to be polite to the SEC API
-        except Exception as e:
-            logger.error(f"Failed to complete ingestion for {ticker_input}: {e}")
+    ticker_input = "GOOGL" #input("Enter ticker symbol (e.g. NVDA, AAPL, MSFT): ").strip().upper()
+    run_form4_ingestion(ticker=ticker_input)

@@ -23,12 +23,15 @@ from app.database.connection import engine, SessionLocal, get_db  # noqa: E402
 from app.database.models import Base, Form4Transaction  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
-__all__ = ['Form4Transaction', 'get_db', 'init_db', 'reset_db', 'get_session']
-
-
 def init_db():
     """Initialize the database by creating all tables (including form4_transactions)."""
     Base.metadata.create_all(bind=engine)
+
+
+# Alias for backward compatibility with existing scripts
+init = init_db
+
+__all__ = ['Form4Transaction', 'get_db', 'init_db', 'init', 'reset_db', 'get_session']
 
 
 def reset_db():

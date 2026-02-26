@@ -30,11 +30,8 @@ class Form4IngestRequest(BaseModel):
     )
     start_date: Optional[date] = Field(
         None,
-        description="Earliest filing date to ingest (YYYY-MM-DD). Defaults to 2025-01-01.",
-    )
-    end_date: Optional[date] = Field(
-        None,
-        description="Latest filing date to ingest (YYYY-MM-DD). Defaults to today.",
+        description="Fetch filings from this date onward (YYYY-MM-DD). Defaults to 2025-01-01.",
+        examples=["2025-01-01"],
     )
 
 
@@ -66,7 +63,8 @@ async def ingest_form4(request: Form4IngestRequest):
     """
     Import Form 4 insider trading filings from SEC EDGAR for a specific ticker.
 
-    - Paginates through all Form 4 filings on SEC EDGAR for the issuer
+    - Fetches all filings from `start_date` to today
+    - Paginates through SEC EDGAR results (newest first)
     - Filters for non-derivative (common stock) transactions only
     - Deduplicates by SEC accession number — safe to call repeatedly
     - Stores results in `portfolios.db` (`form4_transactions` table)
@@ -83,7 +81,6 @@ async def ingest_form4(request: Form4IngestRequest):
         result = run_form4_ingestion(
             ticker=ticker,
             start_date=request.start_date,
-            end_date=request.end_date,
         )
         return Form4IngestResponse(**result)
 
