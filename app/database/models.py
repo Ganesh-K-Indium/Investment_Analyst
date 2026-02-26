@@ -1,7 +1,7 @@
 """
 Database models for portfolio and session management
 """
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Text, Boolean, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Text, Boolean, Enum as SQLEnum, Float, Date, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -108,21 +108,47 @@ class ChatMessage(Base):
 class Integration(Base):
     """Integration model to store data source connector configurations"""
     __tablename__ = "integrations"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, nullable=False, index=True)
     vendor = Column(String, nullable=False)  # sharepoint, google_drive, azure_blob, aws_s3, sftp
     name = Column(String, nullable=False)  # User-friendly name for this integration
     url = Column(String, nullable=True)  # Connection URL (for SharePoint, Azure, etc.)
-    
+
     # Authentication credentials (stored as JSON for flexibility)
     credentials = Column(JSON, nullable=False)  # {client_id, client_secret, user_id, folder_path, etc}
-    
+
     # Connection status
     status = Column(String, default="active")  # active, disconnected, error
     last_sync = Column(DateTime, nullable=True)
-    
+
     # Metadata
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Form4Transaction(Base):
+    """SEC Form 4 insider trading transaction model"""
+    __tablename__ = 'form4_transactions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    accession_number = Column(String, index=True, nullable=False)  # Unique SEC filing ID
+    issuer_symbol = Column(String, index=True, nullable=False)
+    issuer_name = Column(String, nullable=True)
+    rpt_owner_name = Column(String, index=True, nullable=False)
+    rpt_owner_title = Column(String, nullable=True)
+    is_director = Column(Boolean, default=False)
+    is_officer = Column(Boolean, default=False)
+    is_ten_percent_owner = Column(Boolean, default=False)
+    transaction_date = Column(Date, index=True, nullable=True)
+    transaction_code = Column(String, nullable=True)
+    transaction_shares = Column(Float, nullable=True)
+    transaction_price_per_share = Column(Float, nullable=True)
+    transaction_acquired_disposed_code = Column(String, nullable=True)  # A or D
+    security_title = Column(String, nullable=True)
+    transaction_value = Column(Float, nullable=True)  # shares * price
+
+    __table_args__ = (
+        Index('idx_symbol_date', 'issuer_symbol', 'transaction_date'),
+    )

@@ -15,6 +15,7 @@ from app.api.rag import router as rag_router
 from app.api.integrations import router as integrations_router
 from app.api.quant import router as quant_router
 from app.api.chats import router as chats_router
+from app.api.form4 import router as form4_router
 import app.api.rag as rag_router_module
 import app.api.quant as quant_router_module
 from app.services.stock_agent import initialize_stock_agents, cleanup_stock_agents
@@ -109,6 +110,7 @@ async def startup_event():
     print("   - Stock Market Analysis: /quant/query")
     print("   - Chat History: /chats")
     print("   - Data Integrations: /integrations")
+    print("   - Form 4 Insider Trading: /form4")
     print()
     print("TIP: Open static/index.html in browser for web interface")
     print("="*70 + "\n")
@@ -141,6 +143,7 @@ app.include_router(rag_router)
 app.include_router(integrations_router)
 app.include_router(quant_router)
 app.include_router(chats_router)
+app.include_router(form4_router)
 
 
 @app.get("/")

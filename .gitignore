@@ -8,3 +8,5 @@ output/
 *.db
 .DS_Store
 *.png
+/xml_filings
+/pdf_filings
