@@ -157,6 +157,20 @@ Logs are stored in:
 
 ## 🔧 Troubleshooting
 
+### API Continuously Restarting in Dev Mode
+
+If you see messages like `WatchFiles detected changes` and the server keeps reloading, this is likely due to file watcher detecting changes in `venv/`. This is fixed by the startup scripts which automatically exclude:
+- `venv/*` - Virtual environment packages
+- `*.pyc` - Compiled Python files
+- `__pycache__/*` - Python cache directories
+
+If using uvicorn directly, specify only the directories to watch:
+```bash
+python -m uvicorn app.main:app --reload --reload-dir app --reload-dir rag --reload-dir quant --reload-dir schemas --reload-dir ingestion
+```
+
+This approach explicitly watches only your source code directories and completely avoids watching `venv/`.
+
 ### MCP Servers Won't Start
 
 ```bash

@@ -91,6 +91,20 @@ class ChatSummaryResponse(BaseModel):
     summary_updated_at: str
     message_count: int
 
+
+class ConsolidatedSummaryRequest(BaseModel):
+    session_ids: List[str] = Field(..., min_length=1, description="List of session IDs to consolidate")
+    max_messages_per_session: Optional[int] = Field(30, ge=5, le=100, description="Max messages per session")
+    llm_model: Optional[str] = Field("gpt-4o-mini", description="LLM model for summarization")
+
+
+class ConsolidatedSummaryResponse(BaseModel):
+    session_ids: List[str]
+    detected_type: str  # auto-detected from session_metadata: 'rag', 'compare', or 'quant'
+    consolidated_summary: str
+    sessions_included: int
+    generated_at: str
+
 @router.get("/session/{session_id}/summary", response_model=ChatSummaryResponse)
 def get_session_summary(
     session_id: str,
@@ -155,6 +169,50 @@ def generate_session_summary(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
+
+
+@router.post("/sessions/consolidated-summary", response_model=ConsolidatedSummaryResponse)
+def generate_consolidated_summary(
+    request: ConsolidatedSummaryRequest,
+    db: Session = Depends(get_db_session)
+):
+    """
+    Generate a single consolidated summary across multiple chat sessions.
+
+    Agent type (rag / compare / quant) is auto-detected from each session's
+    agent_type enum and session_metadata.type — no need to pass it explicitly.
+
+    Request Body:
+    - session_ids: List of session/thread IDs to consolidate (min 1)
+    - max_messages_per_session: Messages to include per session (5-100, default 30)
+    - llm_model: LLM model to use (default: gpt-4o-mini)
+    """
+    try:
+        result = ChatService.generate_consolidated_summary(
+            db=db,
+            session_ids=request.session_ids,
+            max_messages_per_session=request.max_messages_per_session,
+            llm_model=request.llm_model
+        )
+
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail="No valid sessions found for the provided IDs"
+            )
+
+        return ConsolidatedSummaryResponse(
+            session_ids=request.session_ids,
+            detected_type=result["detected_type"],
+            consolidated_summary=result["summary"],
+            sessions_included=len(request.session_ids),
+            generated_at=datetime.utcnow().isoformat()
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Consolidated summary generation failed: {str(e)}")
 
 
 @router.get("/user/{user_id}/summaries", response_model=SummariesByAgentResponse)

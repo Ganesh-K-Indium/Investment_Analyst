@@ -38,4 +38,4 @@ echo "Press Ctrl+C to stop the server"
 echo ""
 
 # Run the server
-python -m uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --reload-dir app --reload-dir rag --reload-dir quant --reload-dir schemas --reload-dir ingestion --port 8000

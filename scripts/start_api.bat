@@ -125,7 +125,7 @@ echo.
 pushd "%PROJECT_ROOT%"
 if "%DEV_MODE%"=="true" (
     echo [INFO] Development mode: Auto-reload enabled
-    python -m uvicorn app.main:app --reload --port %API_PORT% --host 0.0.0.0
+    python -m uvicorn app.main:app --reload --reload-dir app --reload-dir rag --reload-dir quant --reload-dir schemas --reload-dir ingestion --port %API_PORT% --host 0.0.0.0
 ) else (
     echo [INFO] Production mode
     python -m uvicorn app.main:app --port %API_PORT% --host 0.0.0.0
