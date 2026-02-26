@@ -125,3 +125,8 @@ cryptography>=42.0.0
 
 fastmcp 
 pytesseract
+
+
+lxml==5.1.0
+pytest==8.0.0
+psycopg2-binary>=2.9.0
