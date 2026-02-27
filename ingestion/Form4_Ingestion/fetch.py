@@ -4,6 +4,8 @@ import logging
 from typing import List, Optional, Tuple
 from datetime import date, datetime
 from settings import SEC_USER_AGENT, SEC_REQUEST_RATE_LIMIT, SEC_BASE_URL
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,13 @@ class SecEdgarFetcher:
         }
         self.last_request_time = 0
         self.rate_limit_delay = 1.0 / SEC_REQUEST_RATE_LIMIT
+        
+        # Robust session with retries for SEC's sporadic disconnects
+        self.session = requests.Session()
+        retries = Retry(total=5, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount('https://', adapter)
+        self.session.mount('http://', adapter)
 
     def _wait_for_rate_limit(self):
         current_time = time.time()
@@ -39,10 +48,10 @@ class SecEdgarFetcher:
         """
         try:
             self._wait_for_rate_limit()
-            response = requests.get(
+            response = self.session.get(
                 'https://www.sec.gov/files/company_tickers.json',
                 headers=self.headers,
-                timeout=10
+                timeout=15
             )
             response.raise_for_status()
             
@@ -108,7 +117,7 @@ class SecEdgarFetcher:
             
             self._wait_for_rate_limit()
             try:
-                response = requests.get(self.BASE_URL, params=params, headers=self.headers)
+                response = self.session.get(self.BASE_URL, params=params, headers=self.headers, timeout=15)
                 response.raise_for_status()
                 
                 batch_urls, num_entries, stop_pagination = self._extract_xml_links_from_atom(response.text, start_date, end_date)
@@ -197,7 +206,7 @@ class SecEdgarFetcher:
         """
         self._wait_for_rate_limit()
         try:
-            response = requests.get(index_url, headers=self.headers)
+            response = self.session.get(index_url, headers=self.headers, timeout=15)
             response.raise_for_status()
             
             # Helper to get filename from URL
@@ -246,7 +255,7 @@ class SecEdgarFetcher:
         logger.info(f"Fetching XML from: {url}")
         self._wait_for_rate_limit()
         try:
-            response = requests.get(url, headers=self.headers)
+            response = self.session.get(url, headers=self.headers, timeout=15)
             response.raise_for_status()
             if '<html' in response.text.lower()[:500]:
                 logger.error(f"Error: Fetched HTML instead of XML from {url}")
@@ -289,7 +298,7 @@ class SecEdgarFetcher:
         logger.info(f"Fetching filing doc from: {url}")
         self._wait_for_rate_limit()
         try:
-            response = requests.get(url, headers=self.headers)
+            response = self.session.get(url, headers=self.headers, timeout=20)
             response.raise_for_status()
             return response.content
         except requests.RequestException as e:

@@ -51,29 +51,23 @@ def analyze_transactions(all_data):
                 actual_value = amount * price
                 bought_value = 0
                 sold_value = 0
-                bought_shares = 0
-                sold_shares = 0
                 
                 signal_score = 0
                 if code.startswith('P'):
                     signal_score = actual_value # Dollar value bought
                     bought_value = actual_value
-                    bought_shares = amount
                 elif code.startswith('S'):
                     signal_score = -actual_value # Dollar value sold
                     sold_value = actual_value
-                    sold_shares = amount
                 
                 # Adjust for A/D if code is generic (like J or others, though usually P/S dominate)
                 # If pure Acquisition vs Disposition
                 elif ad == 'A':
                     signal_score = 0.1 * actual_value # Weak positive
                     bought_value = actual_value
-                    bought_shares = amount
                 elif ad == 'D':
                     signal_score = -0.1 * actual_value # Weak negative
                     sold_value = actual_value
-                    sold_shares = amount
                     
                 records.append({
                     "Issuer": issuer,
@@ -88,8 +82,6 @@ def analyze_transactions(all_data):
                     "Type": ad,
                     "ActualBought": bought_value,
                     "ActualSold": sold_value,
-                    "BoughtShares": bought_shares,
-                    "SoldShares": sold_shares,
                     "SignalValue": signal_score
                 })
             except (ValueError, TypeError):
@@ -114,10 +106,29 @@ def analyze_transactions(all_data):
         total_signal = group["SignalValue"].sum()
         buy_volume = group["ActualBought"].sum()
         sell_volume = group["ActualSold"].sum()
-        buy_shares_total = group["BoughtShares"].sum()
-        sell_shares_total = group["SoldShares"].sum()
-        actual_net_flow = buy_volume - sell_volume
         txn_count = len(group)
+        
+        # New calculation parameters for Acquired and Disposed shares
+        buy_txns = group[group["Type"] == 'A']
+        sell_txns = group[group["Type"] == 'D']
+        
+        total_acquired = buy_txns["Amount"].sum() if not buy_txns.empty else 0
+        total_disposed = sell_txns["Amount"].sum() if not sell_txns.empty else 0
+        
+        actual_net_flow = total_acquired - total_disposed
+        net_cash_flow = buy_volume - sell_volume
+        
+        acquired_txn_count = len(buy_txns)
+        disposed_txn_count = len(sell_txns)
+        
+        priced_buys = buy_txns[buy_txns["Price"] > 0]
+        priced_sells = sell_txns[sell_txns["Price"] > 0]
+        
+        total_priced_acquired = priced_buys["Amount"].sum() if not priced_buys.empty else 0
+        total_priced_disposed = priced_sells["Amount"].sum() if not priced_sells.empty else 0
+        
+        avg_acquired_price = buy_volume / total_priced_acquired if total_priced_acquired > 0 else 0
+        avg_disposed_price = sell_volume / total_priced_disposed if total_priced_disposed > 0 else 0
         
         # Prepare transaction list string
         txn_list_str = ""
@@ -174,44 +185,48 @@ def analyze_transactions(all_data):
             txn_list_str += f"- {row['Date']}: {row['Person']} ({row['Role']}) {row['Type']} {row['Amount']} shares at ${row['Price']} (Code: {row['Code']}) {behavior_note}\n"
             
         # Construct Prompt
-        system_prompt = """You are a Senior Investment Strategist. Your audience is general public.
-Your goal is to translate raw SEC filing data into plain-English investment signals.
-
-CONSTRAINTS:
-1. NO TECHNICAL JARGON: Never mention SEC transaction codes (e.g., F, M, A, S, G) or 'clustered blocks'.
-2. HUMAN TRANSLATION: Translate 'Code M' to 'Option Exercises' and 'Code F' to 'Tax-related sales'.
-3. NO GREETINGS: Output the report EXACTLY in the specified format.
-4. SIMPLE ENGLISH: Your audience has NO finance background. Avoid terms like 'net flow', 'equity compensation', 'disposition', or 'derivative securities'. Instead use everyday language — e.g., say 'company insiders sold more than they bought' instead of 'net negative flow', or 'a company executive was given shares as part of their salary' instead of 'equity award'. Write as if explaining to a friend who has never invested before."""
-
+        system_prompt = "You are an expert financial analyst. You must output your report EXACTLY in the specified format, with no additional conversational text or greetings."
         user_prompt = f"""
-Analyze insider trading for {issuer} ({ticker if ticker else 'Unknown Ticker'}).
-
-[INPUT DATA]
-- Net Flow: ${actual_net_flow:,.2f}
-- Buy Vol: ${buy_volume:,.2f}
-- Sell Vol: ${sell_volume:,.2f}
-- Transaction Count: {txn_count}
-- Transaction Details:
-{txn_list_str}
-{market_context}
-
-[REQUIRED FORMAT]
-Summary
-
-- <Brief summary of net flow and price action. Use 'Routine Liquidity' instead of referencing transaction code letters>
-
-- <Highlight significant individual or institutional moves without using SEC code letters>
-
-- <Overall sentiment: Distribution vs. Accumulation>
-
-Recommendation
-
-- <BUY, SELL, or HOLD/MIXED>.
-
-  - Rationale: <Explain the 'why'. Focus on the INTENT behind the trades—e.g., 'executives are covering tax bills' rather than mentioning code letters>
-
-  - For prospective buyers: <Actionable advice based on price levels and insider conviction>
-"""
+        Analyze the following insider trading activity for {issuer} ({ticker if ticker else 'Unknown Ticker'}).
+        
+        Overview:
+        - Transaction Count: {txn_count}
+        
+        Acquired Metrics:
+        - Total Acquired (Shares): {total_acquired:,.0f}
+        - Total Acquired (Dollars): ${buy_volume:,.2f}
+        - Transactions (Acquired): {acquired_txn_count}
+        - Average Acquired Price: ${avg_acquired_price:,.2f}
+        
+        Disposed Metrics:
+        - Total Disposed (Shares): {total_disposed:,.0f}
+        - Total Disposed (Dollars): ${sell_volume:,.2f}
+        - Transactions (Disposed): {disposed_txn_count}
+        - Average Disposed Price: ${avg_disposed_price:,.2f}
+        
+        {market_context}
+        
+        Detailed Transactions:
+        {txn_list_str}
+        
+        You must reply STRICTLY using the exact following format, including the blank lines for spacing:
+        
+        Summary
+        
+        - <Provide a bullet point briefly summarizing the total sales/buys, and average prices compared to market>
+        
+        - <Another bullet point with relevant transaction metrics>
+        
+        - <Another bullet point indicating whether it's mostly sales or buys>
+        
+        Recommendation
+        
+        - <BUY, SELL, or HOLD/MIXED>.
+        
+          - Rationale: <1-2 sentences explaining why based on the behavior (e.g., routine liquidity, panic selling, contrarian buying)>
+          
+          - For prospective buyers: <1 sentence with actionable advice for buyers>
+        """
         
         narrative = "AI Analysis Unsupported (No API Key)"
         recommendation = "UNKNOWN"
@@ -247,11 +262,16 @@ Recommendation
             "Recommendation": recommendation,
             "Reason": narrative, # Now holds the full AI narrative
             "Net_Inside_Flow": actual_net_flow,
+            "Net_Cash_Flow": net_cash_flow,
             "Total_Bought": buy_volume,
             "Total_Sold": sell_volume,
-            "Total_Bought_Shares": buy_shares_total,
-            "Total_Sold_Shares": sell_shares_total,
             "Transaction_Count": len(group),
+            "Total_Acquired_Shares": total_acquired,
+            "Total_Disposed_Shares": total_disposed,
+            "Acquired_Txn_Count": acquired_txn_count,
+            "Disposed_Txn_Count": disposed_txn_count,
+            "Avg_Acquired_Price": avg_acquired_price,
+            "Avg_Disposed_Price": avg_disposed_price,
             "Details": group[["Date", "Person", "Role", "Code", "Amount", "Price", "Type"]].to_dict('records')
         }
         
