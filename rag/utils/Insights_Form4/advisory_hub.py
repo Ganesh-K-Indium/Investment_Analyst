@@ -96,11 +96,17 @@ def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date =
             entry["relationship"] = build_relationship_list(row)
 
             if row.transaction_date and row.transaction_code and row.transaction_shares is not None:
+                price = row.transaction_price_per_share
+                price_str = (
+                    f"${price:,.2f}"
+                    if price and float(price) > 0
+                    else "N/A (grant/vest/exercise)"
+                )
                 entry["transactions"].append({
                     "date": str(row.transaction_date),
                     "code": row.transaction_code or "",
                     "amount": str(int(row.transaction_shares)),
-                    "price": str(row.transaction_price_per_share or 0),
+                    "price": price_str,
                     "acquired_disposed": row.transaction_acquired_disposed_code or "A"
                 })
 
@@ -166,23 +172,23 @@ def print_report(ticker: str, report: dict):
     for issuer, detail in report.items():
         if issuer in ["error", "status", "message"]: continue
         
-        print(f"Issuer: {issuer} [ {ticker} ] \n")
-        print(f"Recommendation: {detail.get('Recommendation', 'N/A')} \n")
-        print(f"Net Insider Flow (Shares): {detail.get('Net_Inside_Flow', 0):,.0f} \n")
-        print(f"Net Insider Flow (Dollars): ${detail.get('Net_Cash_Flow', 0):,.2f} \n")
-        print(f"Transaction Count: {detail.get('Transaction_Count', 0)} \n")
+        # print(f"Issuer: {issuer} [ {ticker} ] \n")
+        # print(f"Recommendation: {detail.get('Recommendation', 'N/A')} \n")
+        # print(f"Net Insider Flow (Shares): {detail.get('Net_Inside_Flow', 0):,.0f} \n")
+        # print(f"Net Insider Flow (Dollars): ${detail.get('Net_Cash_Flow', 0):,.2f} \n")
+        # print(f"Transaction Count: {detail.get('Transaction_Count', 0)} \n")
         
-        print("  --- Acquired Metrics --- \n")
-        print(f"Total Acquired (Shares): {detail.get('Total_Acquired_Shares', 0):,.0f} \n")
-        print(f"Total Acquired (Dollars): ${detail.get('Total_Bought', 0):,.2f} \n")
-        print(f"Transactions (Acquired): {detail.get('Acquired_Txn_Count', 0)} \n")
-        print(f"Average Acquired Price: ${detail.get('Avg_Acquired_Price', 0):,.2f} \n")
+        # print("  --- Acquired Metrics --- \n")
+        # print(f"Total Acquired (Shares): {detail.get('Total_Acquired_Shares', 0):,.0f} \n")
+        # print(f"Total Acquired (Dollars): ${detail.get('Total_Bought', 0):,.2f} \n")
+        # print(f"Transactions (Acquired): {detail.get('Acquired_Txn_Count', 0)} \n")
+        # print(f"Average Acquired Price: ${detail.get('Avg_Acquired_Price', 0):,.2f} \n")
         
-        print("  --- Disposed Metrics --- \n")
-        print(f"Total Disposed (Shares): {detail.get('Total_Disposed_Shares', 0):,.0f} \n")
-        print(f"Total Disposed (Dollars): ${detail.get('Total_Sold', 0):,.2f} \n")
-        print(f"Transactions (Disposed): {detail.get('Disposed_Txn_Count', 0)} \n")
-        print(f"Average Disposed Price: ${detail.get('Avg_Disposed_Price', 0):,.2f} \n")
+        # print("  --- Disposed Metrics --- \n")
+        # print(f"Total Disposed (Shares): {detail.get('Total_Disposed_Shares', 0):,.0f} \n")
+        # print(f"Total Disposed (Dollars): ${detail.get('Total_Sold', 0):,.2f} \n")
+        # print(f"Transactions (Disposed): {detail.get('Disposed_Txn_Count', 0)} \n")
+        # print(f"Average Disposed Price: ${detail.get('Avg_Disposed_Price', 0):,.2f} \n")
         print("  --- AI Analysis --- \n")
         reason = detail.get('Reason', 'No analysis available')
         print(f"{reason}\n")
@@ -190,7 +196,7 @@ def print_report(ticker: str, report: dict):
 if __name__ == "__main__":
     import sys
     
-    ticker = "AAPL"
+    ticker = "GOOGL"
     if not ticker:
         print("No ticker provided.")
         sys.exit(1)

@@ -3014,10 +3014,17 @@ def alpha_generate_report(state):
     def format_docs(docs):
         if not docs:
             return "No documents available."
-        return "\n\n---\n\n".join([
-            f"Source: {d.metadata.get('source_file', d.metadata.get('title', 'Unknown'))}\n{d.page_content[:500]}"
-            for d in docs[:5]  # Limit to avoid token overload
-        ])
+        parts = []
+        for d in docs[:5]:  # Limit to avoid token overload
+            is_form4 = d.metadata.get('content_type') == 'insider_trading'
+            source_label = (
+                "SEC Form 4 — Insider Trading Analysis"
+                if is_form4
+                else d.metadata.get('source_file', d.metadata.get('title', d.metadata.get('source', 'Unknown')))
+            )
+            char_limit = 1500 if is_form4 else 500
+            parts.append(f"Source: {source_label}\n{d.page_content[:char_limit]}")
+        return "\n\n---\n\n".join(parts)
     
     dimension_outputs = {}
     
@@ -3032,18 +3039,33 @@ def alpha_generate_report(state):
     
     for dim_key, chain_func, dim_name in dimensions:
         print(f" Generating {dim_name}...")
-        
+
         dim_data = alpha_dimensions.get(dim_key, {})
         docs = dim_data.get('documents', [])
-        
+
+        # For alignment: pass Form4 content as a dedicated variable so the
+        # LLM receives full data, while governance/MD&A docs go in {documents}.
+        invoke_kwargs = {
+            "company": ticker,
+            "ticker": ticker,
+            "documents": format_docs(
+                [d for d in docs if d.metadata.get('content_type') != 'insider_trading']
+            )
+        }
+        if dim_key == 'alignment':
+            form4_doc = next(
+                (d for d in docs if d.metadata.get('content_type') == 'insider_trading'),
+                None
+            )
+            invoke_kwargs['form4_analysis'] = (
+                form4_doc.page_content if form4_doc
+                else "No SEC Form 4 insider trading data available for this ticker."
+            )
+
         try:
             chain = chain_func(llm)
-            result = chain.invoke({
-                "company": ticker,
-                "ticker": ticker,
-                "documents": format_docs(docs)
-            })
-            
+            result = chain.invoke(invoke_kwargs)
+
             dimension_outputs[dim_key] = {
                 'analysis': result.analysis,
                 'key_points': result.key_points
@@ -3059,7 +3081,7 @@ def alpha_generate_report(state):
     
     # Combine into final report
     print("\n Combining dimensions into final report...")
-    
+
     try:
         combiner_chain = get_alpha_report_combiner_chain(llm)
         final_report = combiner_chain.invoke({
@@ -3072,7 +3094,7 @@ def alpha_generate_report(state):
             "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
         })
         print(f"    ✓ Final report: {len(final_report)} chars")
-        
+
     except Exception as e:
         print(f"    ✗ Error: {e}")
         final_report = f"# ALPHA Framework Analysis: {ticker}\n\nError generating report: {str(e)}"
