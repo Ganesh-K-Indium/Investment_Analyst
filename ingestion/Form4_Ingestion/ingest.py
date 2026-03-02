@@ -146,7 +146,15 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
 
     if not xml_urls:
         logger.warning("No filings found. Exiting.")
-        return
+        return {
+            "ticker": ticker,
+            "total_fetched": 0,
+            "saved": 0,
+            "skipped_duplicate": 0,
+            "failed": 0,
+            "date_range": {"start": str(start_date), "end": str(end_date)},
+            "message": f"No Form 4 filings found for {ticker} between {start_date} and {end_date}.",
+        }
 
     # Initialize counters
     success_count = 0

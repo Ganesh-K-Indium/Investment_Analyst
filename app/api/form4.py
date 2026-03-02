@@ -82,6 +82,8 @@ async def ingest_form4(request: Form4IngestRequest):
             ticker=ticker,
             start_date=request.start_date,
         )
+        if result is None:
+            raise RuntimeError("Ingestion pipeline returned no result (check logs for details).")
         return Form4IngestResponse(**result)
 
     except ValueError as exc:
