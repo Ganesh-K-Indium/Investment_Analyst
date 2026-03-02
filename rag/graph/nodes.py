@@ -422,27 +422,27 @@ def generate_segment_subqueries(companies: list) -> dict:
     for company in companies:
         # 1. Segment overview & structure
         sub_queries.append(
-            f"{company} reportable segments operating segments business segments segment overview segment structure segment description chief operating decision maker CODM"
+            f"{company} reportable segments operating segments business segments segment overview segment structure segment description chief operating decision maker CODM for years 2022, 2023 and 2024"
         )
         # 2. Segment financial performance
         sub_queries.append(
-            f"{company} segment revenue segment net sales segment results segment operating income segment profit segment EBITDA revenue by segment income by segment"
+            f"{company} segment revenue segment net sales segment results segment operating income segment profit segment EBITDA revenue by segment income by segment for years 2022, 2023 and 2024"
         )
         # 3. Segment reporting notes (ASC 280)
         sub_queries.append(
-            f"{company} note segment reporting reportable segments note ASC 280 segment disclosure segment accounting policy segment measurement basis"
+            f"{company} note segment reporting reportable segments note ASC 280 segment disclosure segment accounting policy segment measurement basis for years 2022, 2023 and 2024"
         )
         # 4. Product / business line disaggregation
         sub_queries.append(
-            f"{company} geographic segments product segments line of business disaggregation of revenue segment categories product line revenue"
+            f"{company} geographic segments product segments line of business disaggregation of revenue segment categories product line revenue for years 2022, 2023 and 2024"
         )
         # 5. Segment assets & capital allocation
         sub_queries.append(
-            f"{company} segment assets segment capital expenditure segment depreciation segment amortization assets by segment capex by segment long lived assets by segment"
+            f"{company} segment assets segment capital expenditure segment depreciation segment amortization assets by segment capex by segment long lived assets by segment for years 2022, 2023 and 2024"
         )
         # 6. Segment MD&A discussion
         sub_queries.append(
-            f"{company} segment performance discussion MD&A segment results drivers of segment growth segment margins segment trends segment outlook"
+            f"{company} segment performance discussion MD&A segment results drivers of segment growth segment margins segment trends segment outlook for years 2022, 2023 and 2024"
         )
 
     print(f"[SEGMENT QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
@@ -468,27 +468,27 @@ def generate_geographic_subqueries(companies: list) -> dict:
     for company in companies:
         # 1. Revenue by geography
         sub_queries.append(
-            f"{company} revenue by geography revenue by region net sales by geography geographic revenue distribution disaggregated revenue region country revenue concentration"
+            f"{company} revenue by geography revenue by region net sales by geography geographic revenue distribution disaggregated revenue region country revenue concentration for years 2022, 2023 and 2024"
         )
         # 2. Geographic notes & ASC 280
         sub_queries.append(
-            f"{company} geographic information note segment reporting geography ASC 280 geographic disclosure foreign domestic revenue by country long lived assets by geography"
+            f"{company} geographic information note segment reporting geography ASC 280 geographic disclosure foreign domestic revenue by country long lived assets by geograph for years 2022, 2023 and 2024"
         )
         # 3. Foreign / international operations
         sub_queries.append(
-            f"{company} foreign operations international operations domestic vs international revenue foreign subsidiaries overseas operations global footprint"
+            f"{company} foreign operations international operations domestic vs international revenue foreign subsidiaries overseas operations global footprint for years 2022, 2023 and 2024"
         )
         # 4. Properties & facilities by location
         sub_queries.append(
-            f"{company} properties by location facilities by geography manufacturing locations data centers offices distribution centers assets by country"
+            f"{company} properties by location facilities by geography manufacturing locations data centers offices distribution centers assets by country for years 2022, 2023 and 2024"
         )
         # 5. Geographic risk factors
         sub_queries.append(
-            f"{company} geographic risk country risk regional risk political risk currency risk foreign exchange exposure international regulatory risk sanctions export controls"
+            f"{company} geographic risk country risk regional risk political risk currency risk foreign exchange exposure international regulatory risk sanctions export controls for years 2022, 2023 and 2024"
         )
         # 6. Customer / market concentration by region
         sub_queries.append(
-            f"{company} major customers by region customer concentration geography market concentration regional demand geographic market share"
+            f"{company} major customers by region customer concentration geography market concentration regional demand geographic market share for years 2022, 2023 and 2024"
         )
 
     print(f"[GEOGRAPHIC QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
