@@ -205,6 +205,21 @@ class AlphaDimensionOutput(BaseModel):
     )
 
 
+class AlphaAlignmentOutput(BaseModel):
+    """Output for the Alignment dimension — no word cap so Form4 data is preserved in full"""
+    analysis: str = Field(
+        description=(
+            "Flowing analyst prose covering insider trading signals and governance/MD&A sentiment. "
+            "Must include all specific numbers, names, share counts, prices, and transaction details "
+            "from the Form 4 data. Two paragraphs: first on insider activity, second on governance/MD&A."
+        )
+    )
+    key_points: list[str] = Field(
+        default_factory=list,
+        description="Key bullet points from the alignment analysis (3-5 points)"
+    )
+
+
 class ScenarioCaseOutput(BaseModel):
     """Output for a single Bull / Bear / Base scenario case"""
     price_target: str = Field(

@@ -1591,34 +1591,31 @@ Extract all financial metrics you can find.""")
 
 def get_alpha_alignment_chain(llm):
     """
-    ALPHA - Alignment: Sentiment & Governance Analysis
-    Analyzes stakeholder interests through MD&A tone and governance red flags
+    ALPHA - Alignment: Insider Trading + Governance/MD&A Sentiment
+    Writes two flowing analyst paragraphs preserving all Form 4 data points.
     """
-    from schemas.models import AlphaDimensionOutput
-    structured_llm = llm.with_structured_output(AlphaDimensionOutput)
-    
-    SYSTEM_PROMPT = """You are a financial analyst specializing in GOVERNANCE and SENTIMENT analysis.
+    from schemas.models import AlphaAlignmentOutput
+    structured_llm = llm.with_structured_output(AlphaAlignmentOutput)
 
-**Your Task**: Analyze the Alignment dimension of the ALPHA Framework.
+    SYSTEM_PROMPT = """You are a senior equity analyst writing the Alignment section of an ALPHA Framework report.
 
-**Focus Areas**:
-1. **MD&A Sentiment Analysis**:
-   - Defensive vs. Confident tone in Management Discussion & Analysis
-   - Forward-looking statements and management confidence
-   - Risk language and uncertainty indicators
+Your output must be exactly two flowing analyst paragraphs — no bullet points, no headers, no raw data dumps.
 
-2. **Governance Red Flags**:
-   - Board independence issues
-   - Related-party transactions
-   - Executive compensation concerns
-   - Shareholder dilution
-   - Conflicts of interest
+Paragraph 1 — Insider Trading (SEC Form 4):
+Write a complete, data-rich narrative using EVERY specific figure from the Form 4 data:
+exact share counts, dollar totals, average prices, current market price, named executives,
+acquisition vs. disposal breakdown, and the final recommendation. Do not generalise or omit any numbers.
+Write it the same way the Performance or Horizon sections read.
 
-**Output Requirements**:
-- Maximum 100 words
-- Concise bullet points
-- Flag critical red flags clearly
-- Tone: Objective, data-driven
+IMPORTANT — zero-price acquisitions: Never write "$0.00" or "$0" for share acquisitions.
+When a transaction price is zero, it means the shares were received as compensation (RSU vesting,
+stock grants, or option exercises). Always describe these as "X shares received via RSU vesting/grants"
+or "X shares via compensation awards" — never as a dollar purchase at zero price.
+
+Paragraph 2 — Governance & MD&A:
+Concise assessment of MD&A tone (confident vs. defensive, forward-looking language, risk
+disclosures) and any governance concerns (board independence, compensation, related-party
+transactions) from the retrieved documents. If documents are sparse, note that briefly.
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1626,12 +1623,15 @@ def get_alpha_alignment_chain(llm):
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Retrieved Documents:
+--- SEC FORM 4 DATA (use all numbers and names in Paragraph 1) ---
+{form4_analysis}
+
+--- GOVERNANCE / MD&A DOCUMENTS (use in Paragraph 2) ---
 {documents}
 
-Analyze the ALIGNMENT dimension focusing on governance and MD&A sentiment. Keep response under 100 words.""")
+Write the two-paragraph Alignment analysis now.""")
     ])
-    
+
     return prompt | structured_llm
 
 

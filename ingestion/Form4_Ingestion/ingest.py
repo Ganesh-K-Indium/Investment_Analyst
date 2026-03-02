@@ -25,7 +25,7 @@ logger.addHandler(console_handler)
 try:
     from settings import LOG_LEVEL
     from sqlalchemy import select
-    from rag.utils.Insights_Form4.database import reset_db, get_db, Form4Transaction, init, init_db
+    from rag.utils.Insights_Form4.database import reset_db, get_db, Form4Transaction
     from fetch import SecEdgarFetcher
     from parse import Form4Parser
     from analytics import TransactionAnalytics
@@ -76,6 +76,7 @@ def is_common_stock(security_title: str, is_derivative: bool) -> bool:
         'voting common',
         'non-voting common',
         'ordinary shares',  # Foreign issuers
+        'capital stock',    # GOOGL and others
     ]
     
     for pattern in common_patterns:
@@ -116,14 +117,6 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
             logger.info("Database reset successfully. All previous data has been deleted.")
         except Exception as e:
             logger.critical(f"Database reset failed: {e}")
-            return
-    else:
-        # Check and initialize database tables if they don't exist
-        try:
-            init_db()
-            logger.info("Database tables verified/initialized successfully.")
-        except Exception as e:
-            logger.critical(f"Database initialization failed: {e}")
             return
 
     # 2. Setup Components
@@ -269,6 +262,15 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
     except Exception as e:
         logger.error(f"Failed to calculate analytics: {e}")
 
+    return {
+        "ticker": ticker,
+        "total_fetched": len(xml_urls),
+        "saved": success_count,
+        "skipped_duplicate": skip_count,
+        "failed": fail_count,
+        "date_range": {"start": str(start_date), "end": str(end_date)},
+    }
+
 if __name__ == "__main__":
-    ticker_input = "GOOGL" #input("Enter ticker symbol (e.g. NVDA, AAPL, MSFT): ").strip().upper()
+    ticker_input = "AAPL" #input("Enter ticker symbol (e.g. NVDA, AAPL, MSFT): ").strip().upper()
     run_form4_ingestion(ticker=ticker_input)

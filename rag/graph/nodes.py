@@ -2749,19 +2749,19 @@ def alpha_dimension_retrieve(state):
     alpha_dimensions = {}
     
     # -------------------------------------------------------------------------
-    # ALIGNMENT: VectorDB only (MD&A, Governance)
+    # ALIGNMENT: VectorDB (MD&A, Governance) + Form4 Insider Trading
     # -------------------------------------------------------------------------
-    print(" [1/5] Alignment (Stakeholder Interests) - VectorDB")
+    print(" [1/5] Alignment (Stakeholder Interests) - VectorDB + Form4 Insider Data")
     try:
         db_instance = vectordb_mgr.get_instance(ticker, create_if_missing=False)
-        
+
         # Query for MD&A and governance documents
         alignment_queries = [
             f"{ticker} management discussion analysis MD&A",
             f"{ticker} governance board independence proxy statement",
             f"{ticker} related party transactions"
         ]
-        
+
         alignment_docs = []
         for query in alignment_queries:
             results = db_instance.hybrid_search(query=query, content_type="text", limit=3)
@@ -2773,17 +2773,51 @@ def alpha_dimension_retrieve(state):
                         metadata=point.payload.get('metadata', {})
                     )
                     alignment_docs.append(doc)
-        
+
+        # ── Form 4 insider trading advisory data ──────────────────────────────
+        print("    Fetching Form 4 insider trading data…")
+        try:
+            from rag.utils.Insights_Form4.advisory_hub import get_advisory_report
+
+            form4_report = get_advisory_report(ticker)
+
+            if form4_report and "status" not in form4_report and "error" not in form4_report:
+                lines = [f"INSIDER TRADING ANALYSIS (SEC Form 4) — {ticker}\n"]
+                for issuer_name, detail in form4_report.items():
+                    if issuer_name in ("error", "status", "message", "ticker"):
+                        continue
+                    #lines.append(f"Issuer: {issuer_name}")
+                    #lines.append(f"Recommendation: {detail.get('Recommendation', 'N/A')}")
+                    #lines.append(f"Net Insider Flow: ${detail.get('Net_Inside_Flow', 0):,.2f}")
+                    #lines.append(f"Total Bought: ${detail.get('Total_Bought', 0):,.2f} ({int(detail.get('Total_Bought_Shares', 0)):,} shares)")
+                    #lines.append(f"Total Sold:   ${detail.get('Total_Sold', 0):,.2f} ({int(detail.get('Total_Sold_Shares', 0)):,} shares)")
+                    #lines.append(f"Transaction Count: {detail.get('Transaction_Count', 0)}")
+                    lines.append(f"\nAnalyst Insight:\n{detail.get('Reason', 'No analysis available')}\n")
+
+                from langchain_core.documents import Document
+                insider_doc = Document(
+                    page_content="\n".join(lines),
+                    metadata={"source": "form4_insider_trading", "company": ticker, "content_type": "insider_trading"}
+                )
+                # Insert first so it's never cut off by the docs[:5] slice in format_docs
+                alignment_docs.insert(0, insider_doc)
+                print(f"    Form4 insider doc added ({len(form4_report)} issuer(s))")
+            else:
+                print(f"    No Form4 data in DB for {ticker} — skipping insider doc")
+        except Exception as form4_err:
+            print(f"    Form4 fetch error (non-fatal): {form4_err}")
+        # ─────────────────────────────────────────────────────────────────────
+
         alpha_dimensions['alignment'] = {
-            'source': 'vectordb',
-            'documents': alignment_docs[:5],  # Limit to top 5
+            'source': 'vectordb+form4',
+            'documents': alignment_docs[:5],  # Form4 doc at [0], then vectordb docs
             'query_count': len(alignment_queries)
         }
-        print(f"    Retrieved {len(alignment_docs[:5])} documents")
-        
+        print(f"    Total alignment docs: {len(alignment_docs[:5])}")
+
     except Exception as e:
         print(f"    Error: {e}")
-        alpha_dimensions['alignment'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
+        alpha_dimensions['alignment'] = {'source': 'vectordb+form4', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
     # LIQUIDITY: VectorDB (risk factors) + Web (sector trends)
@@ -2980,10 +3014,17 @@ def alpha_generate_report(state):
     def format_docs(docs):
         if not docs:
             return "No documents available."
-        return "\n\n---\n\n".join([
-            f"Source: {d.metadata.get('source_file', d.metadata.get('title', 'Unknown'))}\n{d.page_content[:500]}"
-            for d in docs[:5]  # Limit to avoid token overload
-        ])
+        parts = []
+        for d in docs[:5]:  # Limit to avoid token overload
+            is_form4 = d.metadata.get('content_type') == 'insider_trading'
+            source_label = (
+                "SEC Form 4 — Insider Trading Analysis"
+                if is_form4
+                else d.metadata.get('source_file', d.metadata.get('title', d.metadata.get('source', 'Unknown')))
+            )
+            char_limit = 1500 if is_form4 else 500
+            parts.append(f"Source: {source_label}\n{d.page_content[:char_limit]}")
+        return "\n\n---\n\n".join(parts)
     
     dimension_outputs = {}
     
@@ -2998,18 +3039,33 @@ def alpha_generate_report(state):
     
     for dim_key, chain_func, dim_name in dimensions:
         print(f" Generating {dim_name}...")
-        
+
         dim_data = alpha_dimensions.get(dim_key, {})
         docs = dim_data.get('documents', [])
-        
+
+        # For alignment: pass Form4 content as a dedicated variable so the
+        # LLM receives full data, while governance/MD&A docs go in {documents}.
+        invoke_kwargs = {
+            "company": ticker,
+            "ticker": ticker,
+            "documents": format_docs(
+                [d for d in docs if d.metadata.get('content_type') != 'insider_trading']
+            )
+        }
+        if dim_key == 'alignment':
+            form4_doc = next(
+                (d for d in docs if d.metadata.get('content_type') == 'insider_trading'),
+                None
+            )
+            invoke_kwargs['form4_analysis'] = (
+                form4_doc.page_content if form4_doc
+                else "No SEC Form 4 insider trading data available for this ticker."
+            )
+
         try:
             chain = chain_func(llm)
-            result = chain.invoke({
-                "company": ticker,
-                "ticker": ticker,
-                "documents": format_docs(docs)
-            })
-            
+            result = chain.invoke(invoke_kwargs)
+
             dimension_outputs[dim_key] = {
                 'analysis': result.analysis,
                 'key_points': result.key_points
@@ -3025,7 +3081,7 @@ def alpha_generate_report(state):
     
     # Combine into final report
     print("\n Combining dimensions into final report...")
-    
+
     try:
         combiner_chain = get_alpha_report_combiner_chain(llm)
         final_report = combiner_chain.invoke({
@@ -3038,7 +3094,7 @@ def alpha_generate_report(state):
             "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
         })
         print(f"    ✓ Final report: {len(final_report)} chars")
-        
+
     except Exception as e:
         print(f"    ✗ Error: {e}")
         final_report = f"# ALPHA Framework Analysis: {ticker}\n\nError generating report: {str(e)}"
