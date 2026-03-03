@@ -203,6 +203,56 @@ class AlphaDimensionOutput(BaseModel):
         default_factory=list,
         description="Key bullet points from the analysis (3-5 points)"
     )
+    recommendation: str = Field(
+        default="",
+        description="One-line recommendation based on this dimension's findings (e.g. 'Positive', 'Neutral', 'Negative — monitor closely', or a specific action signal)"
+    )
+
+
+class AlphaActionOutput(BaseModel):
+    """Structured output for the Action dimension — one field per metric sentence."""
+    sma_sentence: str = Field(
+        description=(
+            "Exactly one sentence using the EXACT dollar values supplied. "
+            "Format: '<COMPANY>'s current stock price ($<CURRENT_PRICE>) is [greater than / less than] its 200-day SMA ($<SMA_200>). "
+            "Use 'greater than' when current_price > sma_200, else 'less than'. "
+            "The actual dollar figures MUST appear in the sentence."
+        )
+    )
+    rsi_sentence: str = Field(
+        description=(
+            "Exactly one sentence using the EXACT RSI number supplied. "
+            "Format: '<COMPANY>'s RSI is <RSI_VALUE>, which indicates <signal>. "
+            "Signal rules — RSI < 30: 'it is a good time to BUY'; "
+            "RSI > 70: 'it is better to SELL your holdings'; "
+            "30 ≤ RSI ≤ 70: 'hold your position'. "
+            "The actual RSI number MUST appear in the sentence."
+        )
+    )
+    pe_sentence: str = Field(
+        description=(
+            "Exactly one sentence. "
+            "Format: '<COMPANY>'s latest P/E ratio is <PE_VALUE>. "
+            "Extract the most recent P/E figure from the P/E documents. "
+            "If not found write: '<COMPANY>'s latest P/E ratio is N/A."
+        )
+    )
+    ebitda_sentence: str = Field(
+        description=(
+            "Exactly one sentence. "
+            "Format: '<COMPANY>'s EBITDA is <EBITDA_VALUE>. "
+            "Extract the most recent annual EBITDA figure from the EBITDA documents. "
+            "If not found write: '<COMPANY>'s EBITDA is N/A."
+        )
+    )
+    key_points: list[str] = Field(
+        default_factory=list,
+        description="Key bullet points from the four sentences (4 points, one per metric)"
+    )
+    recommendation: str = Field(
+        default="",
+        description="One-line timing recommendation combining the RSI signal and SMA position."
+    )
 
 
 class AlphaAlignmentOutput(BaseModel):
@@ -217,6 +267,10 @@ class AlphaAlignmentOutput(BaseModel):
     key_points: list[str] = Field(
         default_factory=list,
         description="Key bullet points from the alignment analysis (3-5 points)"
+    )
+    recommendation: str = Field(
+        default="",
+        description="One-line recommendation based on insider trading and governance signals (e.g. 'Positive — net insider buying signals conviction', 'Neutral', 'Negative — insider selling warrants caution')"
     )
 
 

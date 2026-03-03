@@ -1616,6 +1616,9 @@ Paragraph 2 — Governance & MD&A:
 Concise assessment of MD&A tone (confident vs. defensive, forward-looking language, risk
 disclosures) and any governance concerns (board independence, compensation, related-party
 transactions) from the retrieved documents. If documents are sparse, note that briefly.
+
+Recommendation:
+End with a one-line Recommendation field summarising the alignment signal from insider activity and governance (e.g. "Positive — net insider buying signals management conviction" or "Negative — heavy insider selling warrants caution").
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1657,6 +1660,7 @@ def get_alpha_liquidity_chain(llm):
 - Maximum 100 words
 - Identify key risks and opportunities
 - Tone: Analytical, balanced
+- End with a one-line **Recommendation** field (e.g. "Positive — favourable macro backdrop", "Neutral — mixed signals", "Negative — significant macro headwinds")
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1696,6 +1700,7 @@ def get_alpha_performance_chain(llm):
 - Include calculated metrics where possible
 - Highlight anomalies clearly
 - Tone: Quantitative, precise
+- End with a one-line **Recommendation** field summarising earnings quality (e.g. "Positive — strong and improving fundamentals", "Neutral — stable but slowing growth", "Negative — deteriorating margins or earnings quality concerns")
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1735,6 +1740,7 @@ def get_alpha_horizon_chain(llm):
 - Compare to industry benchmarks
 - Assess long-term competitive advantages
 - Tone: Strategic, forward-looking
+- End with a one-line **Recommendation** field assessing moat strength and structural outlook (e.g. "Positive — durable wide moat with expanding market share", "Neutral — moderate moat, watch competitive pressures", "Negative — moat erosion risk")
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1753,75 +1759,80 @@ Analyze the HORIZON dimension focusing on competitive moat and structural opport
 
 def get_alpha_action_chain(llm):
     """
-    ALPHA - Action: Timing & Technical Context Analysis
-    Provides valuation context, sentiment, and catalysts (NOT real-time trading signals)
+    ALPHA - Action: RSI, SMA200, P/E, EBITDA.
+    Receives all data as a single {documents} block (same pattern as other pillars).
     """
     from schemas.models import AlphaDimensionOutput
     structured_llm = llm.with_structured_output(AlphaDimensionOutput)
-    
-    SYSTEM_PROMPT = """You are a financial analyst specializing in VALUATION and TIMING analysis.
 
-**Your Task**: Analyze the Action dimension of the ALPHA Framework.
+    SYSTEM_PROMPT = """You are a financial analyst writing the Action section of an ALPHA Framework report.
 
-**Focus Areas**:
-1. **Valuation Context**: P/E, EV/EBITDA vs. historical range
-2. **Price Action**: Recent trends relative to fundamentals
-3. **Option Chain Sentiment**: Nasdaq option positioning (if available)
-4. **Catalysts**: Upcoming earnings, product launches, regulatory decisions
+Write exactly 4 sentences in professional analyst tone. Always use UPPERCASE for the ticker symbol.
 
-**IMPORTANT**: This is contextual analysis only, NOT real-time trading signals.
+Sentence 1 — SMA: State the exact stock price and SMA200 with dollar values. Use "greater than" or "less than".
+  Example: "GOOGL's current stock price ($306.52) is greater than its 200-day SMA ($250.15)."
 
-**Output Requirements**:
-- Maximum 100 words
-- Identify timing catalysts
-- Valuation relative to historical norms
-- Tone: Measured, contextual
-"""
+Sentence 2 — RSI: State the exact RSI value and its signal.
+  RSI < 30  → "it is a good time to BUY"
+  RSI > 70  → "it is better to SELL your holdings"
+  30–70     → "hold your position"
+  Example: "GOOGL's RSI is 40.94, which indicates hold your position."
+
+Sentence 3 — P/E: Extract and state the exact P/E ratio from the documents.
+  Example: "GOOGL's latest P/E ratio is 28.84."  If not found: "GOOGL's latest P/E ratio is N/A."
+
+Sentence 4 — EBITDA: Extract and state the exact EBITDA figure from the documents.
+  Example: "GOOGL's EBITDA is $180.7B."  If not found: "GOOGL's EBITDA is N/A."
+
+NEVER replace a number with a qualitative phrase like "above" or "strong" without also stating the actual value.
+Recommendation: one line combining RSI signal and SMA position as an overall timing stance."""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Retrieved Documents:
 {documents}
 
-Analyze the ACTION dimension focusing on timing and valuation context. Keep response under 100 words.""")
+Write the 4 sentences using the exact values above.""")
     ])
-    
+
     return prompt | structured_llm
 
 
 def get_alpha_report_combiner_chain(llm):
     """
-    Combines all 5 ALPHA dimensions into a final coherent report
+    Combines all 5 ALPHA dimensions into a final coherent report.
+    Renders each pillar with its Recommendation label and closes with ALPHA Summary.
     """
     SYSTEM_PROMPT = """You are a senior investment analyst creating a concise ALPHA Framework report.
 
-**Your Task**: Combine the 5 ALPHA dimensions into a clear, actionable summary.
+**Your Task**: Render the 5 ALPHA dimensions exactly as supplied, then write a consolidated ALPHA Summary.
 
-**Report Structure**:
+**Report Structure** (follow this markdown precisely):
+
 # ALPHA Framework Analysis: {company} ({ticker})
 
-## A - Alignment (Stakeholder Interests)
+## A — Alignment (Stakeholder Interests)
 {alignment}
 
-## L - Liquidity (Macro/Micro Environment)
+## L — Liquidity (Macro/Micro Environment)
 {liquidity}
 
-## P - Performance (Earnings & Fundamentals)
+## P — Performance (Earnings & Fundamentals)
 {performance}
 
-## H - Horizon (Structural Opportunity & Moat)
+## H — Horizon (Structural Opportunity & Moat)
 {horizon}
 
-## A - Action (Timing & Technical Context)
+## A — Action (Timing & Technical Context)
 {action}
 
 ---
-**Synthesis**: [2-3 sentence summary combining key insights from all dimensions]
+## ALPHA Summary
+[Write 3-4 sentences that consolidate the key signals from all five dimensions into a clear, overall investment stance. Reference the individual Recommendation signals explicitly and state whether the combined picture is Bullish, Neutral, or Bearish.]
 
-**IMPORTANT DISCLAIMER**: This is contextual analysis for informational purposes only, not investment advice or trading signals.
+**IMPORTANT DISCLAIMER**: This analysis is for informational purposes only and does not constitute investment advice or trading signals.
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1829,24 +1840,24 @@ def get_alpha_report_combiner_chain(llm):
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Alignment Analysis:
+Alignment Analysis (includes Recommendation):
 {alignment}
 
-Liquidity Analysis:
+Liquidity Analysis (includes Recommendation):
 {liquidity}
 
-Performance Analysis:
+Performance Analysis (includes Recommendation):
 {performance}
 
-Horizon Analysis:
+Horizon Analysis (includes Recommendation):
 {horizon}
 
-Action Analysis:
+Action Analysis (includes Recommendation):
 {action}
 
-Create a comprehensive ALPHA Framework report combining all dimensions.""")
+Render the full ALPHA Framework report now.""")
     ])
-    
+
     return prompt | llm | StrOutputParser()
 
 

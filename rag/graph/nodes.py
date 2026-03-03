@@ -2747,8 +2747,11 @@ def alpha_dimension_retrieve(state):
     from langchain_tavily import TavilySearch
     
     vectordb_mgr = get_vectordb_manager()
-    web_search = TavilySearch(max_results=3)
-    
+    # All web searches restricted to trusted financial domains
+    web_search = TavilySearch(max_results=3, include_domains=TRUSTED_FINANCIAL_DOMAINS)
+    # Trends / notable trends (Horizon) fetched exclusively from SeekingAlpha
+    web_search_seekingalpha = TavilySearch(max_results=3, include_domains=["seekingalpha.com"])
+
     alpha_dimensions = {}
     
     # -------------------------------------------------------------------------
@@ -2909,9 +2912,9 @@ def alpha_dimension_retrieve(state):
         alpha_dimensions['performance'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
-    # HORIZON: Web only (competitive positioning, moat)
+    # HORIZON: SeekingAlpha only (trends, competitive positioning, moat)
     # -------------------------------------------------------------------------
-    print(" [4/5] Horizon (Structural Opportunity & Moat) - Web")
+    print(" [4/5] Horizon (Structural Opportunity & Moat) - SeekingAlpha")
     try:
         horizon_queries = [
             f"{ticker} operating margins vs industry average pricing power",
@@ -2919,66 +2922,139 @@ def alpha_dimension_retrieve(state):
             f"{ticker} market share trends competitive positioning",
             f"{ticker} competitive moat network effects switching costs"
         ]
-        
+
         horizon_docs = []
         for query in horizon_queries:
-            web_results = web_search.invoke({"query": query})
-            # Parse Tavily response using helper
+            # All trends and notable trends fetched exclusively from SeekingAlpha
+            web_results = web_search_seekingalpha.invoke({"query": query})
             sources = _parse_tavily_response(web_results, query)
             for source in sources:
                 from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
-                    metadata={'source': 'web_search', 'url': source['url'], 'title': source['title']}
+                    metadata={'source': 'seekingalpha', 'url': source['url'], 'title': source['title']}
                 )
                 horizon_docs.append(doc)
-        
+
         alpha_dimensions['horizon'] = {
-            'source': 'web',
+            'source': 'seekingalpha',
             'documents': horizon_docs,
             'query_count': len(horizon_queries)
         }
-        print(f"    Retrieved {len(horizon_docs)} documents")
-        
+        print(f"    Retrieved {len(horizon_docs)} documents (SeekingAlpha)")
+
     except Exception as e:
         print(f"    Error: {e}")
-        alpha_dimensions['horizon'] = {'source': 'web', 'documents': [], 'query_count': 0}
+        alpha_dimensions['horizon'] = {'source': 'seekingalpha', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
-    # ACTION: Web only (valuation, timing, catalysts)
+    # ACTION: yfinance (RSI, SMA200, price) + VectorDB (EBITDA) + Web (P/E)
     # -------------------------------------------------------------------------
-    print(" [5/5] Action (Timing & Technical Context) - Web")
+    print(" [5/5] Action (RSI / SMA200 / P/E / EBITDA) - yfinance + VectorDB + Web")
     try:
-        action_queries = [
-            f"{ticker} P/E ratio EV/EBITDA valuation historical range",
-            f"{ticker} stock price action recent trends",
-            f"{ticker} option chain sentiment nasdaq",
-            f"{ticker} upcoming earnings catalysts product launches"
-        ]
-        
         action_docs = []
-        for query in action_queries:
-            web_results = web_search.invoke({"query": query})
-            # Parse Tavily response using helper
-            sources = _parse_tavily_response(web_results, query)
-            for source in sources:
+        technical_data = {}
+
+        # -- Live technical indicators via yfinance ---------------------------
+        print("    Fetching RSI, SMA200, current price via yfinance...")
+        try:
+            import yfinance as yf
+
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="1y")
+
+            if not hist.empty:
+                current_price = round(float(hist['Close'].iloc[-1]), 2)
+                sma_200 = round(
+                    float(hist['Close'].tail(200).mean())
+                    if len(hist) >= 200
+                    else float(hist['Close'].mean()),
+                    2
+                )
+
+                # RSI — 14-period Wilder EMA method
+                close = hist['Close']
+                delta = close.diff()
+                gain = delta.clip(lower=0)
+                loss = -delta.clip(upper=0)
+                avg_gain = gain.ewm(com=13, adjust=False).mean()
+                avg_loss = loss.ewm(com=13, adjust=False).mean()
+                # Guard against division-by-zero when avg_loss is 0
+                rs = avg_gain / avg_loss.replace(0, float('nan'))
+                rsi_series = 100 - (100 / (1 + rs))
+                current_rsi = round(float(rsi_series.iloc[-1]), 2)
+
+                technical_data = {
+                    'current_price': current_price,
+                    'sma_200': sma_200,
+                    'rsi': current_rsi
+                }
+                print(f"    RSI={current_rsi}, Price=${current_price}, SMA200=${sma_200}")
+            else:
+                print("    yfinance returned empty history — technical indicators unavailable")
+        except Exception as yf_err:
+            print(f"    Technical indicator error (non-fatal): {yf_err}")
+
+        # -- EBITDA from web search (trusted financial domains) ---------------
+        print("    Fetching EBITDA from web (trusted domains)...")
+        try:
+            ebitda_query = f"{ticker} EBITDA annual earnings current"
+            ebitda_results = web_search.invoke({"query": ebitda_query})
+            ebitda_sources = _parse_tavily_response(ebitda_results, ebitda_query)
+            for source in ebitda_sources:
                 from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
-                    metadata={'source': 'web_search', 'url': source['url'], 'title': source['title']}
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'ebitda'
+                    }
                 )
                 action_docs.append(doc)
-        
+            print(f"    Retrieved {len(ebitda_sources)} EBITDA docs from web")
+        except Exception as ebitda_err:
+            print(f"    EBITDA web search error (non-fatal): {ebitda_err}")
+
+        # -- P/E ratio from web search (trusted financial domains) ------------
+        print("    Fetching P/E ratio from web (trusted domains)...")
+        try:
+            pe_query = f"{ticker} P/E ratio price to earnings current valuation"
+            pe_results = web_search.invoke({"query": pe_query})
+            pe_sources = _parse_tavily_response(pe_results, pe_query)
+            for source in pe_sources:
+                from langchain_core.documents import Document
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'pe_ratio'
+                    }
+                )
+                action_docs.append(doc)
+            print(f"    Retrieved {len(pe_sources)} P/E docs from web")
+        except Exception as pe_err:
+            print(f"    P/E web search error (non-fatal): {pe_err}")
+
         alpha_dimensions['action'] = {
-            'source': 'web',
+            'source': 'yfinance+vectordb+web',
             'documents': action_docs,
-            'query_count': len(action_queries)
+            'technical_data': technical_data,
+            'query_count': 3
         }
-        print(f"    Retrieved {len(action_docs)} documents")
-        
+        print(f"    Total action docs: {len(action_docs)} + technical_data: {bool(technical_data)}")
+
     except Exception as e:
         print(f"    Error: {e}")
-        alpha_dimensions['action'] = {'source': 'web', 'documents': [], 'query_count': 0}
+        alpha_dimensions['action'] = {
+            'source': 'yfinance+vectordb+web',
+            'documents': [],
+            'technical_data': {},
+            'query_count': 0
+        }
     
     print("\n" + "="*80)
     print(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total documents")
@@ -3046,55 +3122,96 @@ def alpha_generate_report(state):
         dim_data = alpha_dimensions.get(dim_key, {})
         docs = dim_data.get('documents', [])
 
-        # For alignment: pass Form4 content as a dedicated variable so the
-        # LLM receives full data, while governance/MD&A docs go in {documents}.
-        invoke_kwargs = {
-            "company": ticker,
-            "ticker": ticker,
-            "documents": format_docs(
-                [d for d in docs if d.metadata.get('content_type') != 'insider_trading']
+        if dim_key == 'action':
+            # Build one document block (same pattern as other pillars)
+            technical_data = dim_data.get('technical_data', {})
+            ebitda_docs = [d for d in docs if d.metadata.get('data_type') == 'ebitda']
+            pe_docs = [d for d in docs if d.metadata.get('data_type') == 'pe_ratio']
+
+            rsi_val = str(technical_data.get('rsi', 'N/A'))
+            price_val = str(technical_data.get('current_price', 'N/A'))
+            sma_val = str(technical_data.get('sma_200', 'N/A'))
+            print(f"    ACTION vars → price={price_val}, sma200={sma_val}, rsi={rsi_val}")
+            print(f"    ACTION docs → {len(ebitda_docs)} EBITDA, {len(pe_docs)} P/E")
+
+            action_document = (
+                f"=== LIVE TECHNICAL INDICATORS ===\n"
+                f"Current Stock Price : ${price_val}\n"
+                f"200-Day SMA         : ${sma_val}\n"
+                f"RSI (14-period)     : {rsi_val}\n\n"
+                f"=== P/E RATIO (web-sourced) ===\n"
+                f"{format_docs(pe_docs)}\n\n"
+                f"=== EBITDA (web-sourced) ===\n"
+                f"{format_docs(ebitda_docs)}"
             )
-        }
-        if dim_key == 'alignment':
-            form4_doc = next(
-                (d for d in docs if d.metadata.get('content_type') == 'insider_trading'),
-                None
-            )
-            invoke_kwargs['form4_analysis'] = (
-                form4_doc.page_content if form4_doc
-                else "No SEC Form 4 insider trading data available for this ticker."
-            )
+            invoke_kwargs = {
+                "company": ticker,
+                "ticker": ticker,
+                "documents": action_document
+            }
+        else:
+            # For alignment: pass Form4 content as a dedicated variable so the
+            # LLM receives full data, while governance/MD&A docs go in {documents}.
+            invoke_kwargs = {
+                "company": ticker,
+                "ticker": ticker,
+                "documents": format_docs(
+                    [d for d in docs if d.metadata.get('content_type') != 'insider_trading']
+                )
+            }
+            if dim_key == 'alignment':
+                form4_doc = next(
+                    (d for d in docs if d.metadata.get('content_type') == 'insider_trading'),
+                    None
+                )
+                invoke_kwargs['form4_analysis'] = (
+                    form4_doc.page_content if form4_doc
+                    else "No SEC Form 4 insider trading data available for this ticker."
+                )
 
         try:
             chain = chain_func(llm)
             result = chain.invoke(invoke_kwargs)
 
+            analysis = result.analysis
+
             dimension_outputs[dim_key] = {
-                'analysis': result.analysis,
-                'key_points': result.key_points
+                'analysis': analysis,
+                'key_points': result.key_points,
+                'recommendation': getattr(result, 'recommendation', '')
             }
-            print(f"    ✓ {dim_name}: {len(result.analysis)} chars, {len(result.key_points)} points")
-            
+            print(f"    ✓ {dim_name}: {len(analysis)} chars, {len(result.key_points)} points")
+
         except Exception as e:
             print(f"    ✗ Error: {e}")
             dimension_outputs[dim_key] = {
                 'analysis': f"Analysis unavailable due to insufficient data.",
-                'key_points': []
+                'key_points': [],
+                'recommendation': ''
             }
     
     # Combine into final report
     print("\n Combining dimensions into final report...")
+
+    def _dim_with_recommendation(dim_key):
+        """Return analysis text with Recommendation appended, ready for the combiner."""
+        dim = dimension_outputs.get(dim_key, {})
+        analysis = dim.get('analysis', 'N/A')
+        rec = dim.get('recommendation', '')
+        if rec:
+            return f"{analysis}\n\n**Recommendation:** {rec}"
+        return analysis
 
     try:
         combiner_chain = get_alpha_report_combiner_chain(llm)
         final_report = combiner_chain.invoke({
             "company": ticker,
             "ticker": ticker,
-            "alignment": dimension_outputs.get('alignment', {}).get('analysis', 'N/A'),
-            "liquidity": dimension_outputs.get('liquidity', {}).get('analysis', 'N/A'),
-            "performance": dimension_outputs.get('performance', {}).get('analysis', 'N/A'),
-            "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
-            "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
+            "alignment": _dim_with_recommendation('alignment'),
+            "liquidity": _dim_with_recommendation('liquidity'),
+            "performance": _dim_with_recommendation('performance'),
+            "horizon": _dim_with_recommendation('horizon'),
+            "action": _dim_with_recommendation('action')
         })
         print(f"    ✓ Final report: {len(final_report)} chars")
 
