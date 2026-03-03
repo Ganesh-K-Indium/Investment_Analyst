@@ -325,7 +325,9 @@ async def compare_companies(
             session_metadata={
                 "type": "compare",
                 "companies": companies,
-                "tickers": tickers
+                "tickers": tickers,
+                "year_start": payload.year_start,
+                "year_end": payload.year_end
             }
         )
         
@@ -393,6 +395,8 @@ Compare {comparison_str} {year_str}:
             "comparison_company1": company1,
             "comparison_company2": company2,
             "comparison_company3": company3,
+            "year_start": payload.year_start,
+            "year_end": payload.year_end,
             "chart_url": None,
             "chart_filename": None
         }
@@ -416,6 +420,8 @@ Compare {comparison_str} {year_str}:
                 "company1": company1,
                 "company2": company2,
                 "company3": company3,
+                "year_start": payload.year_start,
+                "year_end": payload.year_end,
                 "chart_url": chart_url,
                 "chart_filename": chart_filename,
                 "vectorstore_searched": result.get("vectorstore_searched", False),
