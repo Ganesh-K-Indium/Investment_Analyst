@@ -183,7 +183,7 @@ When the user requests comparison between 2 OR 3 companies:
 Present the comparison in a markdown table format.
 
 **FOR 2 COMPANIES:**
-| Metric | [Company A] (2024) | [Company B] (2024) | Comparison between these companies |
+| Metric | [Company A] (Year) | [Company B] (Year) | Comparison between these companies |
 |--------|-------------------|-------------------|------------|
 | Operating Margin | X% | Y% | |
 | Revenue | $X billion | $Y billion |  |
@@ -196,7 +196,7 @@ Present the comparison in a markdown table format.
 | Profit/Loss Contributing Factors | [Brief summary] | [Brief summary] | [Key differences] |
 
 **FOR 3 COMPANIES:**
-| Metric | [Company A] (2024) | [Company B] (2024) | [Company C] (2024) | Comparison between these companies |
+| Metric | [Company A] (Year) | [Company B] (Year) | [Company C] (Year) | Comparison between these companies |
 |--------|-------------------|-------------------|-------------------|------------|
 | Operating Margin | X% | Y% | Z% | |
 | Revenue | $X billion | $Y billion | $Z billion | |

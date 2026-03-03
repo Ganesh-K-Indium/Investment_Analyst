@@ -56,6 +56,8 @@ class GraphState(TypedDict):
     comparison_company1: str  # First company name for comparison
     comparison_company2: str  # Second company name for comparison
     comparison_company3: str  # Third company name for comparison (optional, for 3-way)
+    year_start: Optional[int]  # Start year for comparison (e.g. 2023)
+    year_end: Optional[int]    # End year for comparison (e.g. 2024)
     chart_url: str  # Cloudinary URL of generated comparison chart
     chart_filename: str  # Filename of generated chart
     context_strategy: str  # Strategy for context selection: "messages" | "documents" | "incremental"

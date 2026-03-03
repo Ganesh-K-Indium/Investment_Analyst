@@ -311,37 +311,37 @@ def generate_comparison_subqueries(companies: list, year: str = "2024") -> dict:
     for company in companies:
         # 1. REVENUE - Exact 10-K language
         sub_queries.append(
-            f"{company} total revenues net revenues year ended December 31 {year} {prior_year} consolidated statements of operations"
+            f"{company} total revenues net revenues year ended December 31 {year} consolidated statements of operations"
         )
 
         # 2. NET INCOME - Exact bottom-line metric
         sub_queries.append(
-            f"{company} net income loss year ended December 31 {year} {prior_year} per share diluted basic"
+            f"{company} net income loss year ended December 31 {year} per share diluted basic"
         )
 
         # 3. OPERATING INCOME - Before tax line
         sub_queries.append(
-            f"{company} income from operations operating income year ended December 31 {year} {prior_year}"
+            f"{company} income from operations operating income year ended December 31 {year}"
         )
 
         # 4. EARNINGS GROWTH - Explicit comparison language
         sub_queries.append(
-            f"{company} increased decreased from {prior_year} to {year} compared to {prior_year} percentage change"
+            f"{company} earnings growth increased or decreased from {prior_year} to {year} compared to {prior_year} percentage change"
         )
 
         # 5. R&D EXPENSES - Operating cost breakout
         sub_queries.append(
-            f"{company} research and development costs and expenses year ended December 31 {year} {prior_year}"
+            f"{company} research and development costs and expenses year ended December 31 {year}"
         )
 
         # 6. TOTAL ASSETS - Balance sheet specific date
         sub_queries.append(
-            f"{company} total assets as of December 31 {year} {prior_year} consolidated balance sheets"
+            f"{company} total assets as of December 31 {year} consolidated balance sheets"
         )
 
         # 7. TOTAL DEBT - Long-term obligations
         sub_queries.append(
-            f"{company} long-term debt total liabilities as of December 31 {year} {prior_year} balance sheets"
+            f"{company} long-term debt total liabilities as of December 31 {year} balance sheets"
         )
 
         # 8. PROFIT DRIVERS - MD&A results section
@@ -543,8 +543,10 @@ def preprocess_and_analyze_query(state):
 
         print(f"📊 Companies: {', '.join(comparison_companies)}")
 
-        # Generate fixed sub-queries
-        sub_query_analysis = generate_comparison_subqueries(comparison_companies, year="2024")
+        # Generate fixed sub-queries using the year from state (fallback to 2024)
+        comparison_year = str(state.get("year_start") or state.get("year_end") or "2024")
+        print(f"📊 Comparison year: {comparison_year}")
+        sub_query_analysis = generate_comparison_subqueries(comparison_companies, year=comparison_year)
 
         return {
             "companies_detected": comparison_companies,
@@ -2544,10 +2546,11 @@ def generate_comparison_chart(state):
         fig = go.Figure(data=bars)
         
         # Update layout - with support for negative values
+        chart_year = str(state.get("year_start") or state.get("year_end") or "2024")
         title = f'Financial Comparison: {company1} vs {company2}'
         if company3:
             title += f" vs {company3}"
-        title += " (2024)"
+        title += f" ({chart_year})"
         
         fig.update_layout(
             title=title,
