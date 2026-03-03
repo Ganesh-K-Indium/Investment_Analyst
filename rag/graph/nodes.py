@@ -1,5 +1,6 @@
 "This module contains all info about about the nodes in the graph"
 import re
+from typing import List, Optional
 from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
@@ -286,75 +287,105 @@ def smart_extract_financial_data(documents, max_chars=80000):
     return extracted_docs
 
 
-def generate_comparison_subqueries(companies: list, year: str = "2024") -> dict:
+def generate_comparison_subqueries(
+    companies: List[str],
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
+) -> dict:
     """
     Generate optimized sub-queries for company comparison WITHOUT LLM.
 
     These queries are specifically designed to retrieve data from 10-K reports
     with maximum accuracy and minimal retrieval time.
 
+    Generates one full set of financial statement queries (1-7) per year in the
+    requested range, plus a single narrative query set (8-9) per company spanning
+    the full range.  This ensures all annual filings in the range are retrieved
+    without creating duplicate narrative queries.
+
     Args:
-        companies: List of company names to compare
-        year: Year for comparison (default: 2024)
+        companies:  List of company names to compare.
+        year_start: First year in the comparison range (inclusive, e.g. 2022).
+        year_end:   Last year in the comparison range (inclusive, e.g. 2024).
+                    When omitted, defaults to year_start.  When both omitted,
+                    defaults to 2024.
 
     Returns:
-        dict: Sub-query analysis with pre-generated queries
+        dict: Sub-query analysis with pre-generated queries.
     """
+    # --- resolve year list ---------------------------------------------------
+    if year_start and year_end:
+        years = list(range(year_start, year_end + 1))
+    elif year_end:
+        years = [year_end]
+    elif year_start:
+        years = [year_start]
+    else:
+        years = [2024]
+
+    # Human-readable range label used in narrative queries and logging
+    if len(years) == 1:
+        range_label = str(years[0])
+    else:
+        range_label = f"{years[0]}-{years[-1]}"
+
     sub_queries = []
 
-    # Template structure optimized for 10-K reports
-    # Using multiple search terms and specific document sections
-
-    year_int = int(year) if isinstance(year, str) else year
-    prior_year = year_int - 1
-
     for company in companies:
-        # 1. REVENUE - Exact 10-K language
-        sub_queries.append(
-            f"{company} total revenues net revenues year ended December 31 {year} {prior_year} consolidated statements of operations"
-        )
+        # --- financial statement queries: one set per year -------------------
+        for yr in years:
+            prior = yr - 1
 
-        # 2. NET INCOME - Exact bottom-line metric
-        sub_queries.append(
-            f"{company} net income loss year ended December 31 {year} {prior_year} per share diluted basic"
-        )
+            # 1. REVENUE
+            sub_queries.append(
+                f"{company} total revenues net revenues year ended December 31 {yr} {prior} consolidated statements of operations"
+            )
 
-        # 3. OPERATING INCOME - Before tax line
-        sub_queries.append(
-            f"{company} income from operations operating income year ended December 31 {year} {prior_year}"
-        )
+            # 2. NET INCOME
+            sub_queries.append(
+                f"{company} net income loss year ended December 31 {yr} {prior} per share diluted basic"
+            )
 
-        # 4. EARNINGS GROWTH - Explicit comparison language
-        sub_queries.append(
-            f"{company} increased decreased from {prior_year} to {year} compared to {prior_year} percentage change"
-        )
+            # 3. OPERATING INCOME
+            sub_queries.append(
+                f"{company} income from operations operating income year ended December 31 {yr} {prior}"
+            )
 
-        # 5. R&D EXPENSES - Operating cost breakout
-        sub_queries.append(
-            f"{company} research and development costs and expenses year ended December 31 {year} {prior_year}"
-        )
+            # 4. EARNINGS GROWTH
+            sub_queries.append(
+                f"{company} increased decreased from {prior} to {yr} compared to {prior} percentage change"
+            )
 
-        # 6. TOTAL ASSETS - Balance sheet specific date
-        sub_queries.append(
-            f"{company} total assets as of December 31 {year} {prior_year} consolidated balance sheets"
-        )
+            # 5. R&D EXPENSES
+            sub_queries.append(
+                f"{company} research and development costs and expenses year ended December 31 {yr} {prior}"
+            )
 
-        # 7. TOTAL DEBT - Long-term obligations
-        sub_queries.append(
-            f"{company} long-term debt total liabilities as of December 31 {year} {prior_year} balance sheets"
-        )
+            # 6. TOTAL ASSETS
+            sub_queries.append(
+                f"{company} total assets as of December 31 {yr} {prior} consolidated balance sheets"
+            )
 
+            # 7. TOTAL DEBT
+            sub_queries.append(
+                f"{company} long-term debt total liabilities as of December 31 {yr} {prior} balance sheets"
+            )
+
+        # --- narrative queries: one set per company (range-aware) ------------
         # 8. PROFIT DRIVERS - MD&A results section
         sub_queries.append(
-            f"{company} results of operations factors affecting our performance key business drivers {year}"
+            f"{company} results of operations factors affecting our performance key business drivers {range_label}"
         )
 
         # 9. RISK FACTORS - Dedicated section
         sub_queries.append(
-            f"{company} Item 1A risk factors risks and uncertainties that could affect our business {year}"
+            f"{company} Item 1A risk factors risks and uncertainties that could affect our business {range_label}"
         )
 
-    print(f"[FIXED QUERIES] Generated {len(sub_queries)} optimized sub-queries for {len(companies)} companies")
+    print(
+        f"[FIXED QUERIES] Generated {len(sub_queries)} optimized sub-queries "
+        f"for {len(companies)} companies over {len(years)} year(s): {range_label}"
+    )
     print(f"[FIXED QUERIES] Skipped LLM query generation - using 10-K-optimized templates")
 
     return {
@@ -362,7 +393,9 @@ def generate_comparison_subqueries(companies: list, year: str = "2024") -> dict:
         "query_type": "multi_company",
         "companies_detected": companies,
         "sub_queries": sub_queries,
-        "reasoning": f"Pre-optimized 10-K queries for {', '.join(companies)} (no LLM needed)",
+        "year_range": range_label,
+        "years": years,
+        "reasoning": f"Pre-optimized 10-K queries for {', '.join(companies)} over {range_label} (no LLM needed)",
         "generation_method": "template"  # vs "llm"
     }
 
@@ -543,8 +576,17 @@ def preprocess_and_analyze_query(state):
 
         print(f"📊 Companies: {', '.join(comparison_companies)}")
 
-        # Generate fixed sub-queries
-        sub_query_analysis = generate_comparison_subqueries(comparison_companies, year="2024")
+        # Read year range from state (both may be None → function defaults to 2024)
+        year_start = state.get("year_start")
+        year_end = state.get("year_end")
+        print(f"📊 Year range: year_start={year_start}, year_end={year_end}")
+
+        # Generate fixed sub-queries — one set per year in range
+        sub_query_analysis = generate_comparison_subqueries(
+            comparison_companies,
+            year_start=year_start,
+            year_end=year_end,
+        )
 
         return {
             "companies_detected": comparison_companies,

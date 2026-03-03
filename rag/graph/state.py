@@ -79,3 +79,6 @@ class GraphState(TypedDict):
     scenario_mode: bool  # Whether this is a Bull/Bear/Base scenario query
     scenario_data: Dict[str, Any]  # Web-collected data buckets for scenario analysis
     scenario_report: str  # Final scenario report combining all three cases
+    # Year range for comparison queries
+    year_start: Optional[int]  # Start year for comparison (e.g. 2022)
+    year_end: Optional[int]    # End year for comparison (e.g. 2024)

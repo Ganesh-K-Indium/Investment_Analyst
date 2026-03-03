@@ -32,6 +32,8 @@ class CompareInput(BaseModel):
     company3: Optional[str] = Field(None, description="Optional third company")
     user_id: str = Field(..., description="User identifier")
     thread_id: Optional[str] = Field(None, description="Optional thread_id for conversation continuity")
+    year_start: Optional[int] = Field(None, description="Start year for comparison range (e.g. 2022)")
+    year_end: Optional[int] = Field(None, description="End year for comparison range (e.g. 2024)")
 
 
 class HealthStatusResponse(BaseModel):
@@ -323,13 +325,28 @@ async def compare_companies(
             session_metadata={
                 "type": "compare",
                 "companies": companies,
-                "tickers": tickers
+                "tickers": tickers,
+                "year_start": payload.year_start,
+                "year_end": payload.year_end
             }
         )
         
+        # Build year range string for the query
+        if payload.year_start and payload.year_end:
+            if payload.year_start == payload.year_end:
+                year_str = str(payload.year_start)
+            else:
+                year_str = f"{payload.year_start}-{payload.year_end}"
+        elif payload.year_start:
+            year_str = str(payload.year_start)
+        elif payload.year_end:
+            year_str = str(payload.year_end)
+        else:
+            year_str = "2024"
+        
         # Predefined comparison prompt
         query = f"""
-Compare {comparison_str} 2024:
+Compare {comparison_str} {year_str}:
 - Financial performance (revenue, earnings growth, net income/loss, operating margin)
 - Investment & costs (Research and Development (R&D) expenses)
 - Financial position (total assets, total debts)
@@ -378,6 +395,8 @@ Compare {comparison_str} 2024:
             "comparison_company1": company1,
             "comparison_company2": company2,
             "comparison_company3": company3,
+            "year_start": payload.year_start,
+            "year_end": payload.year_end,
             "chart_url": None,
             "chart_filename": None
         }
@@ -401,6 +420,8 @@ Compare {comparison_str} 2024:
                 "company1": company1,
                 "company2": company2,
                 "company3": company3,
+                "year_start": payload.year_start,
+                "year_end": payload.year_end,
                 "chart_url": chart_url,
                 "chart_filename": chart_filename,
                 "vectorstore_searched": result.get("vectorstore_searched", False),
