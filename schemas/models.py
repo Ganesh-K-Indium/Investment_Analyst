@@ -122,6 +122,9 @@ class UniversalSubQueryAnalysis(BaseModel):
     companies_detected: list[str] = Field(
         description="All company names mentioned in the query (empty list if none)"
     )
+    requested_years: list[int] = Field(
+        description="Specific years mentioned in the query (e.g. 2023, 2024). Empty list if no years are specified."
+    )
     sub_queries: list[str] = Field(
         description="List of focused sub-queries to retrieve specific data points. Each should be a standalone search query."
     )

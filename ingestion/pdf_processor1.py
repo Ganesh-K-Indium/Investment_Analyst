@@ -144,6 +144,18 @@ def extract_company_name(file_name: str) -> str:
     
     return company
 
+def extract_year_from_filename(file_name: str) -> int:
+    """
+    Extract year from a file name. Default to current year if not found.
+    """
+    match = re.search(r'\b(19|20)\d{2}\b', file_name)
+    if match:
+        return int(match.group(0))
+    # Default to current year or 2024
+    current_year = datetime.now().year
+    return current_year if current_year > 2000 else 2024
+
+
 def calculate_content_hash(pdf_path: str) -> str:
     """Calculate a deterministic hash of the PDF content."""
     try:
@@ -400,6 +412,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
                         "ticker": ticker if ticker else "unknown",
                         "content_type": "text",
                         "content_hash": content_hash,
+                        "year": extract_year_from_filename(source_file_name),
                         "ingestion_timestamp": str(datetime.now()),
                     }
                     documents.append(Document(page_content=text, metadata=metadata))
@@ -468,6 +481,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
                         "ticker": ticker if ticker else "unknown",
                         "content_type": "image",
                         "content_hash": content_hash,
+                        "year": extract_year_from_filename(source_file_name),
                         "ingestion_timestamp": str(datetime.now())
                     })
 

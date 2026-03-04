@@ -608,6 +608,7 @@ def preprocess_and_analyze_query(state):
         "query_type": analysis.query_type,
         "companies_detected": analysis.companies_detected,
         "sub_queries": analysis.sub_queries,
+        "requested_years": analysis.requested_years,
         "reasoning": analysis.reasoning
     }
     
@@ -615,6 +616,7 @@ def preprocess_and_analyze_query(state):
     print(f"[ANALYSIS] Query Type: {analysis.query_type}")
     print(f"[ANALYSIS] Companies: {analysis.companies_detected if analysis.companies_detected else 'None'}")
     print(f"[ANALYSIS] Needs Sub-Queries: {analysis.needs_sub_queries}")
+    print(f"[ANALYSIS] Requested Years: {analysis.requested_years}")
     
     if analysis.needs_sub_queries:
         print(f"[ANALYSIS] Generated {len(analysis.sub_queries)} sub-queries:")
@@ -788,6 +790,11 @@ def retrieve(state, config):
     needs_sub_queries = sub_query_analysis.get("needs_sub_queries", False)
     sub_queries = sub_query_analysis.get("sub_queries", [])
     query_type = sub_query_analysis.get("query_type", "single_company")
+    
+    # Extract requested years (default to recent year if not specified)
+    requested_years = sub_query_analysis.get("requested_years", [])
+    if not requested_years:
+        requested_years = [2024]
 
     target_tickers = set()
 
@@ -857,26 +864,28 @@ def retrieve(state, config):
                     # Get instance for this ticker (DO NOT CREATE if missing)
                     db_instance = vectordb_mgr.get_instance(t_ticker, create_if_missing=False)
 
-                    # Perform search
-                    search_results = db_instance.hybrid_search(
-                        query=sq,
-                        content_type=None,
-                        limit=5, # Reduced limit per ticker/sub-query
-                        dense_limit=50,
-                        sparse_limit=50
-                    )
-
-                    # Convert to Document objects
+                    # Perform search per requested year to ensure representation
                     docs_from_ticker = 0
-                    for point in search_results:
-                        if hasattr(point, 'payload'):
-                            content = point.payload.get('page_content', '')
-                            metadata = point.payload.get('metadata', {})
-                            # Ensure company metadata is set if missing
-                            if 'company' not in metadata: metadata['company'] = t_ticker
-                            doc = Document(page_content=content, metadata=metadata)
-                            step_docs.append(doc)
-                            docs_from_ticker += 1
+                    for year_filter in requested_years:
+                        search_results = db_instance.hybrid_search(
+                            query=sq,
+                            content_type=None,
+                            years=[year_filter],
+                            limit=5, # Reduced limit per ticker/sub-query
+                            dense_limit=50,
+                            sparse_limit=50
+                        )
+
+                        # Convert to Document objects
+                        for point in search_results:
+                            if hasattr(point, 'payload'):
+                                content = point.payload.get('page_content', '')
+                                metadata = point.payload.get('metadata', {})
+                                # Ensure company metadata is set if missing
+                                if 'company' not in metadata: metadata['company'] = t_ticker
+                                doc = Document(page_content=content, metadata=metadata)
+                                step_docs.append(doc)
+                                docs_from_ticker += 1
 
                     if docs_from_ticker > 0:
                         print(f"      ✅ Found {docs_from_ticker} documents")
@@ -937,32 +946,34 @@ def retrieve(state, config):
                     # DO NOT CREATE if missing
                     db_instance = vectordb_mgr.get_instance(target_ticker, create_if_missing=False)
                     
-                    search_results = db_instance.hybrid_search(
-                        query=question,
-                        content_type=None,
-                        limit=10, 
-                        dense_limit=100,
-                        sparse_limit=100
-                    )
-                    
-                    # Convert to Documents and Deduplicate
                     current_collection_docs = 0
-                    for point in search_results:
-                        if hasattr(point, 'payload'):
-                            content = point.payload.get('page_content', '')
-                            metadata = point.payload.get('metadata', {})
-                            
-                            # Create a unique ID for deduplication
-                            # Use source_file + page_num + content hash equivalent
-                            doc_id = f"{metadata.get('company', target_ticker)}_{metadata.get('source_file','')}_{metadata.get('page_num','')}_{content[:50]}"
-                            
-                            if doc_id not in seen_doc_ids:
-                                seen_doc_ids.add(doc_id)
-                                doc = Document(page_content=content, metadata=metadata)
-                                all_documents.append(doc)
-                                current_collection_docs += 1
+                    for year_filter in requested_years:
+                        search_results = db_instance.hybrid_search(
+                            query=question,
+                            content_type=None,
+                            years=[year_filter],
+                            limit=10, 
+                            dense_limit=100,
+                            sparse_limit=100
+                        )
+                        
+                        # Convert to Documents and Deduplicate
+                        for point in search_results:
+                            if hasattr(point, 'payload'):
+                                content = point.payload.get('page_content', '')
+                                metadata = point.payload.get('metadata', {})
                                 
-                    print(f"       Found {current_collection_docs} unique docs")
+                                # Create a unique ID for deduplication
+                                # Use source_file + page_num + content hash equivalent
+                                doc_id = f"{metadata.get('company', target_ticker)}_{metadata.get('source_file','')}_{metadata.get('page_num','')}_{content[:50]}"
+                                
+                                if doc_id not in seen_doc_ids:
+                                    seen_doc_ids.add(doc_id)
+                                    doc = Document(page_content=content, metadata=metadata)
+                                    all_documents.append(doc)
+                                    current_collection_docs += 1
+                                    
+                    print(f"       Found {current_collection_docs} unique docs across requested years")
                     
                 except Exception as e:
                     print(f"      Error searching collection for {target_ticker}: {e}")

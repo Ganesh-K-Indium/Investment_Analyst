@@ -688,7 +688,7 @@ Even if a question appears simple (e.g. "What is Google's gross margin?"), if it
    - "[Company] total debt long-term debt short-term debt borrowings [Year]"
    - "[Company] total equity shareholders equity stockholders equity [Year]"
 
-5. **FOR MULTI-COMPANY COMPARISONS** (Each company gets multiple varied searches):
+3. **FOR MULTI-COMPANY COMPARISONS** (Each company gets multiple varied searches):
    Example: "Compare Amazon and Google segments"
    Sub-queries:
    - "Amazon segment revenue business segments AWS North America International"
@@ -696,31 +696,36 @@ Even if a question appears simple (e.g. "What is Google's gross margin?"), if it
    - "Google Alphabet segment revenue business segments Cloud Search Ads"
    - "Google Alphabet operating segments Other Bets revenue breakdown"
 
-6. **FOR NOTES-SPECIFIC DATA** (Use "notes", "footnotes", specific note numbers):
+4. **EXTRACTING REQUESTED YEARS**:
+   - Identify specific years mentioned in the user's question (e.g. "What was Apple's revenue in 2023?" -> [2023]).
+   - Output them as an array of integers in the `requested_years` field.
+   - Only include explicitly requested years. If no year is specified, return an empty array `[]`.
+
+5. **FOR NOTES-SPECIFIC DATA** (Use "notes", "footnotes", specific note numbers):
    - Revenue details: "revenue recognition notes", "disaggregated revenue footnotes"
    - Segment data: "segment information note 15", "business segments notes"
    - Debt details: "debt obligations note", "long-term debt details notes"
    - Lease data: "lease obligations notes", "operating lease details"
    - Stock compensation: "stock-based compensation notes", "equity awards footnotes"
 
-7. **FOR GEOGRAPHIC/PRODUCT BREAKDOWNS** (Use multiple organizational terms):
+6. **FOR GEOGRAPHIC/PRODUCT BREAKDOWNS** (Use multiple organizational terms):
    - "revenue by geography", "geographic segments", "revenue by region"
    - "revenue by product line", "product segments", "revenue by category"
    - "domestic revenue", "international revenue", "U.S. revenue", "foreign revenue"
 
-8. **INCLUDE SYNONYMS AND ABBREVIATIONS**:
+7. **INCLUDE SYNONYMS AND ABBREVIATIONS**:
    - R&D = "research and development", "R&D expenses", "R&D spending"
    - PP&E = "property plant equipment", "PP&E", "fixed assets", "capital assets"
    - COGS = "cost of goods sold", "COGS", "cost of revenue", "cost of sales"
    - SG&A = "selling general administrative", "SG&A", "operating expenses"
    - EBITDA = "earnings before interest tax depreciation amortization", "operating profit"
 
-9. **FOR TEMPORAL QUERIES** (Include year + variations):
+8. **FOR TEMPORAL QUERIES** (Include year + variations):
    - ✅ "Meta revenue 2023 2024 year-over-year growth income statement"
    - ✅ "Amazon balance sheet 2023 vs 2024 comparison"
    - ✅ "Tesla cash flow 2022 2023 operating cash flow changes"
 
-10. **SMART QUERY STRATEGY FOR HARD-TO-FIND DATA**:
+9. **SMART QUERY STRATEGY FOR HARD-TO-FIND DATA**:
     - Create 3-5 sub-queries with progressively broader/different terms
     - Start specific → get broader → try synonyms
     - Example for "Amazon AWS revenue":
@@ -731,12 +736,13 @@ Even if a question appears simple (e.g. "What is Google's gross margin?"), if it
 
 **EXAMPLES (SHOWING MULTI-TERM STRATEGY):**
 
-Example 1: "What are Google's business segment revenues?"
+Example 1: "What are Google's business segment revenues in 2023?"
 ```json
 {{
   "needs_sub_queries": true,
   "query_type": "single_company",
   "companies_detected": ["Google"],
+  "requested_years": [2023],
   "sub_queries": [
     "Google Alphabet segment revenue business segments Google Cloud Search Ads",
     "Google Alphabet operating segments reportable segments revenue breakdown",
