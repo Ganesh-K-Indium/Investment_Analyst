@@ -1,3 +1,4 @@
+from typing import Optional, List
 import pandas as pd
 import yfinance as yf
 from fastmcp import FastMCP
@@ -121,70 +122,86 @@ async def save_figure_as_base64(fig: go.Figure, filename: str, width: int = 1000
 # Indicators Simple Moving Average
 @technicalanalysis_server.tool(
         name="get_stock_sma",
-        description="""Calculate the Simple Moving Average (SMA) for the user's given ticker in the given date range."
+        description="""Calculate the Simple Moving Average (SMA) for the user's given ticker in the given date range.
         Args:
-                ticker:str 
-                        the ticker symbol given by the user for getting Simple Moving Average (SMA) of he company.
+                ticker:str
+                        the ticker symbol given by the user for getting Simple Moving Average (SMA) of the company.
                 start_date:str
                         the start date given by the user for getting Simple Moving Average (SMA) of the company.
                 end_date:str
                         the end date given by the user for getting Simple Moving Average (SMA) of the company.
+                sma_periods: list[int] (optional)
+                        List of SMA window periods to calculate and plot (e.g. [20, 50, 200]).
+                        If the user requests a specific period like "50-day SMA", include that number.
+                        Defaults to [20, 50, 100, 200] if not specified.
         Returns:
                 str
-                        A message indicating whether the SMA was successfully calculated or not.     
+                        A message indicating whether the SMA was successfully calculated or not.
         """
 )
-async def get_stock_sma(ticker: str, start_date: str, end_date: str) -> dict:
+async def get_stock_sma(ticker: str, start_date: str, end_date: str, sma_periods: Optional[List[int]] = None) -> dict:
         """Get the Simple Moving Average (SMA) for a given ticker symbol, start date, and end date.
            Args: str
                 ticker: The ticker symbol of the stock
                 start_date: The start date to calculate SMA for a stock (format: 'YYYY-MM-DD')
                 end_date: The end date to calculate SMA for a stock (format: 'YYYY-MM-DD')
+                sma_periods: List of integer window sizes for SMA calculation (e.g. [20, 50, 200])
         """
+        if sma_periods is None:
+                sma_periods = [20, 50, 100, 200]
+        sma_periods = sorted(set(int(p) for p in sma_periods))
+
+        sma_colors = ['orange', 'cyan', 'blue', 'green', 'purple', 'magenta', 'yellow', 'red']
+
         try:
-                df = await fetch_stock_data(ticker, start_date, end_date)
-                
+                # Fetch extra historical data so largest SMA has enough points to compute.
+                # Use 2x the largest period as calendar-day lookback (accounts for weekends/holidays).
+                max_period = max(sma_periods)
+                lookback_days = int(max_period * 2)
+                extended_start = (datetime.datetime.strptime(start_date, "%Y-%m-%d") - datetime.timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+                df = await fetch_stock_data(ticker, extended_start, end_date)
 
                 close = df['Close']
-                df['SMA_20'] = SMAIndicator(close, window=20).sma_indicator()
-                df['SMA_100'] = SMAIndicator(close, window=100).sma_indicator()
-                df['SMA_200'] = SMAIndicator(close, window=200).sma_indicator()
-                df['SMA_300'] = SMAIndicator(close, window=300).sma_indicator()
+                for period in sma_periods:
+                        col = f'SMA_{period}'
+                        df[col] = SMAIndicator(close, window=period).sma_indicator()
 
-                
-        
+                # Trim back to the user's requested display range
+                df = df[df.index >= start_date]
+
                 fig = go.Figure()
                 df.index = df.index.strftime('%Y-%m-%d')
-                fig.add_trace(go.Scatter(x=df.index, y=close, name='Close', line=dict(color='white')))
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_20'], name='SMA 20', line=dict(color='orange')))
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_100'], name='SMA 100', line=dict(color='blue')))
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], name='SMA 200', line=dict(color='green')))
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_300'], name='SMA 300', line=dict(color='purple')))
-                print(df.index)
+                fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Close', line=dict(color='white')))
+                for i, period in enumerate(sma_periods):
+                        col = f'SMA_{period}'
+                        color = sma_colors[i % len(sma_colors)]
+                        fig.add_trace(go.Scatter(x=df.index, y=df[col], name=f'SMA {period}', line=dict(color=color)))
+
                 fig.update_layout(
-                title=f"{ticker.upper()} - Simple Moving Averages",
+                title=f"{ticker.upper()} - Simple Moving Averages ({', '.join(str(p) for p in sma_periods)}-day)",
                 template='plotly_dark',
                 xaxis_title='Date',
                 yaxis_title='Price',
-        
                 height=600,
                 width=1000
-                
-        )
-        
+                )
+
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"{ticker}_sma_chart_{timestamp}.png"
-                result = await save_figure_as_base64(fig, filename) 
+                result = await save_figure_as_base64(fig, filename)
                 if "error" in result:
                         return {"ticker": ticker, "error": result["error"], "traceback": result["traceback"]}
 
+                sma_values = {f"sma_{p}": round(df[f'SMA_{p}'].iloc[-1], 2) if not df[f'SMA_{p}'].isna().all() else None for p in sma_periods}
                 return {
                 "ticker": ticker,
                 "chart_generated": True,
                 "image_filename": result["filename"],
-                "message": f"SMA chart for {ticker} has been generated and saved to {result['filename']}. The chart shows 20, 100, 200, and 300-day Simple Moving Averages."
+                "sma_values": sma_values,
+                "message": f"SMA chart for {ticker} has been generated and saved to {result['filename']}. The chart shows {', '.join(str(p) for p in sma_periods)}-day Simple Moving Averages."
                 }
-                
+
         except Exception as e:
                return {"ticker": ticker, "error": str(e), "traceback": traceback.format_exc()}
       
@@ -285,13 +302,18 @@ async def get_stock_bollingerbands(ticker: str, start_date: str, end_date: str) 
                 start_date: The start date to calculate BollingerBand (bb) for a stock (format: 'YYYY-MM-DD')
                 end_date: The end date to calculate BollingerBand (bb) for a stock (format: 'YYYY-MM-DD')
         """
-        df = await fetch_stock_data(ticker, start_date, end_date)
+        # BB window=20 needs 20 data points; fetch 40 extra calendar days as buffer
+        extended_start = (datetime.datetime.strptime(start_date, "%Y-%m-%d") - datetime.timedelta(days=40)).strftime("%Y-%m-%d")
+        df = await fetch_stock_data(ticker, extended_start, end_date)
         close = df['Close']
         bb = BollingerBands(close=close, window=20, window_dev=2)
-        
+
         df['Upper_BB'] = bb.bollinger_hband()
         df['Lower_BB'] = bb.bollinger_lband()
         df['SMA_20'] = bb.bollinger_mavg()
+
+        # Trim to user's requested display range
+        df = df[df.index >= start_date]
 
         # Bollinger Bands
         fig = go.Figure()
@@ -365,14 +387,18 @@ async def get_stock_macd(ticker: str, start_date: str, end_date: str) -> dict:
                 start_date: The start date to calculate MACD for a stock (format: 'YYYY-MM-DD')
                 end_date: The end date to calculate MACD for a stock (format: 'YYYY-MM-DD')
         """
-        df = await fetch_stock_data(ticker, start_date, end_date)
+        # MACD needs slow(26) + signal(9) = 35 trading days; fetch 70 extra calendar days
+        extended_start = (datetime.datetime.strptime(start_date, "%Y-%m-%d") - datetime.timedelta(days=70)).strftime("%Y-%m-%d")
+        df = await fetch_stock_data(ticker, extended_start, end_date)
         close = df['Close']
         macd = MACD(close=close)
         df['MACD'] = macd.macd()
         df['MACD_signal'] = macd.macd_signal()
         df['MACD_hist'] = macd.macd_diff()
-        
-        
+
+        # Trim to user's requested display range
+        df = df[df.index >= start_date]
+
         df.index = df.index.strftime('%Y-%m-%d')
         fig = go.Figure()
         
@@ -437,10 +463,14 @@ async def get_stock_volume(ticker: str, start_date: str, end_date: str) -> dict:
                 start_date: The start date to calculate Volume for a stock (format: 'YYYY-MM-DD')
                 end_date: The end date to calculate Volume for a stock (format: 'YYYY-MM-DD')
         """
-        df = await fetch_stock_data(ticker, start_date, end_date)
+        # Volume SMA window=20 needs 20 data points; fetch 40 extra calendar days
+        extended_start = (datetime.datetime.strptime(start_date, "%Y-%m-%d") - datetime.timedelta(days=40)).strftime("%Y-%m-%d")
+        df = await fetch_stock_data(ticker, extended_start, end_date)
         df['Volume_SMA_20'] = df['Volume'].rolling(window=20).mean()
-        
-        
+
+        # Trim to user's requested display range
+        df = df[df.index >= start_date]
+
         df.index = df.index.strftime('%Y-%m-%d')
         fig = go.Figure()
         fig.add_trace(go.Bar(
@@ -565,8 +595,10 @@ async def get_all_technical_analysis(ticker: str, start_date: str, end_date: str
                 start_date: The start date to calculate SMA,RSI (Relative Strength Index),Volume,Support and resistance,MACD and BollingerBands  for a stock (format: 'YYYY-MM-DD')
                 end_date: The end date to calculate SMA,RSI (Relative Strength Index),Volume,Support and resistance,MACD and BollingerBands for a stock (format: 'YYYY-MM-DD')
         """
-        get_stock_sma(ticker, start_date, end_date)
-        df = yf.download(ticker, start=start_date, end=end_date)
+        # SMA_300 is the largest window; fetch 600 extra calendar days as buffer
+        extended_start = (datetime.datetime.strptime(start_date, "%Y-%m-%d") - datetime.timedelta(days=600)).strftime("%Y-%m-%d")
+        loop = asyncio.get_event_loop()
+        df = await loop.run_in_executor(None, lambda: yf.download(ticker, start=extended_start, end=end_date))
 
 # Drop multilevel column index if present
         if isinstance(df.columns, pd.MultiIndex):
@@ -594,6 +626,10 @@ async def get_all_technical_analysis(ticker: str, start_date: str, end_date: str
 
 # Volume Trends
         df['Volume_SMA_20'] = df['Volume'].rolling(window=20).mean()
+
+# Trim to user's requested display range before S/R and charting
+        df = df[df.index >= start_date]
+        close = df['Close']
 
 # Support/Resistance (using local minima/maxima)
         n = 10  # sensitivity
@@ -830,61 +866,73 @@ async def get_chart_summary(file_path:str) -> dict:
                         Start date in format 'YYYY-MM-DD'
                 end_date: str
                         End date in format 'YYYY-MM-DD'
+                sma_periods: list[int] (optional)
+                        List of SMA window periods to calculate and plot (e.g. [20, 50, 200]).
+                        If the user requests a specific period like "50-day SMA", include that number.
+                        Defaults to [20, 50, 200] if not specified.
         """
 )
-async def get_multi_stock_sma(tickers: list, start_date: str, end_date: str) -> dict:
+async def get_multi_stock_sma(tickers: List[str], start_date: str, end_date: str, sma_periods: Optional[List[int]] = None) -> dict:
         """Generate SMA comparison chart for multiple stocks."""
+        if sma_periods is None:
+                sma_periods = [20, 50, 200]
+        sma_periods = sorted(set(int(p) for p in sma_periods))
+
+        line_dashes = ['solid', 'dot', 'dash', 'dashdot', 'longdash']
+        stock_colors = ['white', 'cyan', 'yellow', 'magenta', 'lime', 'orange', 'red', 'blue', 'green', 'pink']
+
+        # Fetch extra history so the largest SMA has enough points to compute
+        max_period = max(sma_periods)
+        lookback_days = int(max_period * 2)
+        extended_start = (datetime.datetime.strptime(start_date, "%Y-%m-%d") - datetime.timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
         try:
                 if not isinstance(tickers, list) or len(tickers) < 2:
                         return {"error": "Please provide at least 2 tickers as a list"}
-                
+
                 fig = go.Figure()
-                colors = ['white', 'cyan', 'yellow', 'magenta', 'lime', 'orange', 'red', 'blue', 'green', 'purple']
                 ticker_data = {}
-                
+
                 for idx, ticker in enumerate(tickers):
                         try:
-                                df = await fetch_stock_data(ticker, start_date, end_date)
+                                df = await fetch_stock_data(ticker, extended_start, end_date)
                                 close = df['Close']
-                                df['SMA_20'] = SMAIndicator(close, window=20).sma_indicator()
-                                df['SMA_100'] = SMAIndicator(close, window=100).sma_indicator()
-                                df['SMA_200'] = SMAIndicator(close, window=200).sma_indicator()
-                                
+                                for period in sma_periods:
+                                        df[f'SMA_{period}'] = SMAIndicator(close, window=period).sma_indicator()
+
+                                # Trim to user's requested display range
+                                df = df[df.index >= start_date]
+                                close = df['Close']
+
                                 df.index = df.index.strftime('%Y-%m-%d')
-                                color = colors[idx % len(colors)]
-                                
+                                color = stock_colors[idx % len(stock_colors)]
+
                                 # Plot close price
                                 fig.add_trace(go.Scatter(
-                                        x=df.index, y=close, 
+                                        x=df.index, y=close,
                                         name=f'{ticker.upper()} Close',
                                         line=dict(color=color, width=2)
                                 ))
-                                
-                                # Plot SMAs with lighter shades
-                                fig.add_trace(go.Scatter(
-                                        x=df.index, y=df['SMA_20'],
-                                        name=f'{ticker.upper()} SMA 20',
-                                        line=dict(color=color, width=1, dash='dot'),
-                                        opacity=0.6
-                                ))
-                                
-                                fig.add_trace(go.Scatter(
-                                        x=df.index, y=df['SMA_200'],
-                                        name=f'{ticker.upper()} SMA 200',
-                                        line=dict(color=color, width=1, dash='dash'),
-                                        opacity=0.5
-                                ))
-                                
+
+                                # Plot each requested SMA with a different dash style
+                                for p_idx, period in enumerate(sma_periods):
+                                        col = f'SMA_{period}'
+                                        fig.add_trace(go.Scatter(
+                                                x=df.index, y=df[col],
+                                                name=f'{ticker.upper()} SMA {period}',
+                                                line=dict(color=color, width=1, dash=line_dashes[p_idx % len(line_dashes)]),
+                                                opacity=0.7
+                                        ))
+
                                 ticker_data[ticker] = {
                                         "current_price": round(close.iloc[-1], 2),
-                                        "sma_20": round(df['SMA_20'].iloc[-1], 2) if not df['SMA_20'].empty else None,
-                                        "sma_200": round(df['SMA_200'].iloc[-1], 2) if not df['SMA_200'].empty else None
+                                        **{f"sma_{p}": round(df[f'SMA_{p}'].iloc[-1], 2) if not df[f'SMA_{p}'].isna().all() else None for p in sma_periods}
                                 }
                         except Exception as e:
                                 ticker_data[ticker] = {"error": str(e)}
-                
+
                 fig.update_layout(
-                        title=f"Multi-Stock SMA Comparison: {', '.join([t.upper() for t in tickers])}",
+                        title=f"Multi-Stock SMA Comparison ({', '.join(str(p) for p in sma_periods)}-day): {', '.join([t.upper() for t in tickers])}",
                         template='plotly_dark',
                         xaxis_title='Date',
                         yaxis_title='Price',
@@ -892,20 +940,20 @@ async def get_multi_stock_sma(tickers: list, start_date: str, end_date: str) -> 
                         width=1200,
                         legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01)
                 )
-                
+
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"multi_stock_sma_{'_'.join(tickers)}_{timestamp}.png"
                 result = await save_figure_as_base64(fig, filename, width=1200, height=700)
-                
+
                 if "error" in result:
                         return {"tickers": tickers, "error": result["error"], "traceback": result["traceback"]}
-                
+
                 return {
                         "tickers": tickers,
                         "chart_generated": True,
                         "image_filename": result["filename"],
                         "ticker_data": ticker_data,
-                        "message": f"Multi-stock SMA comparison chart for {', '.join([t.upper() for t in tickers])} has been generated and saved to {result['filename']}."
+                        "message": f"Multi-stock SMA comparison chart for {', '.join([t.upper() for t in tickers])} has been generated showing {', '.join(str(p) for p in sma_periods)}-day SMAs."
                 }
         except Exception as e:
                 return {"tickers": tickers, "error": str(e), "traceback": traceback.format_exc()}
@@ -1012,22 +1060,27 @@ async def get_multi_stock_macd(tickers: list, start_date: str, end_date: str) ->
         try:
                 if not isinstance(tickers, list) or len(tickers) < 2:
                         return {"error": "Please provide at least 2 tickers as a list"}
-                
+
                 fig = go.Figure()
                 colors = ['orange', 'cyan', 'lime', 'magenta', 'yellow', 'lightblue', 'pink']
                 ticker_data = {}
-                
+                # MACD needs 35 trading days warm-up; fetch 70 extra calendar days
+                macd_extended_start = (datetime.datetime.strptime(start_date, "%Y-%m-%d") - datetime.timedelta(days=70)).strftime("%Y-%m-%d")
+
                 for idx, ticker in enumerate(tickers):
                         try:
-                                df = await fetch_stock_data(ticker, start_date, end_date)
+                                df = await fetch_stock_data(ticker, macd_extended_start, end_date)
                                 close = df['Close']
                                 macd = MACD(close=close)
                                 df['MACD'] = macd.macd()
                                 df['MACD_signal'] = macd.macd_signal()
-                                
+
+                                # Trim to user's requested display range
+                                df = df[df.index >= start_date]
+
                                 df.index = df.index.strftime('%Y-%m-%d')
                                 color = colors[idx % len(colors)]
-                                
+
                                 # Plot MACD line
                                 fig.add_trace(go.Scatter(
                                         x=df.index, y=df['MACD'],
@@ -1105,16 +1158,21 @@ async def get_multi_stock_bollingerbands(tickers: list, start_date: str, end_dat
                 fig = go.Figure()
                 colors = ['cyan', 'yellow', 'lime', 'magenta', 'orange', 'pink', 'lightblue']
                 ticker_data = {}
-                
+                # BB window=20 needs 20 data points; fetch 40 extra calendar days
+                bb_extended_start = (datetime.datetime.strptime(start_date, "%Y-%m-%d") - datetime.timedelta(days=40)).strftime("%Y-%m-%d")
+
                 for idx, ticker in enumerate(tickers):
                         try:
-                                df = await fetch_stock_data(ticker, start_date, end_date)
+                                df = await fetch_stock_data(ticker, bb_extended_start, end_date)
                                 close = df['Close']
                                 bb = BollingerBands(close=close, window=20, window_dev=2)
                                 df['Upper_BB'] = bb.bollinger_hband()
                                 df['Lower_BB'] = bb.bollinger_lband()
                                 df['SMA_20'] = bb.bollinger_mavg()
-                                
+
+                                # Trim to user's requested display range
+                                df = df[df.index >= start_date]
+
                                 df.index = df.index.strftime('%Y-%m-%d')
                                 color = colors[idx % len(colors)]
                                 
@@ -1207,11 +1265,17 @@ async def get_multi_stock_volume(tickers: list, start_date: str, end_date: str) 
                 colors = ['orange', 'cyan', 'lime', 'magenta', 'yellow', 'pink', 'lightblue']
                 ticker_data = {}
                 
+                # Volume SMA window=20 needs 20 data points; fetch 40 extra calendar days
+                vol_extended_start = (datetime.datetime.strptime(start_date, "%Y-%m-%d") - datetime.timedelta(days=40)).strftime("%Y-%m-%d")
+
                 for idx, ticker in enumerate(tickers):
                         try:
-                                df = await fetch_stock_data(ticker, start_date, end_date)
+                                df = await fetch_stock_data(ticker, vol_extended_start, end_date)
                                 df['Volume_SMA_20'] = df['Volume'].rolling(window=20).mean()
-                                
+
+                                # Trim to user's requested display range
+                                df = df[df.index >= start_date]
+
                                 df.index = df.index.strftime('%Y-%m-%d')
                                 color = colors[idx % len(colors)]
                                 row = idx + 1
