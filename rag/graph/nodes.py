@@ -2883,9 +2883,9 @@ def alpha_dimension_retrieve(state):
     print(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
     try:
         performance_queries = [
-            f"{ticker} revenue net income 10-year trend financial performance",
-            f"{ticker} operating cash flow free cash flow income statement",
-            f"{ticker} EBITDA margins ROE profitability metrics"
+            f"{ticker} revenue net income latest annual fiscal year 2025 2026 financial results",
+            f"{ticker} operating cash flow free cash flow income statement most recent annual 2025 2026",
+            f"{ticker} EBITDA margins ROE profitability metrics latest fiscal year 2025 2026 "
         ]
         
         performance_docs = []
@@ -2948,52 +2948,83 @@ def alpha_dimension_retrieve(state):
         alpha_dimensions['horizon'] = {'source': 'seekingalpha', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
-    # ACTION: yfinance (RSI, SMA200, price) + VectorDB (EBITDA) + Web (P/E)
+    # ACTION: Web (RSI, SMA200, price, P/E, EBITDA) — all from trusted sources
     # -------------------------------------------------------------------------
-    print(" [5/5] Action (RSI / SMA200 / P/E / EBITDA) - yfinance + VectorDB + Web")
+    print(" [5/5] Action (RSI / SMA200 / Price / P/E / EBITDA) - Web")
     try:
         action_docs = []
-        technical_data = {}
 
-        # -- Live technical indicators via yfinance ---------------------------
-        print("    Fetching RSI, SMA200, current price via yfinance...")
+        # Domains that reliably display live technical indicators
+        web_search_technical = TavilySearch(
+            max_results=3,
+            include_domains=TRUSTED_FINANCIAL_DOMAINS
+        )
+
+        # -- RSI(14) and current price from web --------------------------------
+        print("    Fetching RSI(14) and current price from web...")
         try:
-            import yfinance as yf
-
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="1y")
-
-            if not hist.empty:
-                current_price = round(float(hist['Close'].iloc[-1]), 2)
-                sma_200 = round(
-                    float(hist['Close'].tail(200).mean())
-                    if len(hist) >= 200
-                    else float(hist['Close'].mean()),
-                    2
+            rsi_query = f"{ticker} RSI 14 relative strength index current technical indicators"
+            rsi_results = web_search_technical.invoke({"query": rsi_query})
+            rsi_sources = _parse_tavily_response(rsi_results, rsi_query)
+            for source in rsi_sources:
+                from langchain_core.documents import Document
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'technical'
+                    }
                 )
+                action_docs.append(doc)
+            print(f"    Retrieved {len(rsi_sources)} RSI/price docs from web")
+        except Exception as rsi_err:
+            print(f"    RSI web search error (non-fatal): {rsi_err}")
 
-                # RSI — 14-period Wilder EMA method
-                close = hist['Close']
-                delta = close.diff()
-                gain = delta.clip(lower=0)
-                loss = -delta.clip(upper=0)
-                avg_gain = gain.ewm(com=13, adjust=False).mean()
-                avg_loss = loss.ewm(com=13, adjust=False).mean()
-                # Guard against division-by-zero when avg_loss is 0
-                rs = avg_gain / avg_loss.replace(0, float('nan'))
-                rsi_series = 100 - (100 / (1 + rs))
-                current_rsi = round(float(rsi_series.iloc[-1]), 2)
-
-                technical_data = {
-                    'current_price': current_price,
-                    'sma_200': sma_200,
-                    'rsi': current_rsi
-                }
-                print(f"    RSI={current_rsi}, Price=${current_price}, SMA200=${sma_200}")
-            else:
-                print("    yfinance returned empty history — technical indicators unavailable")
-        except Exception as yf_err:
-            print(f"    Technical indicator error (non-fatal): {yf_err}")
+        # -- SMA200 from web ---------------------------------------------------
+        print("    Fetching SMA200 from web...")
+        try:
+            sma_query = f"{ticker} 200 day moving average SMA200 current stock price technical"
+            sma_results = web_search_technical.invoke({"query": sma_query})
+            sma_sources = _parse_tavily_response(sma_results, sma_query)
+            for source in sma_sources:
+                from langchain_core.documents import Document
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'technical'
+                    }
+                )
+                action_docs.append(doc)
+            print(f"    Retrieved {len(sma_sources)} SMA200 docs from web")
+        except Exception as sma_err:
+            print(f"    SMA200 web search error (non-fatal): {sma_err}")
+        
+        # -- Current Stock Price from web ---------------------------------------------------
+        print("    Fetching Current Stock Price from web...")
+        try:
+            sma_query = f"{ticker} today's stock price current stock price"
+            sma_results = web_search_technical.invoke({"query": sma_query})
+            sma_sources = _parse_tavily_response(sma_results, sma_query)
+            for source in sma_sources:
+                from langchain_core.documents import Document
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'technical'
+                    }
+                )
+                action_docs.append(doc)
+            print(f"    Retrieved {len(sma_sources)} Current Stock Price docs from web")
+        except Exception as sma_err:
+            print(f"    Current Stock Price web search error (non-fatal): {sma_err}")
 
         # -- EBITDA from web search (trusted financial domains) ---------------
         print("    Fetching EBITDA from web (trusted domains)...")
@@ -3040,19 +3071,17 @@ def alpha_dimension_retrieve(state):
             print(f"    P/E web search error (non-fatal): {pe_err}")
 
         alpha_dimensions['action'] = {
-            'source': 'yfinance+vectordb+web',
+            'source': 'web',
             'documents': action_docs,
-            'technical_data': technical_data,
-            'query_count': 3
+            'query_count': 5
         }
-        print(f"    Total action docs: {len(action_docs)} + technical_data: {bool(technical_data)}")
+        print(f"    Total action docs: {len(action_docs)}")
 
     except Exception as e:
         print(f"    Error: {e}")
         alpha_dimensions['action'] = {
-            'source': 'yfinance+vectordb+web',
+            'source': 'web',
             'documents': [],
-            'technical_data': {},
             'query_count': 0
         }
     
@@ -3123,22 +3152,14 @@ def alpha_generate_report(state):
         docs = dim_data.get('documents', [])
 
         if dim_key == 'action':
-            # Build one document block (same pattern as other pillars)
-            technical_data = dim_data.get('technical_data', {})
-            ebitda_docs = [d for d in docs if d.metadata.get('data_type') == 'ebitda']
-            pe_docs = [d for d in docs if d.metadata.get('data_type') == 'pe_ratio']
-
-            rsi_val = str(technical_data.get('rsi', 'N/A'))
-            price_val = str(technical_data.get('current_price', 'N/A'))
-            sma_val = str(technical_data.get('sma_200', 'N/A'))
-            print(f"    ACTION vars → price={price_val}, sma200={sma_val}, rsi={rsi_val}")
-            print(f"    ACTION docs → {len(ebitda_docs)} EBITDA, {len(pe_docs)} P/E")
+            technical_docs = [d for d in docs if d.metadata.get('data_type') == 'technical']
+            pe_docs        = [d for d in docs if d.metadata.get('data_type') == 'pe_ratio']
+            ebitda_docs    = [d for d in docs if d.metadata.get('data_type') == 'ebitda']
+            print(f"    ACTION docs → {len(technical_docs)} technical, {len(pe_docs)} P/E, {len(ebitda_docs)} EBITDA")
 
             action_document = (
-                f"=== LIVE TECHNICAL INDICATORS ===\n"
-                f"Current Stock Price : ${price_val}\n"
-                f"200-Day SMA         : ${sma_val}\n"
-                f"RSI (14-period)     : {rsi_val}\n\n"
+                f"=== TECHNICAL INDICATORS (web-sourced: RSI-14, SMA200, current price) ===\n"
+                f"{format_docs(technical_docs)}\n\n"
                 f"=== P/E RATIO (web-sourced) ===\n"
                 f"{format_docs(pe_docs)}\n\n"
                 f"=== EBITDA (web-sourced) ===\n"

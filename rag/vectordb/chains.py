@@ -1607,6 +1607,11 @@ exact share counts, dollar totals, average prices, current market price, named e
 acquisition vs. disposal breakdown, and the final recommendation. Do not generalise or omit any numbers.
 Write it the same way the Performance or Horizon sections read.
 
+STRICT LANGUAGE RULES for Paragraph 1:
+- NEVER mention SEC transaction codes such as "S", "F", "D", "A", or any letter codes. Do not explain what they stand for. Describe the action in plain English (e.g., "scheduled sale", "planned disposal").
+- NEVER name specific trading plan structures such as "10b5-1" or any regulatory plan designation. If sales appear planned or scheduled, simply write "scheduled" or "planned".
+- NEVER use the word "significant" for acquisitions unless the total value is clearly material in the context of the company's scale. For modest purchases (a few thousand shares), use neutral factual language only.
+
 IMPORTANT — zero-price acquisitions: Never write "$0.00" or "$0" for share acquisitions.
 When a transaction price is zero, it means the shares were received as compensation (RSU vesting,
 stock grants, or option exercises). Always describe these as "X shares received via RSU vesting/grants"
@@ -1690,15 +1695,14 @@ def get_alpha_performance_chain(llm):
 **Your Task**: Analyze the Performance dimension of the ALPHA Framework.
 
 **Focus Areas**:
-1. **10-Year Financials**: Revenue, Net Income, Operating Cash Flow trends
-2. **Key Metrics**: CAGR, EBITDA margins, ROE, Free Cash Flow yield
-3. **Anomaly Detection**: Operating Cash Flow < Net Income for >2 quarters
+1. **Recent Financials**: Always lead with the MOST RECENT fiscal year available in the documents. Do not anchor to data older than 2-3 years if more recent exists. Highlight the latest revenue, net income, and cash flow figures first.
+2. **Key Metrics**: CAGR (use latest available base year), EBITDA margins, ROE, Free Cash Flow yield
+3. **Anomaly Detection**: Flag as a RED FLAG only when Net Income consistently EXCEEDS Operating Cash Flow for more than 2 periods — this suggests aggressive revenue recognition or accrual inflation. Operating Cash Flow exceeding Net Income is a POSITIVE sign of strong cash conversion quality — NEVER flag this as a concern.
 4. **Non-Recurring Items**: One-time gains, restructuring charges
 
 **Output Requirements**:
 - Maximum 100 words
 - Include calculated metrics where possible
-- Highlight anomalies clearly
 - Tone: Quantitative, precise
 - End with a one-line **Recommendation** field summarising earnings quality (e.g. "Positive — strong and improving fundamentals", "Neutral — stable but slowing growth", "Negative — deteriorating margins or earnings quality concerns")
 """
@@ -1711,7 +1715,7 @@ Ticker: {ticker}
 Retrieved Documents:
 {documents}
 
-Analyze the PERFORMANCE dimension with focus on earnings quality and fundamental metrics. Keep response under 100 words.""")
+Analyze the PERFORMANCE dimension using the most recent fiscal year data available. Keep response under 100 words.""")
     ])
     
     return prompt | structured_llm
@@ -1767,24 +1771,24 @@ def get_alpha_action_chain(llm):
 
     SYSTEM_PROMPT = """You are a financial analyst writing the Action section of an ALPHA Framework report.
 
-Write exactly 4 sentences in professional analyst tone. Always use UPPERCASE for the ticker symbol.
+All data comes from web-sourced documents below. Extract the exact numeric values and write exactly 4 sentences with proper flow in professional analyst tone. Always use UPPERCASE for the ticker symbol.
 
-Sentence 1 — SMA: State the exact stock price and SMA200 with dollar values. Use "greater than" or "less than".
+Sentence 1 — SMA: Extract the current stock price and 200-day SMA from the technical documents. State BOTH exact dollar values. Use "greater than" or "less than".
   Example: "GOOGL's current stock price ($306.52) is greater than its 200-day SMA ($250.15)."
 
-Sentence 2 — RSI: State the exact RSI value and its signal.
+Sentence 2 — RSI: Extract the RSI(14) value from the technical documents. State the exact number and its signal.
   RSI < 30  → "it is a good time to BUY"
   RSI > 70  → "it is better to SELL your holdings"
   30–70     → "hold your position"
-  Example: "GOOGL's RSI is 40.94, which indicates hold your position."
+  Example: "GOOGL's RSI is 46.0, which indicates hold your position."
 
-Sentence 3 — P/E: Extract and state the exact P/E ratio from the documents.
+Sentence 3 — P/E: Extract and state the exact P/E ratio from the P/E documents.
   Example: "GOOGL's latest P/E ratio is 28.84."  If not found: "GOOGL's latest P/E ratio is N/A."
 
-Sentence 4 — EBITDA: Extract and state the exact EBITDA figure from the documents.
+Sentence 4 — EBITDA: Extract and state the exact EBITDA figure from the EBITDA documents.
   Example: "GOOGL's EBITDA is $180.7B."  If not found: "GOOGL's EBITDA is N/A."
 
-NEVER replace a number with a qualitative phrase like "above" or "strong" without also stating the actual value.
+NEVER replace a number with a qualitative phrase — always state the actual value.
 Recommendation: one line combining RSI signal and SMA position as an overall timing stance."""
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1794,7 +1798,7 @@ Ticker: {ticker}
 
 {documents}
 
-Write the 4 sentences using the exact values above.""")
+Extract the exact values from the documents above and write the 4 sentences.""")
     ])
 
     return prompt | structured_llm
