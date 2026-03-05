@@ -362,6 +362,7 @@ def generate_comparison_subqueries(companies: list, year: str = "2024") -> dict:
         "query_type": "multi_company",
         "companies_detected": companies,
         "sub_queries": sub_queries,
+        "requested_years": [year_int],
         "reasoning": f"Pre-optimized 10-K queries for {', '.join(companies)} (no LLM needed)",
         "generation_method": "template"  # vs "llm"
     }
@@ -412,40 +413,49 @@ def detect_segment_or_geographic_query(question: str) -> str:
     return "none"
 
 
-def generate_segment_subqueries(companies: list) -> dict:
+def _extract_years_from_question(question: str) -> list:
+    """Extract explicitly mentioned 4-digit years (2000-2029) from the user question."""
+    years = sorted(set(int(y) for y in re.findall(r'\b(20[0-2][0-9])\b', question)))
+    return years if years else [2024]
+
+
+def generate_segment_subqueries(companies: list, question: str = "") -> dict:
     """
     Generate predefined sub-queries for segment reporting queries WITHOUT LLM.
     Optimized for 10-K segment disclosures (ASC 280).
     """
+    requested_years = _extract_years_from_question(question)
+    year_suffix = "for years " + ", ".join(str(y) for y in requested_years)
     sub_queries = []
 
     for company in companies:
         # 1. Segment overview & structure
         sub_queries.append(
-            f"{company} reportable segments operating segments business segments segment overview segment structure segment description chief operating decision maker CODM for years 2022, 2023 and 2024"
+            f"{company} reportable segments operating segments business segments segment overview segment structure segment description chief operating decision maker CODM {year_suffix}"
         )
         # 2. Segment financial performance
         sub_queries.append(
-            f"{company} segment revenue segment net sales segment results segment operating income segment profit segment EBITDA revenue by segment income by segment for years 2022, 2023 and 2024"
+            f"{company} segment revenue segment net sales segment results segment operating income segment profit segment EBITDA revenue by segment income by segment {year_suffix}"
         )
         # 3. Segment reporting notes (ASC 280)
         sub_queries.append(
-            f"{company} note segment reporting reportable segments note ASC 280 segment disclosure segment accounting policy segment measurement basis for years 2022, 2023 and 2024"
+            f"{company} note segment reporting reportable segments note ASC 280 segment disclosure segment accounting policy segment measurement basis {year_suffix}"
         )
         # 4. Product / business line disaggregation
         sub_queries.append(
-            f"{company} geographic segments product segments line of business disaggregation of revenue segment categories product line revenue for years 2022, 2023 and 2024"
+            f"{company} geographic segments product segments line of business disaggregation of revenue segment categories product line revenue {year_suffix}"
         )
         # 5. Segment assets & capital allocation
         sub_queries.append(
-            f"{company} segment assets segment capital expenditure segment depreciation segment amortization assets by segment capex by segment long lived assets by segment for years 2022, 2023 and 2024"
+            f"{company} segment assets segment capital expenditure segment depreciation segment amortization assets by segment capex by segment long lived assets by segment {year_suffix}"
         )
         # 6. Segment MD&A discussion
         sub_queries.append(
-            f"{company} segment performance discussion MD&A segment results drivers of segment growth segment margins segment trends segment outlook for years 2022, 2023 and 2024"
+            f"{company} segment performance discussion MD&A segment results drivers of segment growth segment margins segment trends segment outlook {year_suffix}"
         )
 
     print(f"[SEGMENT QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
+    print(f"[SEGMENT QUERIES] Requested years: {requested_years}")
     print(f"[SEGMENT QUERIES] Skipped LLM query generation - using 10-K segment templates")
 
     return {
@@ -453,45 +463,49 @@ def generate_segment_subqueries(companies: list) -> dict:
         "query_type": "segment",
         "companies_detected": companies,
         "sub_queries": sub_queries,
+        "requested_years": requested_years,
         "reasoning": f"Pre-optimized segment reporting queries for {', '.join(companies)} (no LLM needed)",
         "generation_method": "template"
     }
 
 
-def generate_geographic_subqueries(companies: list) -> dict:
+def generate_geographic_subqueries(companies: list, question: str = "") -> dict:
     """
     Generate predefined sub-queries for geographic/regional queries WITHOUT LLM.
     Optimized for 10-K geographic disclosures.
     """
+    requested_years = _extract_years_from_question(question)
+    year_suffix = "for years " + ", ".join(str(y) for y in requested_years)
     sub_queries = []
 
     for company in companies:
         # 1. Revenue by geography
         sub_queries.append(
-            f"{company} revenue by geography revenue by region net sales by geography geographic revenue distribution disaggregated revenue region country revenue concentration for years 2022, 2023 and 2024"
+            f"{company} revenue by geography revenue by region net sales by geography geographic revenue distribution disaggregated revenue region country revenue concentration {year_suffix}"
         )
         # 2. Geographic notes & ASC 280
         sub_queries.append(
-            f"{company} geographic information note segment reporting geography ASC 280 geographic disclosure foreign domestic revenue by country long lived assets by geograph for years 2022, 2023 and 2024"
+            f"{company} geographic information note segment reporting geography ASC 280 geographic disclosure foreign domestic revenue by country long lived assets by geograph {year_suffix}"
         )
         # 3. Foreign / international operations
         sub_queries.append(
-            f"{company} foreign operations international operations domestic vs international revenue foreign subsidiaries overseas operations global footprint for years 2022, 2023 and 2024"
+            f"{company} foreign operations international operations domestic vs international revenue foreign subsidiaries overseas operations global footprint {year_suffix}"
         )
         # 4. Properties & facilities by location
         sub_queries.append(
-            f"{company} properties by location facilities by geography manufacturing locations data centers offices distribution centers assets by country for years 2022, 2023 and 2024"
+            f"{company} properties by location facilities by geography manufacturing locations data centers offices distribution centers assets by country {year_suffix}"
         )
         # 5. Geographic risk factors
         sub_queries.append(
-            f"{company} geographic risk country risk regional risk political risk currency risk foreign exchange exposure international regulatory risk sanctions export controls for years 2022, 2023 and 2024"
+            f"{company} geographic risk country risk regional risk political risk currency risk foreign exchange exposure international regulatory risk sanctions export controls {year_suffix}"
         )
         # 6. Customer / market concentration by region
         sub_queries.append(
-            f"{company} major customers by region customer concentration geography market concentration regional demand geographic market share for years 2022, 2023 and 2024"
+            f"{company} major customers by region customer concentration geography market concentration regional demand geographic market share {year_suffix}"
         )
 
     print(f"[GEOGRAPHIC QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
+    print(f"[GEOGRAPHIC QUERIES] Requested years: {requested_years}")
     print(f"[GEOGRAPHIC QUERIES] Skipped LLM query generation - using 10-K geographic templates")
 
     return {
@@ -499,6 +513,7 @@ def generate_geographic_subqueries(companies: list) -> dict:
         "query_type": "geographic",
         "companies_detected": companies,
         "sub_queries": sub_queries,
+        "requested_years": requested_years,
         "reasoning": f"Pre-optimized geographic queries for {', '.join(companies)} (no LLM needed)",
         "generation_method": "template"
     }
@@ -552,6 +567,7 @@ def preprocess_and_analyze_query(state):
             "companies_detected": comparison_companies,
             "context_strategy": "documents",
             "sub_query_analysis": sub_query_analysis,
+            "requested_years": sub_query_analysis["requested_years"],
             "sub_query_results": {}
         }
 
@@ -574,15 +590,16 @@ def preprocess_and_analyze_query(state):
         if companies:
             if seg_geo_type == "segment":
                 print(f"📊 SEGMENT QUERY DETECTED - Using pre-optimized segment templates for {companies}")
-                sub_query_analysis = generate_segment_subqueries(companies)
+                sub_query_analysis = generate_segment_subqueries(companies, question=question)
             else:
                 print(f"🌍 GEOGRAPHIC QUERY DETECTED - Using pre-optimized geographic templates for {companies}")
-                sub_query_analysis = generate_geographic_subqueries(companies)
+                sub_query_analysis = generate_geographic_subqueries(companies, question=question)
 
             return {
                 "companies_detected": companies,
                 "context_strategy": "documents",
                 "sub_query_analysis": sub_query_analysis,
+                "requested_years": sub_query_analysis["requested_years"],
                 "sub_query_results": {}
             }
         else:
@@ -630,6 +647,7 @@ def preprocess_and_analyze_query(state):
     return {
         "companies_detected": analysis.companies_detected,
         "sub_query_analysis": sub_query_analysis,
+        "requested_years": analysis.requested_years,
         "sub_query_results": {}
     }
 
@@ -791,10 +809,9 @@ def retrieve(state, config):
     sub_queries = sub_query_analysis.get("sub_queries", [])
     query_type = sub_query_analysis.get("query_type", "single_company")
     
-    # Extract requested years (default to recent year if not specified)
-    requested_years = sub_query_analysis.get("requested_years", [])
-    if not requested_years:
-        requested_years = [2024]
+    # Extract requested years from state (set by preprocess_and_analyze_query for all paths)
+    # Fall back to sub_query_analysis for backward compatibility
+    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [2024]
 
     target_tickers = set()
 
