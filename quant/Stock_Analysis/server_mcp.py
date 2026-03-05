@@ -210,6 +210,8 @@ async def get_stock_sma(ticker: str, start_date: str, end_date: str, sma_periods
     name="get_stock_rsi",
     description="""
     Generate an RSI (Relative Strength Index) chart for a stock between given dates.
+    Uses standard RSI(14) — a 14-period lookback window.
+    Chart includes overbought (>70) and oversold (<30) reference lines.
 
     Args:
         ticker: str - Stock symbol (e.g., "NFLX")
@@ -217,7 +219,7 @@ async def get_stock_sma(ticker: str, start_date: str, end_date: str, sma_periods
         end_date: str - End date in 'YYYY-MM-DD'
 
     Output:
-        Base64-encoded chart of RSI values with thresholds.
+        Base64-encoded chart of RSI values with 70 (overbought) and 30 (oversold) thresholds.
     """
 )
 async def get_stock_rsi(ticker: str, start_date: str, end_date: str) -> dict:
@@ -282,17 +284,18 @@ async def get_stock_rsi(ticker: str, start_date: str, end_date: str) -> dict:
 #Bollinger Bands – show volatility using upper and lower band
 @technicalanalysis_server.tool(
         name="get_stock_bollingerbands",
-        description="""Calculate the Bollinger Bands (BB) for the user's given ticker in the given date range."
+        description="""Calculate the Bollinger Bands (BB) for the user's given ticker in the given date range.
+        Uses standard Bollinger Bands parameters: 20-period SMA with 2 standard deviations.
         Args:
-                ticker:str 
-                        the ticker symbol given by the user for getting Bollinger Bands (BB) of he company.
+                ticker:str
+                        the ticker symbol given by the user for getting Bollinger Bands (BB) of the company.
                 start_date:str
                         the start date given by the user for getting Bollinger Bands (BB) of the company.
                 end_date:str
                         the end date given by the user for getting Bollinger Bands (BB) of the company.
         Returns:
                 str
-                        A message indicating whether the Bollinger Bands (BB) was successfully calculated or not.     
+                        A message indicating whether the Bollinger Bands (BB) was successfully calculated or not.
         """
 )
 async def get_stock_bollingerbands(ticker: str, start_date: str, end_date: str) -> dict:
@@ -368,15 +371,17 @@ async def get_stock_bollingerbands(ticker: str, start_date: str, end_date: str) 
 #MACD (Moving Average Convergence Divergence) – shows trend changes.
 @technicalanalysis_server.tool(name="get_stock_macd",
     description="""Calculate the Moving Average Convergence Divergence (MACD) for the user's given ticker in the given date range.
+        Uses standard MACD parameters: fast EMA=12, slow EMA=26, signal line=9.
         Args:
                 ticker:str
-                        the ticker symbol given by the user for getting Moving Average Convergence Divergence (MACD) of he company.
+                        the ticker symbol given by the user for getting Moving Average Convergence Divergence (MACD) of the company.
                 start_date:str
                         the start date given by the user for getting Moving Average Convergence Divergence (MACD) of the company.
                 end_date:str
                         the end date given by the user for getting Moving Average Convergence Divergence (MACD) of the company.
-                        Returns:str
-                                A message indicating whether the Moving Average Convergence Divergence (MACD) was successfully calculated or not.
+        Returns:
+                str
+                        A message indicating whether the Moving Average Convergence Divergence (MACD) was successfully calculated or not.
         """
 )
 
@@ -607,9 +612,9 @@ async def get_all_technical_analysis(ticker: str, start_date: str, end_date: str
 # Indicators Simple Moving Average
         close = df['Close']
         df['SMA_20'] = SMAIndicator(close, window=20).sma_indicator()
+        df['SMA_50'] = SMAIndicator(close, window=50).sma_indicator()
         df['SMA_100'] = SMAIndicator(close, window=100).sma_indicator()
         df['SMA_200'] = SMAIndicator(close, window=200).sma_indicator()
-        df['SMA_300'] = SMAIndicator(close, window=300).sma_indicator()
 
 #Relative Strength Index – shows if the stock is overbought or oversold
         df['RSI'] = RSIIndicator(close, window=14).rsi()
@@ -685,7 +690,7 @@ async def get_all_technical_analysis(ticker: str, start_date: str, end_date: str
         line=dict(color='yellow', width=1)), row=4, col=1)'''
 
 # SMAs
-        for sma_col, color in zip(['SMA_20', 'SMA_100', 'SMA_200', 'SMA_300'],['orange', 'blue', 'green', 'purple']):
+        for sma_col, color in zip(['SMA_20', 'SMA_50', 'SMA_100', 'SMA_200'], ['orange', 'cyan', 'blue', 'green']):
                 fig.add_trace(go.Scatter(
                 x=df.index, y=df[sma_col], name=sma_col,
                 line=dict(color=color, width=1.5)), row=1, col=1)
@@ -869,13 +874,13 @@ async def get_chart_summary(file_path:str) -> dict:
                 sma_periods: list[int] (optional)
                         List of SMA window periods to calculate and plot (e.g. [20, 50, 200]).
                         If the user requests a specific period like "50-day SMA", include that number.
-                        Defaults to [20, 50, 200] if not specified.
+                        Defaults to [20, 50, 100, 200] if not specified.
         """
 )
 async def get_multi_stock_sma(tickers: List[str], start_date: str, end_date: str, sma_periods: Optional[List[int]] = None) -> dict:
         """Generate SMA comparison chart for multiple stocks."""
         if sma_periods is None:
-                sma_periods = [20, 50, 200]
+                sma_periods = [20, 50, 100, 200]
         sma_periods = sorted(set(int(p) for p in sma_periods))
 
         line_dashes = ['solid', 'dot', 'dash', 'dashdot', 'longdash']

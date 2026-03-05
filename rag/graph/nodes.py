@@ -2693,7 +2693,8 @@ def detect_alpha_query(state):
         "buy now",
         "time to invest",
         "good buy",
-        "worth buying"
+        "worth buying",
+        "alpha analysis of"
     ]
     
     # Check if query matches ALPHA pattern
@@ -2988,6 +2989,11 @@ def alpha_dimension_retrieve(state):
             include_domains=TRUSTED_FINANCIAL_DOMAINS
         )
 
+        web_search_technical_stock_price = TavilySearch(
+            max_results=5,
+            include_domains=TRUSTED_FINANCIAL_DOMAINS
+        )
+
         # -- RSI(14) and current price from web --------------------------------
         print("    Fetching RSI(14) and current price from web...")
         try:
@@ -3036,7 +3042,7 @@ def alpha_dimension_retrieve(state):
         print("    Fetching Current Stock Price from web...")
         try:
             sma_query = f"{ticker} today's stock price current stock price"
-            sma_results = web_search_technical.invoke({"query": sma_query})
+            sma_results = web_search_technical_stock_price.invoke({"query": sma_query})
             sma_sources = _parse_tavily_response(sma_results, sma_query)
             for source in sma_sources:
                 from langchain_core.documents import Document
