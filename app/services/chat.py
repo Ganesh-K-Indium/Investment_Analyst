@@ -3,7 +3,7 @@ Chat History Service
 Manages CRUD operations for chat sessions and messages across RAG and Quant agents
 """
 from sqlalchemy.orm import Session
-from app.database.models import ChatSession, ChatMessage, Portfolio, AgentType, MessageRole
+from app.database.models import ChatSession, ChatMessage, Portfolio, AgentType, MessageRole, ConsolidatedSummary
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from langchain_openai import ChatOpenAI
@@ -80,9 +80,29 @@ class ChatService:
             for session in quant_sessions
         ]
 
+        consolidated_rows = db.query(ConsolidatedSummary).filter(
+            ConsolidatedSummary.user_id == user_id
+        ).order_by(ConsolidatedSummary.created_at.desc()).all()
+
+        for row in consolidated_rows:
+            item = {
+                "session_id": f"consolidated-{row.id}",
+                "title": row.title or "Consolidated Summary",
+                "summary": row.summary,
+                "summary_updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "message_count": row.sessions_included,
+                "created_at": row.created_at.isoformat(),
+                "last_message_at": None,
+                "detected_type": row.detected_type,  # "rag", "compare", or "quant"
+            }
+            if row.detected_type == "quant":
+                quant_summaries.append(item)
+            else:
+                rag_summaries.append(item)
+
         return {
             "rag": rag_summaries,
-            "quant": quant_summaries
+            "quant": quant_summaries,
         }
 
     # @staticmethod
@@ -399,7 +419,32 @@ class ChatService:
 
         try:
             summary = chain.invoke({"focus": focus, "sessions_text": sessions_text}).strip()
-            return {"summary": summary, "detected_type": detected_type}
+
+            # Derive user_id and title from first session
+            user_id = sessions_data[0]["session_id"]  # fallback
+            first_session = db.query(ChatSession).filter(
+                ChatSession.session_id == sessions_data[0]["session_id"]
+            ).first()
+            if first_session:
+                user_id = first_session.user_id
+            title = "Consolidated: " + ", ".join(s["title"] for s in sessions_data[:3])
+            if len(sessions_data) > 3:
+                title += f" (+{len(sessions_data) - 3} more)"
+
+            # Store in DB
+            consolidated = ConsolidatedSummary(
+                user_id=user_id,
+                session_ids=session_ids,
+                detected_type=detected_type,
+                title=title,
+                summary=summary,
+                sessions_included=len(sessions_data),
+            )
+            db.add(consolidated)
+            db.commit()
+            db.refresh(consolidated)
+
+            return {"summary": summary, "detected_type": detected_type, "id": consolidated.id}
         except Exception as e:
             return {"summary": f"Consolidated summary generation failed: {str(e)}", "detected_type": detected_type}
 

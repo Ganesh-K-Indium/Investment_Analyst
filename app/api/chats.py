@@ -66,6 +66,7 @@ class SummaryItem(BaseModel):
     message_count: int
     created_at: str
     last_message_at: Optional[str]
+    detected_type: Optional[str] = None   # set for consolidated summaries ("rag", "compare", "quant")
 
 
 class SummariesByAgentResponse(BaseModel):
