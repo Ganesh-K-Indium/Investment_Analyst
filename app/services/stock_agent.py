@@ -102,9 +102,11 @@ async def initialize_stock_agents(checkpointer: Optional[AsyncSqliteSaver] = Non
             ("http://localhost:8567/mcp", "Research")
         ]
         
+        server_status = {}
         servers_ready = []
         for url, name in servers:
             ready = await wait_for_server(url, timeout=5)
+            server_status[name] = ready
             servers_ready.append(ready)
             if not ready:
                 print(f"WARNING: {name} server not responding at {url}")
@@ -138,28 +140,36 @@ async def initialize_stock_agents(checkpointer: Optional[AsyncSqliteSaver] = Non
             raise
         
         # Create sub-agents with error handling for each
-        print("🔧 Creating sub-agents...")
+        print("Creating sub-agents...")
         agents_created = []
         
         # Stock Information Agent
-        try:
-            print("   Creating stock_information_agent...")
-            stock_info_agent = await create_stock_information_agent(checkpointer=_stock_saver)
-            agents_created.append("stock_info")
-            print("   stock_information_agent created")
-        except Exception as e:
-            print(f"   WARNING: Failed to create stock_information_agent: {e}")
+        if server_status.get("Stock Information"):
+            try:
+                print("   Creating stock_information_agent...")
+                stock_info_agent = await create_stock_information_agent(checkpointer=_stock_saver)
+                agents_created.append("stock_info")
+                print("   stock_information_agent created")
+            except Exception as e:
+                print(f"   WARNING: Failed to create stock_information_agent: {e}")
+                stock_info_agent = None
+        else:
+            print("   Skipping stock_information_agent (MCP server not ready)")
             stock_info_agent = None
         
         # Technical Analysis Agent
-        try:
-            print("   Creating technical_analysis_agent...")
-            technical_agent = await create_technical_analysis_agent(checkpointer=_stock_saver)
-            agents_created.append("technical")
-            print("   technical_analysis_agent created")
-        except Exception as e:
-            print(f"   WARNING: Failed to create technical_analysis_agent: {e}")
-            print(f"   -> Technical Analysis MCP server may not be running (port 8566)")
+        if server_status.get("Technical Analysis"):
+            try:
+                print("   Creating technical_analysis_agent...")
+                technical_agent = await create_technical_analysis_agent(checkpointer=_stock_saver)
+                agents_created.append("technical")
+                print("   technical_analysis_agent created")
+            except Exception as e:
+                print(f"   WARNING: Failed to create technical_analysis_agent: {e}")
+                print(f"   -> Technical Analysis MCP server may not be running (port 8566)")
+                technical_agent = None
+        else:
+            print("   Skipping technical_analysis_agent (MCP server not ready)")
             technical_agent = None
         
         # Ticker Finder Agent (doesn't need MCP server)
@@ -173,14 +183,18 @@ async def initialize_stock_agents(checkpointer: Optional[AsyncSqliteSaver] = Non
             ticker_finder = None
         
         # Research Agent
-        try:
-            print("   Creating research_agent...")
-            research_agent = await create_research_agent(checkpointer=_stock_saver)
-            agents_created.append("research")
-            print("   research_agent created")
-        except Exception as e:
-            print(f"   WARNING: Failed to create research_agent: {e}")
-            print(f"   -> Research MCP server may not be running (port 8567)")
+        if server_status.get("Research"):
+            try:
+                print("   Creating research_agent...")
+                research_agent = await create_research_agent(checkpointer=_stock_saver)
+                agents_created.append("research")
+                print("   research_agent created")
+            except Exception as e:
+                print(f"   WARNING: Failed to create research_agent: {e}")
+                print(f"   -> Research MCP server may not be running (port 8567)")
+                research_agent = None
+        else:
+            print("   Skipping research_agent (MCP server not ready)")
             research_agent = None
         
         print(f"Created {len(agents_created)}/4 sub-agents: {', '.join(agents_created)}")

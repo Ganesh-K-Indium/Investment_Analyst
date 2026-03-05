@@ -117,6 +117,7 @@ class load_vector_database():
                     "metadata.content_hash": PayloadSchemaType.KEYWORD,
                     "metadata.image_content_hash": PayloadSchemaType.KEYWORD,
                     "metadata.page_num": PayloadSchemaType.INTEGER,
+                    "metadata.year": PayloadSchemaType.INTEGER,
                     "metadata.ingestion_timestamp": PayloadSchemaType.KEYWORD,
                 }
                 
@@ -165,6 +166,7 @@ class load_vector_database():
         return vectorstore
     
     def hybrid_search(self, query: str, content_type: str = None, company: str = None, 
+                     years: list = None,
                      limit: int = 10, dense_limit: int = 100, sparse_limit: int = 100):
         """
         Advanced hybrid search using prefetch and fusion queries (RRF).
@@ -173,6 +175,7 @@ class load_vector_database():
             query: Search query text
             content_type: Filter by content type ("text" or "image"), None for both
             company: Filter by company name
+            years: Filter by list of years
             limit: Final number of results to return
             dense_limit: Number of results from dense vector search
             sparse_limit: Number of results from sparse (BM25) search
@@ -234,6 +237,13 @@ class load_vector_database():
                         match=models.MatchValue(value=company.lower())
                     )
                 )
+        if years:
+            filter_conditions.append(
+                models.FieldCondition(
+                    key="metadata.year",
+                    match=models.MatchAny(any=years)
+                )
+            )
         
         global_filter = models.Filter(must=filter_conditions) if filter_conditions else None
         
@@ -245,6 +255,7 @@ class load_vector_database():
             models.Prefetch(
                 query=dense_vector,
                 using="dense",
+                filter=global_filter,
                 limit=dense_limit
             )
         )
@@ -255,6 +266,7 @@ class load_vector_database():
                 models.Prefetch(
                     query=sparse_vector,
                     using="bm25",
+                    filter=global_filter,
                     limit=sparse_limit
                 )
             )
