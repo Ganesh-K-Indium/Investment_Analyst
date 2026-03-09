@@ -1,7 +1,7 @@
 "his modules has all info about the graph edges"
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
-from rag.vectordb.chains import (get_question_router_chain,
+from rag.prompts.prompts import (get_question_router_chain,
                                                           get_hallucination_chain,
                                                           get_answer_quality_chain,
                                                           get_document_sufficiency_chain)

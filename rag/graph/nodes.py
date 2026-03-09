@@ -6,7 +6,7 @@ from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_core.messages import AIMessage
 from langchain_tavily import TavilySearch
-from rag.vectordb.chains import (get_retrival_grader_chain, get_rag_chain,
+from rag.prompts.prompts import (get_retrival_grader_chain, get_rag_chain,
                                                           get_company_name, get_question_rewriter_chain,
                                                           get_financial_analyst_grader_chain,
                                                           get_financial_data_extractor_chain,
@@ -613,7 +613,7 @@ def preprocess_and_analyze_query(state):
     print("---UNIVERSAL SUB-QUERY ANALYSIS---")
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
-    from rag.vectordb.chains import get_universal_sub_query_analyzer
+    from rag.prompts.prompts import get_universal_sub_query_analyzer
     sub_query_analyzer = get_universal_sub_query_analyzer(llm)
     
     # Analyze the question
@@ -658,7 +658,7 @@ def extract_multiple_companies_from_question(question, llm=None):
     """
     try:
         if llm:
-            from rag.vectordb.chains import get_multi_company_extractor_chain
+            from rag.prompts.prompts import get_multi_company_extractor_chain
             
             # Use structured LLM extraction
             extractor_chain = get_multi_company_extractor_chain(llm)
@@ -3141,7 +3141,7 @@ def alpha_generate_report(state):
     alpha_dimensions = state.get("alpha_dimensions", {})
     
     from langchain_openai import ChatOpenAI
-    from rag.vectordb.chains import (
+    from rag.prompts.prompts import (
         get_alpha_alignment_chain,
         get_alpha_liquidity_chain,
         get_alpha_performance_chain,
@@ -3605,7 +3605,7 @@ def scenario_generate_report(state):
     scenario_data = state.get("scenario_data", {})
 
     from langchain_openai import ChatOpenAI
-    from rag.vectordb.chains import (
+    from rag.prompts.prompts import (
         get_scenario_bull_chain,
         get_scenario_bear_chain,
         get_scenario_base_chain,
