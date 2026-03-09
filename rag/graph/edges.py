@@ -1,10 +1,6 @@
 "his modules has all info about the graph edges"
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
-from rag.prompts.prompts import (get_question_router_chain,
-                                                          get_hallucination_chain,
-                                                          get_answer_quality_chain,
-                                                          get_document_sufficiency_chain)
 from rag.vectordb.client import load_vector_database
 
 
@@ -155,90 +151,6 @@ def decide_to_generate(state):
         return "gap_analysis"
     return "generate"
 
-    
-def grade_generation_v_documents_and_question(state):
-    """
-    Determines whether the generation is grounded in the document and answers question.
-    Enhanced for cross-referencing scenarios.
-
-    Args:
-        state (dict): The current graph state
-
-    Returns:
-        str: Decision for next node to call
-    """
-
-    print("---CHECK HALLUCINATIONS---")
-    messages = state["messages"]
-    question = messages[-1].content
-    
-    documents = state["documents"]
-    Intermediate_message = state["Intermediate_message"]
-
-    #  Track retry count in state
-    retry_count = state.get("retry_count", 0)
-    max_retries = 2  # or 3, depending on how strict you want to be
-
-    # NEW: Structured financial data extraction for hallucination checking
-    from rag.graph.nodes import smart_extract_financial_data
-    
-    total_chars = sum(len(doc.page_content) if hasattr(doc, 'page_content') else len(str(doc)) for doc in documents)
-    MAX_HALLUCINATION_CHARS = 80000  # Smaller limit for hallucination checking
-    
-    # NEW: Use structured extraction instead of truncation
-    if total_chars > MAX_HALLUCINATION_CHARS:
-        print(f"[EXTRACT] Hallucination check: {total_chars:,} -> {MAX_HALLUCINATION_CHARS:,} chars")
-        documents = smart_extract_financial_data(documents, MAX_HALLUCINATION_CHARS)
-        print(f"[EXTRACT] ✓ Structured extraction complete - all metrics preserved")
-    else:
-        print(f"[DOC SIZE] Hallucination check: {total_chars:,} chars (within limit)")
-
-    llm = ChatOpenAI(model="gpt-4o")
-    hallucination_grader = get_hallucination_chain(llm)
-    
-    # Log what we're checking
-    print(f" Grading against {len(documents)} document(s)")
-    print(f" Generation length: {len(Intermediate_message)} chars")
-    print(f" Generation preview: {Intermediate_message[:200]}...")
-    
-    # Grade against documents only (context-free)
-    score = hallucination_grader.invoke({
-        "documents": documents, 
-        "generation": Intermediate_message
-    })
-    grade = score.binary_score
-    reasoning = getattr(score, 'reasoning', 'No reasoning provided')
-    
-    print(f" Hallucination Grader Decision: {grade}")
-    print(f" Reasoning: {reasoning}")
-
-    # Check hallucination
-    if grade.lower() == "yes":
-        print("---DECISION: GENERATION IS GROUNDED IN DOCUMENTS---")
-        # Check question-answering
-        print("---GRADE GENERATION vs QUESTION---")
-        print(f"Question: {question}, Answer {Intermediate_message}")
-        answer_grader = get_answer_quality_chain(llm)
-        answer_score = answer_grader.invoke(
-            {"question": question, "generation": Intermediate_message}
-        )
-        answer_grade = answer_score.binary_score
-        if answer_grade.lower() == "yes":
-            print("---DECISION: GENERATION ADDRESSES QUESTION---")
-            return "useful"
-        else:
-            print("---DECISION: GENERATION DOES NOT ADDRESS QUESTION---")
-            return "not useful"
-    else:
-        # Retry logic
-        if retry_count >= max_retries:
-            print(f"---MAX RETRIES REACHED ({retry_count}), stopping loop---")
-            return "useful"  # fallback → treat as final result instead of looping forever
-        else:
-            print(f"---DECISION: GENERATION IS NOT GROUNDED, RETRY {retry_count + 1}/{max_retries}---")
-            # Increment retry count in state
-            state["retry_count"] = retry_count + 1
-            return "not supported"
 
 
 def decide_after_web_integration(state):
@@ -295,21 +207,6 @@ def route_after_retrieve(state):
         return "generate"
     else:
         return "grade_documents"
-
-
-def route_after_generate(state):
-    """
-    Route after generation: skip hallucination/answer grading for direct-vectordb modes.
-
-    Direct modes (compare/segment/geographic): generate → decide_chart
-    Normal mode: generate → grade_generation (existing flow)
-    """
-    if _is_direct_vectordb_mode(state):
-        query_type = state.get("sub_query_analysis", {}).get("query_type", "comparison")
-        print(f"---{query_type.upper()} MODE: SKIPPING GENERATION GRADING, DIRECT TO CHART DECISION---")
-        return "decide_chart"
-    else:
-        return "grade_generation"
 
 
 def decide_after_gap_analysis(state):

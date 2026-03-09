@@ -7,9 +7,8 @@ from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage
 from rag.graph.state import GraphState
 from rag.graph.nodes import (web_search, retrieve,
-                         grade_documents, generate, transform_query,
+                         grade_documents, generate,
                          financial_web_search, show_result, integrate_web_search,
-                         evaluate_vectorstore_quality,
                          preprocess_and_analyze_query,
                          generate_comparison_chart,
                          detect_alpha_query, alpha_dimension_retrieve, alpha_generate_report,
@@ -67,11 +66,9 @@ class BuildingGraph:
         workflow.add_node("retrieve", time_node("retrieve")(retrieve))
         workflow.add_node("grade_documents", time_node("grade_documents")(grade_documents))
         workflow.add_node("generate", time_node("generate")(generate))
-        workflow.add_node("transform_query", time_node("transform_query")(transform_query))
         workflow.add_node("financial_web_search", time_node("financial_web_search")(financial_web_search))
         workflow.add_node("show_result", time_node("show_result")(show_result))
         workflow.add_node("integrate_web_search", time_node("integrate_web_search")(integrate_web_search))
-        workflow.add_node("evaluate_vectorstore_quality", time_node("evaluate_vectorstore_quality")(evaluate_vectorstore_quality))
         workflow.add_node("generate_chart", time_node("generate_chart")(generate_comparison_chart))
         workflow.add_node("gap_analysis", time_node("gap_analysis")(perform_gap_analysis))
         
@@ -156,9 +153,6 @@ class BuildingGraph:
         )
 
         workflow.add_edge("financial_web_search", "generate")
-        
-        # Transform query goes directly back to retrieve (no more cross-reference analysis)
-        workflow.add_edge("transform_query", "retrieve")
 
         # Generate always goes directly to chart decision (no hallucination grading)
         workflow.add_edge("generate", "decide_chart")

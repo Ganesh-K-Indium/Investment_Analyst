@@ -7,8 +7,8 @@ from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_core.messages import AIMessage
 from langchain_tavily import TavilySearch
-from rag.prompts.prompts import (get_retrival_grader_chain, get_rag_chain,
-                                                          get_company_name, get_question_rewriter_chain,
+from rag.prompts.prompts import (get_rag_chain,
+                                                          get_question_rewriter_chain,
                                                           get_financial_analyst_grader_chain,
                                                           get_financial_data_extractor_chain,
                                                           get_gap_analysis_chain)
@@ -653,64 +653,6 @@ def preprocess_and_analyze_query(state):
         "requested_years": analysis.requested_years,
         "sub_query_results": {}
     }
-
-def extract_multiple_companies_from_question(question, llm=None):
-    """
-    Extract multiple companies from the question for cross-referencing scenarios.
-    Uses LLM-based extraction for more accurate company identification.
-    """
-    try:
-        if llm:
-            from rag.prompts.prompts import get_multi_company_extractor_chain
-            
-            # Use structured LLM extraction
-            extractor_chain = get_multi_company_extractor_chain(llm)
-            extraction_result = extractor_chain.invoke({"question": question})
-            
-            print(f"Extracted companies: {extraction_result.companies}, Primary: {extraction_result.primary_company}, Is comparison: {extraction_result.is_comparison}")
-            
-            return extraction_result.companies
-        
-    except Exception as e:
-        print(f"Error in LLM-based company extraction: {e}")
-    
-    # Fallback to keyword matching
-    company_mappings = {
-        "amazon": ["amazon", "amzn", "amazon.com"],
-        "berkshire": ["berkshire", "berkshire hathaway", "brk"],
-        "google": ["google", "alphabet", "googl", "goog"],
-        "johnson and johnson": ["johnson", "jnj", "johnson & johnson", "johnson and johnson"],
-        "jp morgan": ["jp morgan", "jpmorgan", "jpmc", "chase", "jpm"],
-        "meta": ["meta", "facebook", "fb", "meta platforms"],
-        "microsoft": ["microsoft", "msft", "ms"],
-        "nvidia": ["nvidia", "nvda"],
-        "tesla": ["tesla", "tsla"],
-        "visa": ["visa", "v"],
-        "walmart": ["walmart", "wmt"],
-        "pfizer": ["pfizer", "pfe"]
-    }
-    
-    question_lower = question.lower()
-    detected_companies = []
-    
-    for standard_name, variations in company_mappings.items():
-        for variation in variations:
-            if variation in question_lower:
-                if standard_name not in detected_companies:
-                    detected_companies.append(standard_name)
-                break
-    
-    # Also look for comparison keywords to determine if cross-referencing is likely
-    comparison_keywords = ["compare", "versus", "vs", "against", "with", "between", "and"]
-    has_comparison = any(keyword in question_lower for keyword in comparison_keywords)
-    
-    # If we found multiple companies or comparison keywords, return detected companies
-    if len(detected_companies) > 1 or (len(detected_companies) >= 1 and has_comparison):
-        return detected_companies
-    
-    # If only one company detected but no comparison context, still return it
-    return detected_companies
-
 
 def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
     """
@@ -1631,26 +1573,6 @@ def perform_gap_analysis(state):
         }
 
 
-def transform_query(state):
-    print("---TRANSFORM QUERY---")
-    messages = state["messages"]
-    question = messages[-1].content
-
-    #llm = ChatGroq(model="llama-3.1-8b-instant")
-    llm= ChatOpenAI(model="gpt-4o-mini")
-    question_rewriter = get_question_rewriter_chain(llm)
-    better_question = question_rewriter.invoke({"question": question})
-
-    tool_call_entry = {
-        "tool": "question_rewriter"
-    }
-
-    return {
-        "messages": [better_question],
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
-    }
-
-
 def web_search(state):
     """
     Direct web search when question needs current/real-time data.
@@ -2283,43 +2205,6 @@ def integrate_web_search(state):
         "web_searched": True,
         "tool_calls": state.get("tool_calls", []) + [tool_call_entry],
         "sub_query_results": updated_sub_query_results  # Update with web search results
-    }
-
-
-def evaluate_vectorstore_quality(state):
-    """
-    Evaluate the quality of vectorstore results to determine if web search is needed.
-    """
-    print("---EVALUATE VECTORSTORE QUALITY---")
-    messages = state["messages"]
-    question = messages[-1].content
-    documents = state.get("documents", [])
-
-    # Simple heuristics to evaluate vectorstore quality
-    quality = "none"
-    needs_web_fallback = True
-
-    if documents:
-        # Check if we have sufficient relevant documents
-        if len(documents) >= 2:
-            quality = "good"
-            needs_web_fallback = False
-        elif len(documents) == 1:
-            quality = "poor"
-            needs_web_fallback = True
-        else:
-            quality = "none"
-            needs_web_fallback = True
-    
-    tool_call_entry = {
-        "tool": "evaluate_vectorstore_quality"
-    }
-
-    print(f"VECTORSTORE QUALITY: {quality}, NEEDS WEB FALLBACK: {needs_web_fallback}")
-    return {
-        "vectorstore_quality": quality,
-        "needs_web_fallback": needs_web_fallback,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
     }
 
 
