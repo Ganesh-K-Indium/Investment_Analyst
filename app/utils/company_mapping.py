@@ -34,6 +34,9 @@ TICKER_TO_COMPANY = {
     'sqm': 'square',
     'snps': 'synopsys',
     'cdns': 'cadence',
+    'tsm': 'taiwan semiconductor manufacturing',
+    'asml': 'asml',
+    'arm': 'arm',
     
     # Financial companies
     'jpm': 'jpmorgan',

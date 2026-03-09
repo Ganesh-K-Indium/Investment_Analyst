@@ -34,6 +34,7 @@ def route_alpha_workflow(state):
         return "normal"
 
 
+
 def route_question(state):
     """
     SIMPLIFIED FAST ROUTING: Route questions with minimal overhead.

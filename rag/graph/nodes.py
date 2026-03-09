@@ -1,5 +1,6 @@
 "This module contains all info about about the nodes in the graph"
 import re
+from datetime import datetime
 from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
@@ -286,7 +287,9 @@ def smart_extract_financial_data(documents, max_chars=80000):
     return extracted_docs
 
 
-def generate_comparison_subqueries(companies: list, year: str = "2024") -> dict:
+def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
+    if year is None:
+        year = str(datetime.now().year)
     """
     Generate optimized sub-queries for company comparison WITHOUT LLM.
 
@@ -416,7 +419,7 @@ def detect_segment_or_geographic_query(question: str) -> str:
 def _extract_years_from_question(question: str) -> list:
     """Extract explicitly mentioned 4-digit years (2000-2029) from the user question."""
     years = sorted(set(int(y) for y in re.findall(r'\b(20[0-2][0-9])\b', question)))
-    return years if years else [2024]
+    return years if years else [datetime.now().year]
 
 
 def generate_segment_subqueries(companies: list, question: str = "") -> dict:
@@ -558,8 +561,8 @@ def preprocess_and_analyze_query(state):
 
         print(f"📊 Companies: {', '.join(comparison_companies)}")
 
-        # Generate fixed sub-queries using the year from state (fallback to 2024)
-        comparison_year = str(state.get("year_start") or state.get("year_end") or "2024")
+        # Generate fixed sub-queries using the year from state (fallback to current year)
+        comparison_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
         print(f"📊 Comparison year: {comparison_year}")
         sub_query_analysis = generate_comparison_subqueries(comparison_companies, year=comparison_year)
 
@@ -676,7 +679,7 @@ def extract_multiple_companies_from_question(question, llm=None):
         "amazon": ["amazon", "amzn", "amazon.com"],
         "berkshire": ["berkshire", "berkshire hathaway", "brk"],
         "google": ["google", "alphabet", "googl", "goog"],
-        "Jhonson and Jhonosn": ["johnson", "jnj", "johnson & johnson", "johnson and johnson"],
+        "johnson and johnson": ["johnson", "jnj", "johnson & johnson", "johnson and johnson"],
         "jp morgan": ["jp morgan", "jpmorgan", "jpmc", "chase", "jpm"],
         "meta": ["meta", "facebook", "fb", "meta platforms"],
         "microsoft": ["microsoft", "msft", "ms"],
@@ -811,7 +814,7 @@ def retrieve(state, config):
     
     # Extract requested years from state (set by preprocess_and_analyze_query for all paths)
     # Fall back to sub_query_analysis for backward compatibility
-    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [2024]
+    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [datetime.now().year]
 
     target_tickers = set()
 
@@ -2574,7 +2577,7 @@ def generate_comparison_chart(state):
         fig = go.Figure(data=bars)
         
         # Update layout - with support for negative values
-        chart_year = str(state.get("year_start") or state.get("year_end") or "2024")
+        chart_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
         title = f'Financial Comparison: {company1} vs {company2}'
         if company3:
             title += f" vs {company3}"
@@ -2911,10 +2914,11 @@ def alpha_dimension_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
     try:
+        _cur_yr = datetime.now().year
         performance_queries = [
-            f"{ticker} revenue net income latest annual fiscal year 2025 2026 financial results",
-            f"{ticker} operating cash flow free cash flow income statement most recent annual 2025 2026",
-            f"{ticker} EBITDA margins ROE profitability metrics latest fiscal year 2025 2026 "
+            f"{ticker} revenue net income latest annual fiscal year {_cur_yr} {_cur_yr + 1} financial results",
+            f"{ticker} operating cash flow free cash flow income statement most recent annual {_cur_yr} {_cur_yr + 1}",
+            f"{ticker} EBITDA margins ROE profitability metrics latest fiscal year {_cur_yr} {_cur_yr + 1}"
         ]
         
         performance_docs = []
@@ -3448,8 +3452,9 @@ def scenario_data_retrieve(state):
     # 1. Analyst Ratings & Brokerage Price Targets
     # -------------------------------------------------------------------------
     print(" [1/6] Analyst ratings & brokerage price targets")
+    _s_yr = datetime.now().year
     analyst_queries = [
-        f"{ticker} analyst rating consensus buy sell hold price target 2025",
+        f"{ticker} analyst rating consensus buy sell hold price target {_s_yr}",
         f"{ticker} Goldman Sachs Morgan Stanley JPMorgan BofA Citi analyst recommendation",
         f"{ticker} Wells Fargo Barclays UBS Bernstein Wolfe Evercore analyst price target",
         f"{ticker} analyst upgrade downgrade rating change latest",
@@ -3473,7 +3478,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [2/6] Valuation metrics")
     valuation_queries = [
-        f"{ticker} P/E ratio EV/EBITDA price to sales valuation 2025",
+        f"{ticker} P/E ratio EV/EBITDA price to sales valuation {_s_yr}",
         f"{ticker} fair value DCF intrinsic value analyst estimate",
     ]
     for q in valuation_queries:
@@ -3495,7 +3500,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [3/6] Growth catalysts & bull drivers")
     catalyst_queries = [
-        f"{ticker} growth drivers catalysts bullish case upside 2025 2026",
+        f"{ticker} growth drivers catalysts bullish case upside {_s_yr} {_s_yr + 1}",
         f"{ticker} new product launch market expansion revenue growth opportunity",
         f"{ticker} competitive advantage pricing power margin expansion",
     ]
@@ -3518,7 +3523,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [4/6] Downside risks & bear headwinds")
     risk_queries = [
-        f"{ticker} risks headwinds bearish case downside 2025",
+        f"{ticker} risks headwinds bearish case downside {_s_yr}",
         f"{ticker} competition market share loss regulatory risk",
         f"{ticker} margin compression debt leverage concern analyst warning",
     ]
@@ -3541,7 +3546,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [5/6] Credit rating agency reports")
     credit_queries = [
-        f"{ticker} credit rating S&P Moody's Fitch rating outlook 2025",
+        f"{ticker} credit rating S&P Moody's Fitch rating outlook {_s_yr}",
         f"{ticker} bond rating investment grade speculative debt outlook",
     ]
     for q in credit_queries:
@@ -3563,7 +3568,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [6/6] Macro & sector environment")
     macro_queries = [
-        f"{ticker} sector macro outlook interest rate impact 2025",
+        f"{ticker} sector macro outlook interest rate impact {_s_yr}",
         f"{ticker} industry trends tailwinds headwinds economic environment",
     ]
     for q in macro_queries:

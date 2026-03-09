@@ -16,10 +16,9 @@ from rag.graph.nodes import (web_search, retrieve,
                          perform_gap_analysis,
                          detect_scenario_query, scenario_data_retrieve, scenario_generate_report)
 from rag.graph.edges import (route_question, decide_to_generate,
-                         grade_generation_v_documents_and_question,
                          decide_after_web_integration, decide_chart_generation,
                          route_alpha_workflow,
-                         route_after_retrieve, route_after_generate,
+                         route_after_retrieve,
                          decide_after_gap_analysis)
 from rag.graph.benchmark import time_node, node_timer
 load_dotenv()
@@ -161,29 +160,10 @@ class BuildingGraph:
         # Transform query goes directly back to retrieve (no more cross-reference analysis)
         workflow.add_edge("transform_query", "retrieve")
 
-        # Generate: comparison mode skips grading, normal mode checks hallucination
-        workflow.add_conditional_edges(
-            "generate",
-            route_after_generate,
-            {
-                "decide_chart": "decide_chart",       # comparison mode: skip grading
-                "grade_generation": "grade_generation",  # normal mode: grade first
-            },
-        )
+        # Generate always goes directly to chart decision (no hallucination grading)
+        workflow.add_edge("generate", "decide_chart")
 
-        # Grade generation (only reached in normal mode)
-        workflow.add_node("grade_generation", lambda state: state)  # Pass-through to conditional edge
-        workflow.add_conditional_edges(
-            "grade_generation",
-            grade_generation_v_documents_and_question,
-            {
-                "not supported": "generate",
-                "useful": "decide_chart",
-                "not useful": "transform_query",
-            },
-        )
-        
-        # NEW: Add a decision node that routes to either chart generation or show_result
+        # Add a decision node that routes to either chart generation or show_result
         workflow.add_node("decide_chart", lambda state: state)  # Pass-through node
         workflow.add_conditional_edges(
             "decide_chart",
