@@ -105,6 +105,21 @@ class ChatMessage(Base):
     chat_session = relationship("ChatSession", back_populates="messages")
 
 
+class ConsolidatedSummary(Base):
+    """Stores consolidated summaries generated across multiple chat sessions"""
+    __tablename__ = "consolidated_summaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    session_ids = Column(JSON, nullable=False)           # List[str] of source session IDs
+    detected_type = Column(String, nullable=False)       # "rag", "compare", or "quant"
+    title = Column(String, nullable=True)
+    summary = Column(Text, nullable=False)
+    sessions_included = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Integration(Base):
     """Integration model to store data source connector configurations"""
     __tablename__ = "integrations"

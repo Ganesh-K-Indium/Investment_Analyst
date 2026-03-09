@@ -185,8 +185,25 @@ async def ask_agent(
                 "company_filter": company_tickers,
                 "vectorstore_searched": result.get("vectorstore_searched", False),
                 "web_searched": result.get("web_searched", False),
+                "vectorstore_quality": result.get("vectorstore_quality", "none"),
+                "needs_web_fallback": result.get("needs_web_fallback", False),
+                "retry_count": result.get("retry_count", 0),
+                "summary_strategy": result.get("summary_strategy", "single_source"),
                 "document_count": len(result.get("documents", [])),
-                "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5]
+                "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5],
+                "citation_info": result.get("citation_info", []),
+                "document_sources": result.get("document_sources", {}),
+                "documents": [
+                    {
+                        "metadata": doc.metadata if hasattr(doc, "metadata") else {}
+                    }
+                    for doc in result.get("documents", [])
+                ],
+                "sub_query_analysis": result.get("sub_query_analysis", {}),
+                "sub_query_results": result.get("sub_query_results", {}),
+                "tool_calls": result.get("tool_calls", []),
+                "intermediate_message": result.get("Intermediate_message", ""),
+                "ticker": result.get("ticker")
             }
         )
         
@@ -413,8 +430,24 @@ Compare {comparison_str} {year_str}:
                 "chart_filename": chart_filename,
                 "vectorstore_searched": result.get("vectorstore_searched", False),
                 "web_searched": result.get("web_searched", False),
+                "vectorstore_quality": result.get("vectorstore_quality", "none"),
+                "needs_web_fallback": result.get("needs_web_fallback", False),
+                "retry_count": result.get("retry_count", 0),
+                "summary_strategy": result.get("summary_strategy", "single_source"),
                 "document_count": len(result.get("documents", [])),
-                "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5]
+                "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5],
+                "citation_info": result.get("citation_info", []),
+                "document_sources": result.get("document_sources", {}),
+                "documents": [
+                    {
+                        "metadata": doc.metadata if hasattr(doc, "metadata") else {}
+                    }
+                    for doc in result.get("documents", [])
+                ],
+                "sub_query_analysis": result.get("sub_query_analysis", {}),
+                "sub_query_results": result.get("sub_query_results", {}),
+                "tool_calls": result.get("tool_calls", []),
+                "intermediate_message": result.get("Intermediate_message", "")
             }
         )
         

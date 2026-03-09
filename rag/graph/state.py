@@ -73,6 +73,7 @@ class GraphState(TypedDict):
     # Gap analysis fields (populated by gap_analysis node, consumed by integrate_web_search)
     targeted_gap_queries: List[str]  # Specific web search queries for missing data points
     gap_analysis: Dict[str, Any]   # Full gap analysis result (has_gaps, gap_type, missing_items, reasoning)
+    requested_years: List[int]  # Years explicitly requested in the user query (extracted from question)
     # ALPHA Framework fields
     alpha_mode: bool  # Whether this is an ALPHA Framework query (buy timing analysis)
     alpha_dimensions: Dict[str, Any]  # Retrieved data for each ALPHA dimension
