@@ -674,7 +674,7 @@ def extract_multiple_companies_from_question(question, llm=None):
     # Fallback to keyword matching
     company_mappings = {
         "amazon": ["amazon", "amzn", "amazon.com"],
-        "berkshire": ["berkshire", "berkshire hathaway", "brk"],
+        "berkshire": ["berkshire", "berkshire hathaway", "brk", "brk-a", "brk-b"],
         "google": ["google", "alphabet", "googl", "goog"],
         "Jhonson and Jhonosn": ["johnson", "jnj", "johnson & johnson", "johnson and johnson"],
         "jp morgan": ["jp morgan", "jpmorgan", "jpmc", "chase", "jpm"],
@@ -684,7 +684,8 @@ def extract_multiple_companies_from_question(question, llm=None):
         "tesla": ["tesla", "tsla"],
         "visa": ["visa", "v"],
         "walmart": ["walmart", "wmt"],
-        "pfizer": ["pfizer", "pfe"]
+        "pfizer": ["pfizer", "pfe"],
+        "eli lilly": ["eli lilly", "lly", "lilly"]
     }
     
     question_lower = question.lower()

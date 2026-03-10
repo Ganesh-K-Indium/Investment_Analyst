@@ -14,7 +14,7 @@ logging.basicConfig(
 
 # SEC EDGAR Settings
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "Indium Capital contact@indium.com")
-SEC_REQUEST_RATE_LIMIT = 10  # Requests per second
+SEC_REQUEST_RATE_LIMIT = 5  # Requests per second (SEC allows 10, we use 5 for safety)
 
 # SEC Configuration
 SEC_BASE_URL = "https://www.sec.gov/cgi-bin/browse-edgar"

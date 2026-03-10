@@ -1,13 +1,36 @@
+# Environment & secrets
 /.env
-/__pycache__
-/data
-/venv
 service_account.json
-logs/
-output/
+
+# Python
+**/__pycache__/
+*.pyc
+
+# Virtual environment
+/venv
+
+# Data & databases
+/data
 *.db
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# OS files
 .DS_Store
-*.png
-/xml_filings
-/pdf_filings
+
+# Logs
+*.log
+logs/
+
+# Output & artifacts
+output/
+
+# Ingestion artifacts
+xml_filings/
+pdf_filings/
 /10k_7_companies
+metadata_*.json
+
+# Images (generated during ingestion)
+*.png

@@ -9,18 +9,20 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from logging.handlers import RotatingFileHandler
 
-# Configure Logging first
-log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-log_file = 'form4_ingestion.log'
-file_handler = RotatingFileHandler(log_file, maxBytes=1024*1024*5, backupCount=1)
-file_handler.setFormatter(log_formatter)
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(log_formatter)
-
+# Configure Logging first (guard against duplicate handlers on re-import)
 logger = logging.getLogger("Form4Ingestion")
-logger.setLevel(logging.INFO)
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
+log_file = 'form4_ingestion.log'
+
+if not logger.handlers:
+    log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler = RotatingFileHandler(log_file, maxBytes=1024*1024*5, backupCount=1)
+    file_handler.setFormatter(log_formatter)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(log_formatter)
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    logger.propagate = False  # Prevent root logger from duplicating messages
 
 try:
     from settings import LOG_LEVEL
@@ -149,17 +151,25 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
         return {
             "ticker": ticker,
             "total_fetched": 0,
-            "saved": 0,
-            "skipped_duplicate": 0,
-            "failed": 0,
+            "filings_processed": 0,
+            "filings_skipped_duplicate": 0,
+            "filings_skipped_no_common_stock": 0,
+            "transactions_saved": 0,
+            "filings_failed_fetch": 0,
+            "filings_failed_parse": 0,
+            "filings_failed_db": 0,
             "date_range": {"start": str(start_date), "end": str(end_date)},
             "message": f"No Form 4 filings found for {ticker} between {start_date} and {end_date}.",
         }
 
-    # Initialize counters
-    success_count = 0
-    fail_count = 0
-    skip_count = 0
+    # Initialize granular counters
+    filings_processed = 0
+    transactions_saved = 0
+    filings_skipped_duplicate = 0
+    filings_skipped_no_common_stock = 0
+    filings_failed_fetch = 0
+    filings_failed_parse = 0
+    filings_failed_db = 0
 
     with get_db() as db:
         for i, url in enumerate(xml_urls):
@@ -176,21 +186,21 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
                 
                 if existing:
                     logger.info(f"  -> Skipping (Already in DB)")
-                    skip_count += 1
+                    filings_skipped_duplicate += 1
                     continue
 
                 # Fetch Content
                 content = fetcher.fetch_xml_content(url)
                 if not content:
                     logger.warning(f"  -> Failed to fetch XML content. Skipping.")
-                    fail_count += 1
+                    filings_failed_fetch += 1
                     continue
                 
                 # Parse
                 data = parser.parse_xml(content)
                 if not data:
                     logger.warning(f"  -> Failed to parse XML. Skipping.")
-                    fail_count += 1
+                    filings_failed_parse += 1
                     continue
                 
                 # Save XML file locally for verification
@@ -242,25 +252,50 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
                     )
                     db.add(record)
                     tx_count += 1
-                    
+                
+                # Handle filings with zero common stock transactions
+                if tx_count == 0:
+                    # Insert placeholder so dedup check finds this filing on subsequent runs
+                    placeholder = Form4Transaction(
+                        accession_number=accession_number,
+                        issuer_symbol=data['issuer_symbol'],
+                        issuer_name=data.get('issuer_name'),
+                        rpt_owner_name=rpt_owner,
+                        rpt_owner_title=title,
+                        is_director=data.get('is_director', False),
+                        is_officer=data.get('is_officer', False),
+                        is_ten_percent_owner=data.get('is_ten_percent_owner', False),
+                        transaction_code='SKIP_NO_COMMON',
+                        security_title='No common stock transactions in this filing',
+                    )
+                    db.add(placeholder)
+                    logger.info(f"  -> No common stock transactions. Placeholder inserted for dedup.")
+                    filings_skipped_no_common_stock += 1
+                else:
+                    logger.info(f"  -> Success. Saved {tx_count} common stock transactions.")
+                    filings_processed += 1
+                    transactions_saved += tx_count
+
                 db.commit()
-                logger.info(f"  -> Success. Saved {tx_count} transactions.")
-                success_count += 1
                 
             except Exception as e:
                 logger.error(f"  -> Critical Error processing {url}: {e}")
                 db.rollback()
-                fail_count += 1
+                filings_failed_db += 1
 
-    logger.info("="*30)
+    logger.info("="*50)
     logger.info("INGESTION SUMMARY")
-    logger.info("="*30)
-    logger.info(f"Total Fetched: {len(xml_urls)}")
-    logger.info(f"Successfully Saved: {success_count}")
-    logger.info(f"Skipped (Duplicate): {skip_count}")
-    logger.info(f"Failed: {fail_count}")
+    logger.info("="*50)
+    logger.info(f"Total Fetched from SEC:          {len(xml_urls)}")
+    logger.info(f"Filings Processed (with txns):   {filings_processed}")
+    logger.info(f"Transactions Saved (DB rows):    {transactions_saved}")
+    logger.info(f"Skipped (Duplicate):             {filings_skipped_duplicate}")
+    logger.info(f"Skipped (No Common Stock):       {filings_skipped_no_common_stock}")
+    logger.info(f"Failed (Fetch):                  {filings_failed_fetch}")
+    logger.info(f"Failed (Parse):                  {filings_failed_parse}")
+    logger.info(f"Failed (DB Error):               {filings_failed_db}")
     logger.info(f"Logs saved to: {os.path.abspath(log_file)}")
-    logger.info("="*30)
+    logger.info("="*50)
     
     # Calculate and display transaction analytics
     try:
@@ -273,9 +308,13 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
     return {
         "ticker": ticker,
         "total_fetched": len(xml_urls),
-        "saved": success_count,
-        "skipped_duplicate": skip_count,
-        "failed": fail_count,
+        "filings_processed": filings_processed,
+        "filings_skipped_duplicate": filings_skipped_duplicate,
+        "filings_skipped_no_common_stock": filings_skipped_no_common_stock,
+        "transactions_saved": transactions_saved,
+        "filings_failed_fetch": filings_failed_fetch,
+        "filings_failed_parse": filings_failed_parse,
+        "filings_failed_db": filings_failed_db,
         "date_range": {"start": str(start_date), "end": str(end_date)},
     }
 

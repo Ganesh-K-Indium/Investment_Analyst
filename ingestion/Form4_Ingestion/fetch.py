@@ -1,5 +1,6 @@
 import requests
 import time
+import random
 import logging
 from typing import List, Optional, Tuple
 from datetime import date, datetime
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 class SecEdgarFetcher:
     """
     Fetches Form 4 filings from SEC EDGAR.
-    Respects the rate limit of 10 requests per second.
+    Respects the rate limit with jitter to avoid bursty patterns.
     """
     
     BASE_URL = SEC_BASE_URL
@@ -37,8 +38,11 @@ class SecEdgarFetcher:
     def _wait_for_rate_limit(self):
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
-        if time_since_last < self.rate_limit_delay:
-            time.sleep(self.rate_limit_delay - time_since_last)
+        wait_time = self.rate_limit_delay - time_since_last
+        if wait_time > 0:
+            # Add random jitter (0-100ms) to avoid bursty patterns
+            jitter = random.uniform(0, 0.1)
+            time.sleep(wait_time + jitter)
         self.last_request_time = time.time()
 
     def _get_cik_from_ticker(self, ticker: str) -> Optional[str]:

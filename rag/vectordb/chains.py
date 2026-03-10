@@ -343,10 +343,13 @@ def get_company_name(llm):
     10. visa
     11. walmart
     12. pfizer
+    13. eli lilly
     
     ## Instructions
     - make sure you should only generate the comapny name nothing else.
     - if user is asking about companies in a short form or abbriviations like jpmc, you should be able to map it with jp morgon
+    - LLY or LILLY or ELI LILLY should all map to eli lilly
+    - BRK-A or BRK-B or BRK should all map to berkshire
     - Strictly do not change the company spellings, keep them as it is as mentioned above.
     """
 
@@ -379,6 +382,7 @@ def get_multi_company_extractor_chain(llm):
     - visa
     - walmart
     - pfizer
+    - eli lilly
     - tesla
     - boeing
     - apple
@@ -386,7 +390,8 @@ def get_multi_company_extractor_chain(llm):
     
     Instructions:
     - Return a list of matching companies (use exact spellings if they are from the list).
-    - Handle abbreviations (e.g., 'jpmc' -> 'jp morgan').
+    - Handle abbreviations (e.g., 'jpmc' -> 'jp morgan', 'lly' -> 'eli lilly').
+    - BRK-A or BRK-B or BRK should all map to berkshire.
     - If no companies, return an empty list.
     - For comparisons or multi-company queries, include all relevant ones.
     """

@@ -25,7 +25,7 @@ router = APIRouter(prefix="/form4", tags=["Form 4 - Insider Trading"])
 class Form4IngestRequest(BaseModel):
     ticker: str = Field(
         ...,
-        description="Stock ticker symbol (e.g. NVDA, AAPL). Must be 1–5 uppercase letters.",
+        description="Stock ticker symbol (e.g. NVDA, AAPL, BRK-B). Must be 1–5 uppercase letters, optionally followed by a hyphen and 1–2 letters.",
         examples=["NVDA"],
     )
     start_date: Optional[date] = Field(
@@ -38,9 +38,13 @@ class Form4IngestRequest(BaseModel):
 class Form4IngestResponse(BaseModel):
     ticker: str
     total_fetched: int = Field(..., description="Total filing URLs retrieved from SEC EDGAR.")
-    saved: int = Field(..., description="Filings that contained ≥1 new transaction saved to DB.")
-    skipped_duplicate: int = Field(..., description="Filings already present in the database.")
-    failed: int = Field(..., description="Filings that could not be fetched or parsed.")
+    filings_processed: int = Field(..., description="Filings that contained ≥1 common stock transaction saved to DB.")
+    filings_skipped_duplicate: int = Field(..., description="Filings already present in the database (dedup).")
+    filings_skipped_no_common_stock: int = Field(..., description="Filings with zero common stock transactions (placeholder inserted).")
+    transactions_saved: int = Field(..., description="Total transaction rows written to the database.")
+    filings_failed_fetch: int = Field(..., description="Filings where XML content could not be fetched from SEC.")
+    filings_failed_parse: int = Field(..., description="Filings where XML content could not be parsed.")
+    filings_failed_db: int = Field(..., description="Filings that failed due to a database error.")
     date_range: dict = Field(..., description="Effective start/end dates used for ingestion.")
     message: Optional[str] = Field(None, description="Optional status message.")
 
@@ -71,10 +75,10 @@ async def ingest_form4(request: Form4IngestRequest):
     """
     ticker = request.ticker.upper().strip()
 
-    if not re.match(r'^[A-Z]{1,5}$', ticker):
+    if not re.match(r'^[A-Z]{1,5}(-[A-Z]{1,2})?$', ticker):
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid ticker '{ticker}'. Must be 1–5 uppercase letters (e.g. NVDA).",
+            detail=f"Invalid ticker '{ticker}'. Must be 1–5 uppercase letters, optionally followed by a hyphen and 1–2 letters (e.g. NVDA, BRK-B).",
         )
 
     try:

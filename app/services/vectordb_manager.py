@@ -12,6 +12,15 @@ class VectorDBManager:
     Lazy loads instances as needed.
     """
     
+    # Ticker aliases: map share-class variants to the base ticker used in Qdrant
+    # e.g. BRK-A, BRK-B, BRK.A, BRK.B all map to BRK (collection = ticker_brk)
+    TICKER_ALIASES = {
+        'brk-a': 'brk',
+        'brk-b': 'brk',
+        'brk.a': 'brk',
+        'brk.b': 'brk',
+    }
+    
     def __init__(self):
         # Store DB instances keyed by TICKER (or special keys like 'legacy_unified')
         # Key: ticker (lowercase) or 'legacy_unified', Value: load_vector_database instance
@@ -20,6 +29,22 @@ class VectorDBManager:
         # Keep track of active sessions/portfolios for management
         # mapping thread_id -> portfolio_id (still useful for context)
         self._session_to_portfolio: Dict[str, int] = {}
+    
+    @classmethod
+    def normalize_ticker(cls, ticker: str) -> str:
+        """
+        Normalize a ticker to its base form (e.g. BRK-B → BRK, BRK.A → BRK).
+        Handles both dot and hyphen variants by converting dots to hyphens first.
+        """
+        lowered = ticker.lower()
+        # Check direct alias first (handles both dot and hyphen variants)
+        if lowered in cls.TICKER_ALIASES:
+            return cls.TICKER_ALIASES[lowered]
+        # Convert dots to hyphens and check again
+        hyphenated = lowered.replace('.', '-')
+        if hyphenated in cls.TICKER_ALIASES:
+            return cls.TICKER_ALIASES[hyphenated]
+        return lowered
     
     def get_instance(self, ticker: str, create_if_missing: bool = False) -> load_vector_database:
         """
@@ -38,12 +63,12 @@ class VectorDBManager:
             # Fallback to unified DB if no ticker provided (legacy support)
             return self._get_legacy_instance()
             
-        ticker_key = ticker.lower()
+        ticker_key = self.normalize_ticker(ticker)
         
         if ticker_key in self._instances:
             return self._instances[ticker_key]
         
-        print(f"Initializing Vector DB for ticker: {ticker} (create_if_missing={create_if_missing})")
+        print(f"Initializing Vector DB for ticker: {ticker} (normalized: {ticker_key}, create_if_missing={create_if_missing})")
         collection_name = f"ticker_{ticker_key}"
         
         # Create DB instance

@@ -49,8 +49,15 @@ TICKER_TO_COMPANY = {
     'wfc': 'wells',
     'tfc': 'truist',
     'bnc': 'banco',
+    'brk': 'berkshire',
+    'brk-a': 'berkshire',
+    'brk-b': 'berkshire',
+    'brk.a': 'berkshire',
+    'brk.b': 'berkshire',
+    'avgo': 'broadcom',
     
     # Healthcare
+    'lly': 'eli lilly',
     'jnj': 'johnson',
     'pfe': 'pfizer',
     'mrna': 'moderna',
