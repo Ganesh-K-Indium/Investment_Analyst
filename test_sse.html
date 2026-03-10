@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Investment Analyst SSE Tester</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e5e5e5; padding: 24px; min-height: 100vh; }
+    h1 { font-size: 1.3rem; margin-bottom: 20px; color: #fff; }
+
+    .tabs { display: flex; gap: 8px; margin-bottom: 24px; }
+    .tab { padding: 8px 22px; border-radius: 6px; border: 1px solid #333; background: transparent; color: #888; cursor: pointer; font-size: 0.88rem; }
+    .tab.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+    /* Step card */
+    .step-card { background: #161616; border: 1px solid #252525; border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; max-width: 660px; }
+    .step-card.done { border-color: #166534; }
+    .step-card.active { border-color: #2563eb44; }
+    .step-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .step-badge { width: 24px; height: 24px; border-radius: 50%; background: #222; border: 1px solid #444; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; color: #888; flex-shrink: 0; }
+    .step-badge.done { background: #14532d; border-color: #166534; color: #4ade80; }
+    .step-badge.active { background: #1e3a8a; border-color: #2563eb; color: #93c5fd; }
+    .step-title { font-size: 0.9rem; font-weight: 500; color: #ccc; }
+    .step-title.done { color: #4ade80; }
+    .step-title.active { color: #93c5fd; }
+
+    .field-row { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+    .field-row label { font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.04em; }
+    input, textarea { padding: 9px 12px; background: #111; border: 1px solid #2a2a2a; border-radius: 6px; color: #e5e5e5; font-size: 0.88rem; width: 100%; }
+    input:focus, textarea:focus { outline: none; border-color: #2563eb; }
+    textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+
+    .inline-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .btn { padding: 9px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.86rem; font-weight: 500; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-sm { padding: 6px 14px; font-size: 0.8rem; }
+    .btn-ghost { background: #1a1a1a; border: 1px solid #333; color: #aaa; }
+    .btn-ghost:hover { background: #222; }
+
+    /* Info chips */
+    .info-chip { display: inline-flex; align-items: center; gap: 6px; background: #0d2137; border: 1px solid #1e4976; border-radius: 5px; padding: 5px 10px; font-size: 0.78rem; color: #7dd3fc; margin-right: 8px; margin-top: 4px; }
+    .info-chip .label { color: #4b6b8a; }
+
+    /* Error */
+    .error-box { background: #1a0a0a; border: 1px solid #7f1d1d; border-radius: 6px; padding: 10px 14px; color: #f87171; font-size: 0.83rem; margin-top: 10px; }
+
+    /* Stream output */
+    .stream-section { max-width: 660px; margin-top: 6px; }
+    .progress-wrap { background: #161616; border: 1px solid #252525; border-radius: 10px; padding: 16px 20px; margin-bottom: 12px; }
+    .progress-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: #555; margin-bottom: 10px; }
+    .progress-bar { height: 3px; background: #1e1e1e; border-radius: 2px; margin-bottom: 14px; overflow: hidden; }
+    .progress-fill { height: 100%; background: #2563eb; border-radius: 2px; transition: width 0.35s ease; }
+    .milestones { display: flex; flex-direction: column; gap: 7px; }
+    .milestone { display: flex; align-items: center; gap: 8px; font-size: 0.83rem; color: #aaa; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #2563eb; flex-shrink: 0; }
+    .dot.pending { background: #2a2a2a; }
+    .node-tag { font-family: monospace; font-size: 0.72rem; color: #444; margin-left: 2px; }
+
+    .answer-wrap { background: #0a0a0a; border: 1px solid #1e1e1e; border-radius: 10px; padding: 18px 20px; }
+    .answer-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: #555; margin-bottom: 10px; }
+    .answer-text { white-space: pre-wrap; line-height: 1.65; font-size: 0.86rem; color: #d1d5db; }
+    .answer-meta { margin-top: 12px; font-size: 0.76rem; color: #555; display: flex; gap: 12px; flex-wrap: wrap; }
+    .done-tag { display: inline-block; padding: 3px 9px; background: #052e16; border: 1px solid #166534; border-radius: 4px; color: #4ade80; font-size: 0.72rem; margin-top: 10px; }
+    .chart-img { margin-top: 14px; max-width: 100%; border-radius: 6px; border: 1px solid #333; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const BASE = "http://localhost:8000";
+
+    const api = {
+      async post(path, body) {
+        const res = await fetch(BASE + path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: "HTTP " + res.status }));
+          throw new Error(err.detail || "HTTP " + res.status);
+        }
+        return res.json();
+      },
+      async stream(path, body) {
+        const res = await fetch(BASE + path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: "HTTP " + res.status }));
+          throw new Error(err.detail || "HTTP " + res.status);
+        }
+        return res;
+      }
+    };
+
+    // ── SSE consumer ──────────────────────────────────────────────────────────
+    async function consumeSSE(res, onEvent) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split("\n\n");
+        buf = parts.pop();
+        for (const part of parts) {
+          if (!part.trim()) continue;
+          const eventLine = part.match(/^event:\s*(.+)$/m);
+          const dataLine  = part.match(/^data:\s*(.+)$/m);
+          if (!eventLine || !dataLine) continue;
+          let data;
+          try { data = JSON.parse(dataLine[1]); } catch { continue; }
+          onEvent(eventLine[1].trim(), data);
+        }
+      }
+    }
+
+    // ── Shared stream state initializer ──────────────────────────────────────
+    const initStream = () => ({ milestones: [], answer: null, meta: null, chartUrl: null, done: false, error: null });
+
+    // ── StreamResult component ────────────────────────────────────────────────
+    function StreamResult({ stream }) {
+      const { milestones, answer, meta, chartUrl, done, error } = stream;
+      const lastStep = milestones.length ? milestones[milestones.length - 1].step : 0;
+      const pct = done ? 100 : Math.min(90, Math.round((lastStep / 5) * 90));
+
+      return (
+        <div className="stream-section">
+          {error && <div className="error-box">Error: {error}</div>}
+
+          {milestones.length > 0 && (
+            <div className="progress-wrap">
+              <div className="progress-label">Agent Progress</div>
+              <div className="progress-bar"><div className="progress-fill" style={{ width: pct + "%" }} /></div>
+              <div className="milestones">
+                {milestones.map((m, i) => (
+                  <div key={i} className="milestone">
+                    <div className="dot" />
+                    {m.message}
+                    <span className="node-tag">[{m.node}]</span>
+                  </div>
+                ))}
+                {!done && !error && (
+                  <div className="milestone"><div className="dot pending" /><span style={{color:"#444"}}>Waiting...</span></div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {answer && (
+            <div className="answer-wrap">
+              <div className="answer-label">Answer</div>
+              <div className="answer-text">{answer}</div>
+              {chartUrl && <img className="chart-img" src={chartUrl} alt="Chart" />}
+              {meta && (
+                <div className="answer-meta">
+                  <span>{meta.document_count ?? 0} docs</span>
+                  {meta.web_searched && <span>· web searched</span>}
+                  {meta.vectorstore_searched && <span>· vectorstore searched</span>}
+                  {meta.vectorstore_quality && <span>· quality: {meta.vectorstore_quality}</span>}
+                </div>
+              )}
+              {done && <div className="done-tag">✓ Complete</div>}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── Step badge helper ─────────────────────────────────────────────────────
+    function StepBadge({ n, state }) {
+      const cls = state === "done" ? "done" : state === "active" ? "active" : "";
+      return <div className={`step-badge ${cls}`}>{state === "done" ? "✓" : n}</div>;
+    }
+
+    // ── ASK TAB ──────────────────────────────────────────────────────────────
+    function AskTab() {
+      const [userId, setUserId]       = React.useState("test_user");
+      const [portName, setPortName]   = React.useState("Test Portfolio");
+      const [tickers, setTickers]     = React.useState("AAPL, MSFT");
+      const [portfolio, setPortfolio] = React.useState(null); // { id, name, tickers }
+      const [session, setSession]     = React.useState(null); // { thread_id }
+      const [query, setQuery]         = React.useState("");
+      const [loading, setLoading]     = React.useState("");
+      const [stepError, setStepError] = React.useState("");
+      const [stream, setStream]       = React.useState(null);
+
+      // Step states
+      const s1 = portfolio ? "done" : "active";
+      const s2 = portfolio ? (session ? "done" : "active") : "idle";
+      const s3 = session ? (stream ? "active" : "active") : "idle";
+
+      async function createPortfolio() {
+        setLoading("portfolio"); setStepError("");
+        try {
+          const tickerList = tickers.split(",").map(t => t.trim()).filter(Boolean);
+          const data = await api.post("/portfolios/", { user_id: userId, name: portName, tickers: tickerList });
+          setPortfolio({ id: data.id, name: data.name, tickers: data.tickers });
+        } catch (e) { setStepError(e.message); }
+        setLoading("");
+      }
+
+      async function createSession() {
+        setLoading("session"); setStepError("");
+        try {
+          const data = await api.post("/portfolios/sessions", {
+            portfolio_id: portfolio.id,
+            user_id: userId,
+            agent_type: "rag",
+          });
+          setSession({ thread_id: data.thread_id });
+        } catch (e) { setStepError(e.message); }
+        setLoading("");
+      }
+
+      async function runAsk() {
+        setStream(initStream()); setStepError("");
+        try {
+          const res = await api.stream("/ask", { query, thread_id: session.thread_id });
+          await consumeSSE(res, (event, data) => {
+            setStream(s => {
+              if (event === "status")   return { ...s, milestones: [...s.milestones, data] };
+              if (event === "answer")   return { ...s, answer: data.content, chartUrl: data.chart_url || null };
+              if (event === "metadata") return { ...s, meta: data };
+              if (event === "done")     return { ...s, done: true };
+              if (event === "error")    return { ...s, error: data.message, done: true };
+              return s;
+            });
+          });
+        } catch (e) { setStream(s => ({ ...s, error: e.message, done: true })); }
+      }
+
+      function reset() { setPortfolio(null); setSession(null); setStream(null); setStepError(""); }
+
+      const isStreaming = stream && !stream.done && !stream.error;
+
+      return (
+        <div>
+          {/* Step 1: Create Portfolio */}
+          <div className={`step-card ${s1 === "done" ? "done" : "active"}`}>
+            <div className="step-header">
+              <StepBadge n="1" state={s1} />
+              <span className={`step-title ${s1 === "done" ? "done" : "active"}`}>Create Portfolio</span>
+            </div>
+            {s1 !== "done" ? (
+              <>
+                <div className="inline-fields" style={{marginBottom:10}}>
+                  <div className="field-row">
+                    <label>User ID</label>
+                    <input value={userId} onChange={e => setUserId(e.target.value)} />
+                  </div>
+                  <div className="field-row">
+                    <label>Portfolio Name</label>
+                    <input value={portName} onChange={e => setPortName(e.target.value)} />
+                  </div>
+                </div>
+                <div className="field-row" style={{marginBottom:12}}>
+                  <label>Tickers (comma separated)</label>
+                  <input value={tickers} onChange={e => setTickers(e.target.value)} placeholder="AAPL, MSFT, GOOGL" />
+                </div>
+                <button className="btn btn-primary btn-sm" onClick={createPortfolio} disabled={loading === "portfolio"}>
+                  {loading === "portfolio" ? "Creating..." : "Create Portfolio"}
+                </button>
+              </>
+            ) : (
+              <div>
+                <span className="info-chip"><span className="label">ID:</span> {portfolio.id}</span>
+                <span className="info-chip"><span className="label">Name:</span> {portfolio.name}</span>
+                <span className="info-chip"><span className="label">Tickers:</span> {portfolio.tickers?.join(", ")}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Step 2: Create Session */}
+          <div className={`step-card ${s2 === "done" ? "done" : s2 === "active" ? "active" : ""}`}>
+            <div className="step-header">
+              <StepBadge n="2" state={s2} />
+              <span className={`step-title ${s2 === "done" ? "done" : s2 === "active" ? "active" : ""}`}>Create RAG Session</span>
+            </div>
+            {s2 === "active" && (
+              <button className="btn btn-primary btn-sm" onClick={createSession} disabled={loading === "session"}>
+                {loading === "session" ? "Creating..." : "Create Session"}
+              </button>
+            )}
+            {s2 === "done" && (
+              <div>
+                <span className="info-chip"><span className="label">Thread ID:</span> {session.thread_id}</span>
+              </div>
+            )}
+            {s2 === "idle" && <div style={{color:"#444", fontSize:"0.82rem"}}>Complete step 1 first</div>}
+          </div>
+
+          {/* Step 3: Ask */}
+          <div className={`step-card ${s3 === "active" ? "active" : ""}`}>
+            <div className="step-header">
+              <StepBadge n="3" state={s3 === "active" && stream?.done ? "done" : s3} />
+              <span className={`step-title ${s3 === "active" ? "active" : ""}`}>Ask</span>
+            </div>
+            {s3 === "active" ? (
+              <>
+                <div className="field-row" style={{marginBottom:12}}>
+                  <label>Query</label>
+                  <textarea value={query} onChange={e => setQuery(e.target.value)}
+                    placeholder="What is Apple's revenue growth?" rows={3} />
+                </div>
+                <div style={{display:"flex", gap:8, marginBottom: stream ? 16 : 0}}>
+                  <button className="btn btn-primary btn-sm" onClick={runAsk} disabled={!query || isStreaming}>
+                    {isStreaming ? "Streaming..." : "Run"}
+                  </button>
+                  <button className="btn btn-ghost btn-sm" onClick={reset}>Reset</button>
+                </div>
+                {stream && <StreamResult stream={stream} />}
+              </>
+            ) : (
+              <div style={{color:"#444", fontSize:"0.82rem"}}>Complete steps 1 & 2 first</div>
+            )}
+          </div>
+
+          {stepError && <div className="error-box" style={{maxWidth:660}}>{stepError}</div>}
+        </div>
+      );
+    }
+
+    // ── COMPARE TAB ───────────────────────────────────────────────────────────
+    function CompareTab() {
+      const [userId, setUserId] = React.useState("test_user");
+      const [c1, setC1]         = React.useState("");
+      const [c2, setC2]         = React.useState("");
+      const [c3, setC3]         = React.useState("");
+      const [year, setYear]     = React.useState("");
+      const [stream, setStream] = React.useState(null);
+      const [error, setError]   = React.useState("");
+
+      const isStreaming = stream && !stream.done && !stream.error;
+
+      async function runCompare() {
+        setStream(initStream()); setError("");
+        try {
+          const body = { company1: c1, company2: c2, user_id: userId };
+          if (c3.trim()) body.company3 = c3.trim();
+          if (year.trim()) body.year = parseInt(year.trim());
+          const res = await api.stream("/compare", body);
+          await consumeSSE(res, (event, data) => {
+            setStream(s => {
+              if (event === "status")   return { ...s, milestones: [...s.milestones, data] };
+              if (event === "answer")   return { ...s, answer: data.content, chartUrl: data.chart_url || null };
+              if (event === "metadata") return { ...s, meta: data };
+              if (event === "done")     return { ...s, done: true };
+              if (event === "error")    return { ...s, error: data.message, done: true };
+              return s;
+            });
+          });
+        } catch (e) {
+          setError(e.message);
+          setStream(s => s ? { ...s, done: true } : null);
+        }
+      }
+
+      return (
+        <div>
+          <div className="step-card active" style={{maxWidth:660}}>
+            <div className="step-header">
+              <StepBadge n="1" state="active" />
+              <span className="step-title active">Compare Companies</span>
+            </div>
+            <div className="field-row" style={{marginBottom:10}}>
+              <label>User ID</label>
+              <input value={userId} onChange={e => setUserId(e.target.value)} />
+            </div>
+            <div className="inline-fields" style={{marginBottom:10}}>
+              <div className="field-row">
+                <label>Company 1</label>
+                <input value={c1} onChange={e => setC1(e.target.value)} placeholder="Apple" />
+              </div>
+              <div className="field-row">
+                <label>Company 2</label>
+                <input value={c2} onChange={e => setC2(e.target.value)} placeholder="Microsoft" />
+              </div>
+            </div>
+            <div className="inline-fields" style={{marginBottom:14}}>
+              <div className="field-row">
+                <label>Company 3 (optional)</label>
+                <input value={c3} onChange={e => setC3(e.target.value)} placeholder="Google" />
+              </div>
+              <div className="field-row">
+                <label>Year (optional)</label>
+                <input value={year} onChange={e => setYear(e.target.value)} placeholder="2024" />
+              </div>
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={runCompare} disabled={!c1 || !c2 || isStreaming}>
+              {isStreaming ? "Streaming..." : "Compare"}
+            </button>
+          </div>
+
+          {error && <div className="error-box" style={{maxWidth:660, marginTop:0}}>{error}</div>}
+          {stream && <StreamResult stream={stream} />}
+        </div>
+      );
+    }
+
+    // ── QUANT TAB ─────────────────────────────────────────────────────────────
+    function QuantTab() {
+      const [userId, setUserId]   = React.useState("test_user");
+      const [query, setQuery]     = React.useState("");
+      const [sessionId, setSessionId] = React.useState("");
+      const [stream, setStream]   = React.useState(null);
+      const [error, setError]     = React.useState("");
+
+      const isStreaming = stream && !stream.done && !stream.error;
+
+      // Agent name → display label
+      const AGENT_LABELS = {
+        supervisor:               "Supervisor",
+        ticker_finder_agent:      "Ticker Finder",
+        stock_information_agent:  "Stock Information",
+        technical_analysis_agent: "Technical Analysis",
+        research_agent:           "Research",
+      };
+
+      async function runQuery() {
+        setStream(initStream()); setError("");
+        try {
+          const body = { query, user_id: userId };
+          if (sessionId.trim()) body.session_id = sessionId.trim();
+          const res = await api.stream("/quant/query", body);
+          let capturedSessionId = sessionId;
+          await consumeSSE(res, (event, data) => {
+            if (event === "metadata" && data.session_id && !capturedSessionId) {
+              capturedSessionId = data.session_id;
+              setSessionId(data.session_id);
+            }
+            setStream(s => {
+              if (event === "status")   return { ...s, milestones: [...s.milestones, data] };
+              if (event === "answer")   return { ...s, answer: data.content, agentUsed: data.agent_used };
+              if (event === "metadata") return { ...s, meta: data };
+              if (event === "done")     return { ...s, done: true };
+              if (event === "error")    return { ...s, error: data.message, done: true };
+              return s;
+            });
+          });
+        } catch (e) {
+          setError(e.message);
+          setStream(s => s ? { ...s, done: true } : null);
+        }
+      }
+
+      // Agent-aware StreamResult — shows which agent ran each step
+      const agentStream = stream ? {
+        ...stream,
+        // Annotate milestones with display labels
+        milestones: (stream.milestones || []).map(m => ({
+          ...m,
+          displayName: AGENT_LABELS[m.node] || m.node,
+        }))
+      } : null;
+
+      return (
+        <div>
+          <div className="step-card active" style={{maxWidth:660}}>
+            <div className="step-header">
+              <StepBadge n="1" state="active" />
+              <span className="step-title active">Quant Multi-Agent Query</span>
+            </div>
+            <div className="inline-fields" style={{marginBottom:10}}>
+              <div className="field-row">
+                <label>User ID</label>
+                <input value={userId} onChange={e => setUserId(e.target.value)} />
+              </div>
+              <div className="field-row">
+                <label>Session ID (optional — leave blank for new)</label>
+                <input value={sessionId} onChange={e => setSessionId(e.target.value)}
+                       placeholder="Auto-generated if empty" />
+              </div>
+            </div>
+            <div className="field-row" style={{marginBottom:14}}>
+              <label>Query</label>
+              <textarea value={query} onChange={e => setQuery(e.target.value)} rows={3}
+                placeholder="e.g. What is Apple's current stock price and RSI?" />
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={runQuery} disabled={!query || isStreaming}>
+              {isStreaming ? "Streaming..." : "Run"}
+            </button>
+          </div>
+
+          {error && <div className="error-box" style={{maxWidth:660, marginTop:0}}>{error}</div>}
+          {agentStream && <QuantStreamResult stream={agentStream} />}
+        </div>
+      );
+    }
+
+    function QuantStreamResult({ stream }) {
+      const { milestones, answer, meta, done, error } = stream;
+      const lastStep = milestones.length ? milestones[milestones.length - 1].step : 0;
+      const total = 4;
+      const pct = done ? 100 : Math.min(90, Math.round((lastStep / total) * 90));
+
+      // Agent-color mapping
+      const AGENT_COLORS = {
+        supervisor:               "#6366f1",
+        ticker_finder_agent:      "#f59e0b",
+        stock_information_agent:  "#10b981",
+        technical_analysis_agent: "#3b82f6",
+        research_agent:           "#ec4899",
+      };
+
+      return (
+        <div className="stream-section">
+          {error && <div className="error-box">Error: {error}</div>}
+
+          {milestones.length > 0 && (
+            <div className="progress-wrap">
+              <div className="progress-label">Agent Pipeline</div>
+              <div className="progress-bar"><div className="progress-fill" style={{ width: pct + "%" }} /></div>
+              <div className="milestones">
+                {milestones.map((m, i) => (
+                  <div key={i} className="milestone">
+                    <div className="dot" style={{ background: AGENT_COLORS[m.node] || "#2563eb" }} />
+                    <span style={{ color: AGENT_COLORS[m.node] || "#aaa", fontWeight: 500 }}>
+                      {m.displayName || m.node}
+                    </span>
+                    <span style={{ color: "#555", fontSize: "0.8rem" }}>— {m.message}</span>
+                  </div>
+                ))}
+                {!done && !error && (
+                  <div className="milestone"><div className="dot pending" /><span style={{color:"#444"}}>Waiting...</span></div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {answer && (
+            <div className="answer-wrap">
+              <div className="answer-label">
+                Answer
+                {meta?.agent_used && (
+                  <span style={{
+                    marginLeft: 10, fontSize: "0.72rem", padding: "2px 8px",
+                    background: "#1e1e4a", border: "1px solid #3730a3",
+                    borderRadius: 4, color: "#a5b4fc"
+                  }}>
+                    via {meta.agent_used}
+                  </span>
+                )}
+              </div>
+              <div className="answer-text">{answer}</div>
+              {meta && (
+                <div className="answer-meta">
+                  <span>Session: {meta.session_id}</span>
+                  <span>· {meta.message_count ?? 0} messages in turn</span>
+                </div>
+              )}
+              {done && <div className="done-tag">✓ Complete</div>}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── App root ──────────────────────────────────────────────────────────────
+    function App() {
+      const [tab, setTab] = React.useState("ask");
+      return (
+        <div>
+          <h1>Investment Analyst SSE Tester</h1>
+          <div className="tabs">
+            <button className={`tab ${tab === "ask" ? "active" : ""}`} onClick={() => setTab("ask")}>RAG Ask</button>
+            <button className={`tab ${tab === "compare" ? "active" : ""}`} onClick={() => setTab("compare")}>RAG Compare</button>
+            <button className={`tab ${tab === "quant" ? "active" : ""}`} onClick={() => setTab("quant")}>Quant</button>
+          </div>
+          {tab === "ask" && <AskTab />}
+          {tab === "compare" && <CompareTab />}
+          {tab === "quant" && <QuantTab />}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
