@@ -132,32 +132,13 @@ class UniversalSubQueryAnalysis(BaseModel):
         description="Brief explanation of why these sub-queries are needed and how they help answer the main question"
     )
 
-class FinancialMetricPresence(BaseModel):
-    """Tracks which financial metrics are present vs missing in documents for a specific company."""
-    
-    company: str = Field(description="Company name")
-    metrics_found: list[str] = Field(description="Financial metrics found in documents (e.g., 'revenue 2023', 'net income', 'total assets')")
-    metrics_missing: list[str] = Field(description="Financial metrics needed but missing (e.g., 'debt-to-equity', 'current ratio')")
-    year_coverage: list[str] = Field(description="Years covered in documents (e.g., ['2023', '2024'])")
-    confidence: Literal["high", "medium", "low"] = Field(description="Confidence in document coverage for this company")
-
-class FinancialAnalystGrade(BaseModel):
-    """Financial analyst evaluation of document quality and completeness."""
-    
-    overall_grade: Literal["sufficient", "partial", "insufficient"] = Field(
-        description="Overall assessment: sufficient (can answer), partial (some data missing), insufficient (cannot answer)"
-    )
-    company_coverage: list[FinancialMetricPresence] = Field(
-        description="Per-company breakdown of metric coverage"
-    )
-    can_answer_question: bool = Field(
-        description="Whether retrieved docs contain enough to answer the question"
+class SimpleDocumentGrade(BaseModel):
+    """Simple binary evaluation of whether documents contain the required financial data."""
+    is_sufficient: bool = Field(
+        description="True if the retrieved documents contain the necessary data to answer the user's explicit question, False otherwise."
     )
     missing_data_summary: str = Field(
-        description="Summary of what critical data is missing (empty if sufficient)"
-    )
-    reasoning: str = Field(
-        description="Financial analyst reasoning about document quality"
+        description="If is_sufficient is False, briefly state what critical data is missing. If True, leave empty."
     )
 
 class GapAnalysisResult(BaseModel):

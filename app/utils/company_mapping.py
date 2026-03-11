@@ -34,6 +34,9 @@ TICKER_TO_COMPANY = {
     'sqm': 'square',
     'snps': 'synopsys',
     'cdns': 'cadence',
+    'tsm': 'taiwan semiconductor manufacturing',
+    'asml': 'asml',
+    'arm': 'arm',
     
     # Financial companies
     'jpm': 'jpmorgan',
@@ -51,13 +54,12 @@ TICKER_TO_COMPANY = {
     'bnc': 'banco',
     
     # Healthcare
-    'jnj': 'johnson',
+    'jnj': 'johnson & johnson',
     'pfe': 'pfizer',
     'mrna': 'moderna',
     'abbv': 'abbvie',
     'ulvr': 'unilever',
     'cvx': 'chevron',
-    'xom': 'exxon',
     'cop': 'conocophillips',
     'slb': 'schlumberger',
     
@@ -66,6 +68,7 @@ TICKER_TO_COMPANY = {
     'bp': 'bp',
     'rds': 'royaldutch',
     'shel': 'shell',
+    'xom': 'exxon mobil corporation',
     
     # Retail & Consumer
     'wmt': 'walmart',

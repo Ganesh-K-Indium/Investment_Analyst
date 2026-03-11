@@ -1,255 +1,109 @@
 "This module contains all the chains that will be usefull in building the nodes of the graph"
 
+from datetime import datetime
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from schemas.models import (RouteQuery, GradeDocuments, 
-                                        GradeHallucinations, ExtractCompany, GradeAnswer,
-                                        DocumentSummaryStrategy,
-                                        DocumentSufficiencyDecision, FinancialCalculationAnalysis,
-                                        UniversalSubQueryAnalysis, FinancialAnalystGrade,
-                                        GapAnalysisResult, StructuredFinancialData)
+
+def _current_year() -> int:
+    return datetime.now().year
+from schemas.models import (GradeHallucinations, GradeAnswer,
+                                        UniversalSubQueryAnalysis, SimpleDocumentGrade,
+                                        StructuredFinancialData)
 
 
-def get_question_router_chain(vectorstore_source_files, llm_router):
-    structured_llm_router = llm_router.with_structured_output(RouteQuery)
-
-    SYSTEM_PROMPT = f"""You are an expert at routing user questions to the appropriate data source.
-
-**Important Context:**
-- Current year: 2025
-
-**Available Data Sources:**
-
-1. **vectorstore**: Contains financial documents (10-K reports, annual reports, financial statements) for companies: {vectorstore_source_files}
-   - Contains RECENT 10-K reports including 2023 and 2024 data
-   - 10-K reports include multi-year comparisons (3-5 years of historical data)
-   - Rich with financial data, balance sheets, income statements, cash flow statements
-   
-2. **web_search**: Live internet search ONLY when vectorstore cannot help
-   - ONLY for real-time stock prices or today's breaking news
-   - AVOID for any historical financial data (even recent years like 2023-2024)
-   
-3. **general**: For non-company, non-financial questions
-   - General knowledge, definitions, greetings
-
-**Routing Decision Logic:**
-
-**CRITICAL: ALWAYS PREFER VECTORSTORE FOR COMPANY FINANCIAL QUESTIONS**
-Our 10-K reports contain rich historical data including recent years!
-
-**Step 1: Is this a company/financial question?**
-- Does the question mention ANY company name OR ask about financial/business data?
-- YES → Go to Step 2
-- NO → Route to **general**
-
-**Step 2: Route to vectorstore by DEFAULT for company questions**
-
-Route to **vectorstore** (DEFAULT - try this first):
-- ANY question about company financial data, metrics, or performance
-- Questions about years: 2020, 2021, 2022, 2023, 2024
-- Temporal comparisons: "2023 vs 2024", "revenue growth from 2023 to 2024"
-- Year-over-year growth analysis (10-K reports have this!)
-- Balance sheet, income statement, cash flow, segment data
-- Multi-company comparisons
-- **Even recent years like 2024** - we have 2024 10-K reports!
-
-Route to **web_search** ONLY if:
-- Explicitly asks for "today's stock price" or "current market price right now"
-- Asks about breaking news from last few days: "what happened today"
-- Real-time market data that changes minute-by-minute
-
-**The Key Principle:**
-- LLM should intelligently determine: "Do we likely have this in stored documents, or do we need to search the web?"
-- If a specific year is mentioned → Likely in vectorstore (try there first)
-- If asking for "latest" or "current" → Likely needs web search
-- When in doubt for company questions → Try vectorstore first (most financial queries can be answered from reports)
-
-**Examples:**
-
-✓ Route to vectorstore (DEFAULT for company questions):
-- "Get the consolidated balance sheet of meta for the year 2023"
-- "Amazon's revenue in 2022"
-- "Tell me about Tesla's financial performance"
-- "Compare Google and Microsoft's income statements"
-- "Compare Amazon and Meta's 2023 balance sheets"
-- "Tesla vs Amazon revenue in 2022"
-- "What was Apple's profit in 2020?"
-- "Show me Nvidia's cash flow"
-- "Google's revenue growth from 2023 to 2024" ← YES, vectorstore! (10-K has this)
-- "What is Meta's 2024 revenue?" ← YES, vectorstore! (we have 2024 10-K)
-- "Compare Amazon 2023 and 2024 balance sheets" ← YES, vectorstore! (comparative data)
-
-✓ Route to web_search (ONLY for real-time data):
-- "Current stock price of Amazon right now"
-- "What's Amazon's stock price today?"
-- "Tesla stock news from this morning"
-- "What happened with Google stock today?"
-- "Live market data for Microsoft"
-
-✓ Route to general:
-- "What is machine learning?"
-- "How to become a trader?"
-- "Hello, how are you?"
-- "Define revenue"
-
-**Critical Rule: DEFAULT to vectorstore for ANY company financial question. 10-K reports contain multi-year data including recent years (2023, 2024). Only use web_search for real-time stock prices or today's breaking news.**"""
-    
-    route_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT),
-            ("human", "{question}"),
-        ]
-    )
-    question_router = route_prompt | structured_llm_router
-    return question_router
-
-def get_retrival_grader_chain(llm_grade_document):
-    structured_llm_grader = llm_grade_document.with_structured_output(GradeDocuments)
-
-    SYSTEM_PROMPT_GRADE = """You are a grader assessing the relevance of a retrieved document to a user question.  
-
-        **Assessment Guidelines:**
-        - A document is **relevant** if it contains information that helps answer the question, even if not perfectly direct.
-        - For **multi-company questions** (e.g., "Compare Tesla and Amazon"), accept documents with data for the mentioned companies.
-        - For **financial questions**, accept documents with financial figures or statements related to the query.
-        - Mark as **not relevant** only if the document is completely unrelated or provides no useful information.
-
-        **Special Handling Cases:**
-        - **Image documents** starting with "This is an image with the caption:" - accept if the caption relates to the topic.
-        - **Company name flexibility**: Accept variations.
-        - **Cross-referencing scenarios**: Include documents with unique information from different sources.
-        - **Financial data**: Accept if it includes numbers or metrics, even if general.
-
-        **Scoring System:**
-        - **Return "Yes"** if the document provides useful information for the question.
-        - **Return "No"** only if completely unrelated.
-        """
-
-    grade_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT_GRADE),
-            ("human", "Retrieved document: \n\n {document} \n\n User question: {question}"),
-        ]
-    )
-
-    retrieval_grader = grade_prompt | structured_llm_grader
-    return retrieval_grader
 def get_rag_chain(llm_generate):
-    prompt = """You are a Financial AI Assistant specialized in analyzing financial documents and providing accurate, data-driven answers.
+    cur_year = _current_year()
+    prompt = f"""You are a senior Investment Analyst with expertise in equity research, SEC filings (10-K, 10-Q), and financial statement analysis. You think like a Wall Street analyst — data-driven, precise, and always connecting numbers to investment implications.
 
-**DOCUMENT HANDLING:**
-The documents provided may come from:
-1. **Vector Database**: Stored financial reports (10-K, annual reports, balance sheets)
-2. **Web Search Results**: Real-time data from web searches, which may include:
-   - Summaries of financial documents
-   - News articles with financial data
-   - Direct excerpts from company reports
+**YOUR ROLE:**
+Provide accurate, insightful, investment-grade answers grounded strictly in the provided documents. Go beyond data presentation — interpret what the numbers mean for investors.
 
-**CRITICAL INSTRUCTION FOR WEB SEARCH RESULTS:**
-When documents contain web search results (you'll see "Source:" headers with URLs):
-- EXTRACT ALL numerical financial data mentioned (look for patterns like "Current Assets: $X", "Total: $Y")
-- PRESENT the data in a structured format
-- CITE the source URLs for verification
-- If specific data is found in the web results, INCLUDE IT IN YOUR ANSWER
-- NEVER say "data not available" if ANY relevant numbers appear in the documents
-- For calculation queries, SEARCH THOROUGHLY through ALL documents before concluding data is missing
-
-**BALANCE SHEET / FINANCIAL STATEMENT QUERIES:**
-For questions asking about balance sheets, income statements, or financial data:
-1. **EXTRACT** all relevant figures: Total Assets, Total Liabilities, Shareholders' Equity, Revenue, Net Income, etc.
-2. **PRESENT** data in a clear table or structured format
-3. **INCLUDE** the specific year/period mentioned
-4. **NEVER** say "data not available" if ANY relevant numbers are found in the documents
-
-**MULTI-COMPANY COMPARISON PROTOCOL:**
-When the user requests comparison between 2 OR 3 companies:
-1. **IDENTIFY all companies** mentioned in the question or conversation
-2. **EXTRACT relevant data** for EACH company from:
-   - Current documents provided
-   - Previous conversation history (if user says "compare with previous" or "analyze both")
-3. **PRESENT side-by-side comparison** in **TABULAR FORMAT** with:
-   - Clear column headers for each company
-   - Rows for each metric
-   - Aligned metrics and values
-   - Direct numerical comparisons
-   - Percentage differences where relevant
+**DOCUMENT SOURCES:**
+Documents come from SEC 10-K filings, annual reports, or real-time web search results. Current fiscal year context: {cur_year}.
+- When you see "Source:" headers with URLs → web search results
+- Otherwise → authoritative 10-K/annual report data
 
 **DATA EXTRACTION RULES:**
-- If user says "compare this with [Company]" → Extract data for first company from conversation history
-- If user asks about "[Company] during same time" after discussing another company → Use the timeframe from conversation history
-- If documents contain data for multiple companies → Present ALL relevant companies' data
+- EXTRACT ALL relevant numerical data from documents — never say "not available" if numbers exist
+- NEVER hallucinate figures — only cite numbers explicitly present in the documents
+- For web search results: extract every financial figure mentioned (Revenue: $X, Total Assets: $Y, etc.)
+- For calculation queries: search ALL documents thoroughly before concluding data is missing
 
-**RESPONSE FORMAT FOR MULTI COMPANY COMPARISONS ONLY (MANDATORY TABULAR FORMAT):**
-Present the comparison in a markdown table format.
+**FINANCIAL STATEMENT QUERIES:**
+For balance sheets, income statements, cash flow, or any financial data:
+1. **EXTRACT** all relevant figures with exact values and fiscal year
+2. **PRESENT** in clear structured format (table or narrative based on query type)
+3. **INTERPRET** key metrics — what do they signal about financial health, profitability, or risk?
+4. **NEVER** omit data that exists in the documents
 
-**FOR 2 COMPANIES:**
-| Metric | [Company A] (Year) | [Company B] (Year) | Comparison between these companies |
-|--------|-------------------|-------------------|------------|
-| Operating Margin | X% | Y% | |
-| Revenue | $X billion | $Y billion |  |
-| Earnings Growth | X% | Y% | |
-| R&D Expenses | $X billion | $Y billion |  |
-| Net Income | $X billion | $Y billion | |
-| Total Assets | $X billion | $Y billion | |
-| Total Debt | $X billion | $Y billion |  |
-| Risk Factors | [Brief summary] | [Brief summary] | [Key differences] |
-| Profit/Loss Contributing Factors | [Brief summary] | [Brief summary] | [Key differences] |
+**MULTI-COMPANY COMPARISON (MANDATORY TABULAR FORMAT):**
+For 2-company comparisons:
+| Metric | [Company A] (FY) | [Company B] (FY) | Investment Insight |
+|--------|-----------------|-----------------|-------------------|
+| Revenue | $X B | $Y B | [Who leads and by how much %] |
+| Operating Margin | X% | Y% | [Who is more profitable and why] |
+| Net Income | $X B | $Y B | [Bottom-line comparison] |
+| Earnings Growth (YoY) | X% | Y% | [Growth momentum comparison] |
+| R&D Expenses | $X B | $Y B | [Innovation investment comparison] |
+| Total Assets | $X B | $Y B | [Asset base scale] |
+| Total Debt | $X B | $Y B | [Leverage comparison] |
+| Free Cash Flow | $X B | $Y B | [Cash generation quality] |
+| Risk Factors | [Key risks A] | [Key risks B] | [Differential risks] |
+| Investment Thesis | [Bull case A] | [Bull case B] | [Relative preference] |
 
-**FOR 3 COMPANIES:**
-| Metric | [Company A] (Year) | [Company B] (Year) | [Company C] (Year) | Comparison between these companies |
-|--------|-------------------|-------------------|-------------------|------------|
-| Operating Margin | X% | Y% | Z% | |
-| Revenue | $X billion | $Y billion | $Z billion | |
-| Earnings Growth | X% | Y% | Z% | |
-| R&D Expenses | $X billion | $Y billion | $Z billion | |
-| Net Income | $X billion | $Y billion | $Z billion | |
-| Total Assets | $X billion | $Y billion | $Z billion | |
-| Total Debt | $X billion | $Y billion | $Z billion | |
-| Risk Factors | [Brief summary] | [Brief summary] | [Brief summary] | [Key differences] |
-| Profit/Loss Contributing Factors | [Brief summary] | [Brief summary] | [Brief summary] | [Key differences] |
+For 3-company comparisons, add a third company column.
 
-If any data needs to be calculated, use the formulas provided and insert the calculated values into the table.
-**VERY IMPORTANT:**
-** We should only have numerical values under the company columns for easy chart generation.
-** Stricly keep all the numerical values other than earnings growth and operating margin in billions format convert if needed only when we are comparing companies.
-** Stricly keep all the numerical values of all other queries except for comparison queries in millions format convert if needed.
-**If we have table we need to display only that table in the final answer no other text.**
-**Don't hallucinate any data for any company, only use what is provided in the documents specifically for that company mentioned.**
-**Provide proper details for all the [Brief summary] and [Key differences] don't leave them blank or just add these placeholders. Do proper comparison between all the companies.**
+**COMPARISON TABLE RULES:**
+- All monetary values in **billions** (e.g., $45.2B) — convert if needed
+- Earnings Growth and Operating Margin stay as percentages
+- "Investment Insight" column MUST have substantive analysis — never leave blank
+- Display ONLY the table when comparison is requested — no additional narrative text
+- Do NOT hallucinate any data — only include figures found in documents
 
 **SEGMENT REPORTING QUERIES:**
-When the user asks about segments, reportable segments, business segments, or segment performance:
-1. **IDENTIFY all reportable segments** mentioned in the documents (e.g., "Cloud", "Advertising", "Devices")
-2. **EXTRACT segment-level financials**: revenue, operating income, assets, capex, depreciation for each segment
-3. **PRESENT in a clear table** with segments as rows and metrics as columns
-4. **INCLUDE segment trends**: growth drivers, margin changes, outlook from MD&A
-5. **REFERENCE ASC 280 disclosures** and CODM (Chief Operating Decision Maker) information if available
-6. **PROVIDE a brief narrative** summarizing how each segment contributes to overall company performance
+1. **IDENTIFY** all reportable segments (Cloud, Advertising, Hardware, etc.)
+2. **EXTRACT** segment revenue, operating income, assets, capex, depreciation per segment
+3. **PRESENT** in table: segments as rows, metrics as columns
+4. **ANALYZE** segment contribution to total revenue/profit — which segments are growing vs. declining?
+5. **INCLUDE** CODM disclosure and ASC 280 basis if mentioned
+6. **PROVIDE** brief narrative: which segments drive the investment thesis?
 
 **GEOGRAPHIC / REGIONAL QUERIES:**
-When the user asks about geographic distribution, revenue by region/country, or international operations:
-1. **EXTRACT revenue breakdown** by geography/region/country from the documents
-2. **IDENTIFY domestic vs. international split** with specific dollar amounts and percentages
-3. **PRESENT in a table** with regions as rows and metrics (revenue, assets, growth) as columns
-4. **INCLUDE geographic risks**: currency exposure, regulatory risks, political risks if found
-5. **MENTION properties/facilities** by location if the query asks about physical presence
-6. **HIGHLIGHT customer or market concentration** by region if available
+1. **EXTRACT** revenue by geography/region/country with $ amounts and % of total
+2. **IDENTIFY** domestic vs. international split and growth trajectory
+3. **PRESENT** in table: regions as rows, metrics as columns
+4. **HIGHLIGHT** concentration risk, FX exposure, regulatory risk by region
+5. **MENTION** key facilities, data centers, or physical presence if relevant
+
+**FINANCIAL RATIO / CALCULATION QUERIES:**
+1. **SHOW** the formula explicitly: e.g., ROE = Net Income / Shareholders' Equity
+2. **INSERT** exact values from documents with their source period
+3. **CALCULATE** step-by-step with 2 decimal precision
+4. **INTERPRET** the result: is this ratio healthy, concerning, or improving vs. prior year?
+5. **COMPARE** to industry norms when context allows
 
 **SINGLE COMPANY QUERIES:**
-- Provide complete financial details with ALL numerical values
-- Include key figures, ratios, and metrics
-- Offer insights and interpretations
-- Cite sources when available (e.g., "According to the 2023 Annual Report...")
+- Provide ALL relevant financial figures with exact values
+- Include YoY changes where data allows (growth/decline percentages)
+- Add investment-quality interpretation: What does this mean for the company's competitive position, valuation, or risk profile?
+- Cite the fiscal year or period for every data point
+- Use millions format (e.g., $45,231M) for single-company queries
+
+**QUALITATIVE / MD&A / RISK FACTOR QUERIES:**
+- Summarize management's strategic narrative and forward-looking commentary
+- Extract specific risk factors with their potential financial impact
+- Highlight any language shifts (more cautious vs. confident vs. prior year)
+- Connect qualitative disclosures to quantitative financial trends
 
 **RESPONSE GUIDELINES:**
-- Never mention internal terms like "retrieved documents", "vectorstore", "web search results" to the user
-- Present information naturally as if you're a knowledgeable financial analyst
-- When data comes from previous conversation, reference it naturally (e.g., "As we discussed earlier..." or "Building on the Amazon data...")
-- Never say "data not available" if it exists in conversation history
-- **For company comparison queries: ALWAYS use tabular format for easy visualization and chart generation**
-- Don't use tabular format for general financial questions and answer naturally for the questions.
+- Speak as a professional investment analyst — never expose internal terms like "vectorstore", "retrieved documents", "web search results"
+- Present data naturally: "According to the most recent annual filing..." or "The {cur_year} 10-K shows..."
+- Always connect numbers to investment implications (growth quality, margin trajectory, capital efficiency)
+- For comparison queries: ALWAYS use tabular format
+- For all other queries: use narrative with structured data points
+- **NEVER say "data not available"** if ANY relevant figures exist in the documents
 
-**IMPORTANT:** Search thoroughly through documents before concluding information is unavailable."""
+**IMPORTANT:** Search every document thoroughly before concluding information is unavailable."""
     
     RAG_Prompt = ChatPromptTemplate.from_messages([
         ("system", prompt),
@@ -285,29 +139,32 @@ Provide a comprehensive, professional answer. Reference sources naturally withou
 def get_hallucination_chain(llm_grade_hallucination):
     llm_hallucination_grader = llm_grade_hallucination.with_structured_output(GradeHallucinations)
 
-    SYSTEM_PROMPT_GRADE_HALLUCINATION = """You are an intelligent grader assessing whether an LLM generation is grounded in the available information.
+    SYSTEM_PROMPT_GRADE_HALLUCINATION = """You are a senior financial analyst grading whether an AI-generated investment analysis is grounded in the provided source documents.
 
-    **Core Principle:**
-    - If the generation's main claims are supported by the retrieved documents, answer 'yes'
-    - Only answer 'no' if there are claims not supported by the documents
-    
-    **What to Accept (answer 'yes'):**
-    - Data found in the retrieved documents
-    - Generation draws conclusions and insights from available data
-    - Synthesized responses that combine facts from multiple sources
-    - Professional language and structure around core facts
-    
-    **What to Reject (answer 'no'):**
-    - Major factual claims not in documents
-    - Numbers not found in documents
-    - Claims that directly contradict document content
-    - Completely invented information with no source
-    
-    **Important:** 
-    - The generation doesn't need to quote documents verbatim
-    - Focus on whether CORE FACTS are supported by the retrieved documents
-    
-    Give a binary score 'yes' or 'no'. 'Yes' means the answer is grounded in the documents."""
+**Core Principle:**
+- Answer 'yes' if the generation's key financial claims and investment insights are supported by the retrieved documents
+- Answer 'no' ONLY if the generation invents financial data, misquotes figures, or makes major claims that directly contradict the documents
+
+**Accept (answer 'yes') when:**
+- Financial figures cited in the generation appear in or can be reasonably derived from the documents
+- Analytical conclusions and investment insights are drawn from factual data in the documents
+- The generation synthesizes facts from multiple documents accurately
+- Professional financial framing (e.g., "strong balance sheet", "margin compression") is used around facts found in documents
+- Calculated ratios are correctly derived from component data in the documents
+
+**Reject (answer 'no') when:**
+- Specific dollar figures, percentages, or ratios appear that are NOT found in any document
+- Financial claims directly contradict numbers in the documents (e.g., says revenue grew when documents show decline)
+- Company-specific data is attributed to the wrong company
+- Completely fabricated financial metrics with no document basis
+
+**Important:**
+- The generation does NOT need to quote documents verbatim — analytical interpretation is expected and desirable
+- Focus on whether CORE FINANCIAL FACTS are supported, not stylistic choices
+- Investment analysis language around verified facts = acceptable
+- A minor rounding difference (e.g., $45.2B vs $45.23B) is NOT hallucination
+
+Give a binary score 'yes' or 'no'. 'Yes' means the financial analysis is grounded in the documents."""
 
     hallucination_prompt = ChatPromptTemplate.from_messages(
         [
@@ -326,41 +183,6 @@ Is this generation grounded in the documents?"""),
     
     return hallucination_grader
 
-def get_company_name(llm):
-    llm_company_extractor = llm.with_structured_output(ExtractCompany)
-
-    SYSTEM_PROMPT = """you are an expert who can identify the company name from the given user question 
-    and map it to one of the below company. 
-    1. amazon
-    2. berkshire
-    3. google
-    4. Jhonson and Jhonosn
-    5. jp morgan
-    6. meta
-    7. microsoft
-    8. nvidia
-    9. tesla
-    10. visa
-    11. walmart
-    12. pfizer
-    
-    ## Instructions
-    - make sure you should only generate the comapny name nothing else.
-    - if user is asking about companies in a short form or abbriviations like jpmc, you should be able to map it with jp morgon
-    - Strictly do not change the company spellings, keep them as it is as mentioned above.
-    """
-
-    company_name_extraction_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT),
-            ("human", "User's Question: \n\n {question} \n\n company: "),
-        ]
-    )
-
-    company_name_extractor = company_name_extraction_prompt | llm_company_extractor
-    
-    return company_name_extractor
-
 def get_multi_company_extractor_chain(llm):
     """Extract multiple companies from a question for cross-referencing."""
     from schemas.models import MultiCompanyExtraction  # Assuming this Pydantic model exists; adjust if needed
@@ -370,7 +192,7 @@ def get_multi_company_extractor_chain(llm):
     - amazon
     - berkshire
     - google
-    - Jhonson and Jhonosn
+    - johnson and johnson
     - jp morgan
     - meta
     - microsoft
@@ -379,16 +201,15 @@ def get_multi_company_extractor_chain(llm):
     - visa
     - walmart
     - pfizer
-    - tesla
     - boeing
     - apple
     - samsung
-    
+
     Instructions:
-    - Return a list of matching companies (use exact spellings if they are from the list).
-    - Handle abbreviations (e.g., 'jpmc' -> 'jp morgan').
-    - If no companies, return an empty list.
-    - For comparisons or multi-company queries, include all relevant ones.
+    - Return a list of matching companies using the exact spellings from the list above.
+    - Handle abbreviations and tickers: jpmc/jpm/chase → jp morgan, jnj → johnson and johnson, fb → meta, msft → microsoft, nvda → nvidia, tsla → tesla, amzn → amazon, brk → berkshire, googl/goog/alphabet → google, aapl → apple.
+    - If no companies are mentioned, return an empty list.
+    - For comparisons or multi-company queries, include ALL relevant companies.
     """
 
     multi_company_prompt = ChatPromptTemplate.from_messages([
@@ -451,17 +272,35 @@ Grade: no (completely irrelevant)
     return answer_grader
 
 def get_question_rewriter_chain(llm):
-    SYSTEM_QUESTION_REWRITER = """You a question re-writer that converts an input question to a better version that is optimized \n 
-        for vectorstore retrieval. Look at the input and try to reason about the underlying semantic intent / meaning."""
+    cur_year = _current_year()
+    SYSTEM_QUESTION_REWRITER = f"""You are a financial research specialist that rewrites user questions into optimized queries for retrieving data from SEC 10-K filings and annual report documents stored in a vector database.
+
+**Your Goal**: Rewrite the question to maximize retrieval accuracy from financial documents.
+
+**Rewriting Rules**:
+1. **Preserve company names and fiscal years exactly** — do not drop or change them
+2. **Expand financial abbreviations**: ROE → "return on equity", D/E → "debt-to-equity ratio", FCF → "free cash flow", EBITDA → "earnings before interest taxes depreciation amortization", SG&A → "selling general and administrative expenses", PP&E → "property plant and equipment", COGS → "cost of goods sold", EPS → "earnings per share diluted"
+3. **Add document section context**: for balance sheet items add "balance sheet", for income items add "income statement statement of operations", for cash flow add "cash flow statement", for notes data add "notes to financial statements"
+4. **Expand vague temporal references**: "recently" or "last year" → "{cur_year} or {cur_year - 1}", "latest" → "most recent fiscal year {cur_year}"
+5. **Add financial synonyms for hard-to-find terms**: revenue → "total revenues net revenues net sales", profit → "net income net earnings", assets → "total assets consolidated balance sheet"
+6. **For ratio/metric queries**: include the formula components (e.g., "current ratio current assets current liabilities balance sheet")
+7. **For segment queries**: add "segment information reportable segments operating segments notes to financial statements"
+8. **For geographic queries**: add "geographic information revenue by region domestic international"
+
+**Examples**:
+- "What's Tesla's ROE?" → "Tesla return on equity net income shareholders equity stockholders equity balance sheet income statement"
+- "Show me Amazon's liquidity" → "Amazon current ratio quick ratio current assets current liabilities cash equivalents balance sheet liquidity"
+- "Meta revenue last year" → "Meta total revenues net revenues income statement {cur_year - 1}"
+- "Nvidia R&D spend" → "Nvidia research and development expenses R&D costs income statement operating expenses"
+- "Google's segments" → "Google Alphabet segment information reportable segments operating segments revenue by segment notes to financial statements"
+
+Output only the improved question — no explanation."""
 
     re_write_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", SYSTEM_QUESTION_REWRITER),
-            (
-                "human",
-                "Here is the initial question: \n\n {question} \n Formulate an improved question.",
-            ),
-        ] 
+            ("human", "Original question: \n\n {{question}} \n\n Rewritten query:"),
+        ]
     )
 
     question_rewriter = re_write_prompt | llm | StrOutputParser()
@@ -907,573 +746,37 @@ You are a FINANCIAL ANALYST EXPERT. Use your deep knowledge of 10-K document str
     
     return prompt | structured_llm
 
-def get_document_summary_strategy_chain(llm):
-    """Simplified document summary strategy for compatibility."""
-    from schemas.models import DocumentSummaryStrategy
-    structured_llm = llm.with_structured_output(DocumentSummaryStrategy)
-
-    SYSTEM_PROMPT = """Determine summarization strategy:
-    - single_source: Same company/type documents
-    - multi_source_vectorstore: Multiple companies from vectorstore
-    - integrated_vectorstore_web: Vectorstore + web results
-    - comprehensive_cross_reference: Complex multi-source synthesis
-    """
-
-    strategy_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", "Question: {question}\nSources: {document_sources}\n\nStrategy:")
-    ])
-
-    return strategy_prompt | structured_llm
-
-
-
-def get_document_sufficiency_chain(llm):
-    """
-    LLM-powered intelligent decision on document sufficiency.
-    NOW ENHANCED: Strict data analyst checking for missing specific data, year mismatches, and incomplete coverage.
-    """
-    structured_llm = llm.with_structured_output(DocumentSufficiencyDecision)
-    
-    SYSTEM_PROMPT = """You are an intelligent data analyst evaluating if documents contain the data needed to answer the question.
-
-**YOUR JOB**: Evaluate if the retrieved documents have sufficient data to answer the question. Be thorough but reasonable.
-
-**KEY PRINCIPLE**: Trust vectorstore data from 10-K filings - it's authoritative financial data. Only request web search if data is CLEARLY missing.
-
-**ANALYSIS CHECKLIST**:
-
-1️⃣ **COMPANY COVERAGE**:
-   - Multiple companies asked? → Check if ALL are represented in docs
-   - Look at document metadata and content for company names
-   - If any company completely missing → need web search
-   
-2️⃣ **DATA PRESENCE CHECK**:
-   - Question asks for specific metrics (revenue, profit, assets, etc.)?
-   - Check if document previews mention these metrics with numbers
-   - Financial statements contain comprehensive data - presence of any financial data suggests more is available
-   
-3️⃣ **YEAR/TIME PERIOD CHECK**:
-   - Question asks for specific year (2019, 2023)?
-   - Check if documents mention that year or time period
-   - Note: "Latest", "current", "most recent" can be answered with any recent data
-   - Only flag mismatch if explicitly wrong year (asks 2019, shows 2023)
-
-4️⃣ **COMPLETENESS ASSESSMENT**:
-   - For multi-metric questions: Don't expect all metrics in preview (documents are truncated)
-   - If docs mention financial statements (balance sheet, income statement), assume comprehensive data
-   - For comparisons: Just need documents for each company, not all metrics in preview
-
-**DECISION RULES**:
-
-🟢 **"generate"** - Choose when:
-- Documents exist for ALL requested companies
-- Documents contain financial data/metrics relevant to question
-- Years match or question doesn't specify exact year
-- OR web_searched=True (must proceed to avoid loops)
-- Document count >= 3 with relevant content
-
-🔴 **"integrate_web_search"** - Choose when:
-- Completely MISSING one or more companies from multi-company query
-- Explicit year mismatch (Q: 2019, ALL docs: 2023)
-- No financial data in documents at all (only qualitative/news)
-- Document count < 2 and clearly insufficient
-- web_searched=False (can still search)
-
-🟡 **"financial_web_search"** - Last resort when:
-- web_searched=True but data still clearly insufficient
-
-**IMPORTANT CONTEXT**:
-- Documents are from vectorstore with 10-K filings - authoritative sources
-- Previews show only first 600 chars - full docs have much more data
-
-**TRUST THE DATA**: If documents are from the right companies and contain financial metrics, they likely have what's needed!"""  
-
-    sufficiency_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", """Question: {question}
-
-Number of Retrieved Documents: {doc_count}
-Document Preview: 
-{doc_preview}
-
-Company Coverage Analysis:
-- Companies detected in question: {companies_detected}
-- Companies found in documents: {companies_in_docs}
-
-Search History:
-- Vectorstore searched: {vectorstore_searched}
-- Web searched: {web_searched}
-
-**CRITICAL MULTI-COMPANY CHECK**:
-If the question asks about MULTIPLE companies (e.g., "Compare Amazon, Microsoft, and Google"):
-Step 1: Identify ALL companies mentioned in the question
-Step 2: Check which companies are covered in the retrieved documents
-Step 3: COMPARE: Are ALL companies covered?
-   - If MISSING ANY company → MUST choose "integrate_web_search" to get missing company data
-   - If ALL companies present → can choose "generate"
-   
-**EXAMPLE MULTI-COMPANY SCENARIOS**:
-- Q: "Compare Google, Microsoft, Amazon 2023 revenue" 
-  + Companies in docs: Google, Amazon (MISSING: Microsoft) 
-  → integrate_web_search (need Microsoft data!)
-  
-- Q: "Compare Tesla and Ford's financial performance"
-  + Companies in docs: Tesla (MISSING: Ford)
-  → integrate_web_search (need Ford data!)
-
-**CRITICAL YEAR MISMATCH CHECK**:
-Step 1: Extract the year from the question (e.g., "2019", "2020", "2023")
-Step 2: Look at the document preview - what years are mentioned in the docs?
-Step 3: COMPARE: Do the document years MATCH the question year?
-   - If NO MATCH (e.g., question asks "2019" but docs show "2023") → MUST choose "integrate_web_search"
-   - If MATCH → can choose "generate"
-   - If docs have NO specific years → likely need "integrate_web_search"
-
-**EXAMPLES OF WHEN TO WEB SEARCH**:
-- Q: "Meta's 2019 financial position" + Docs show: "December 31, 2023..." → integrate_web_search (year mismatch!)
-- Q: "Amazon's 2018 revenue" + Docs show: "2023 revenue was..." → integrate_web_search (year mismatch!)  
-- Q: "Tesla 2020 data" + Docs show: vague info, no 2020 mentioned → integrate_web_search (no specific year data)
-- Q: "Compare A, B, C revenue" + Docs only have A and B → integrate_web_search (missing company C!)
-
-**EXAMPLES OF WHEN TO GENERATE**:
-- Q: "Meta's 2023 balance sheet" + Docs show: "December 31, 2023: Assets $229B..." → generate (year match!)
-- Q: "Current Amazon revenue" + Docs show: "2025 Q1 revenue..." → generate (matches current)
-- Q: "Compare Google and Amazon" + Docs have both Google AND Amazon → generate (all companies present!)
-
-**REMEMBER**: If web_searched=True, you MUST choose "generate" to avoid infinite loops!
-
-NOW ANALYZE: 
-1. Does the document preview contain the SPECIFIC YEAR requested?
-2. Are ALL companies requested present in the documents?""")
-    ])
-    
-    return sufficiency_prompt | structured_llm
-
-
-def get_financial_calculation_analyzer_chain(llm):
-    """
-    Analyze if a query needs financial calculations and extract sub-queries for data gathering.
-    """
-    structured_llm = llm.with_structured_output(FinancialCalculationAnalysis)
-    
-    calculation_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are an expert financial analyst that detects when queries need calculations.
-
-**Your Task**: Determine if the query requires calculating financial metrics, and if so:
-1. Identify which metrics need calculation
-2. Extract the specific data points needed from documents
-
-**Financial Metrics You Can Calculate**:
-- ROE (Return on Equity) = Net Income / Shareholders' Equity
-- Revenue Growth = ((End Revenue - Start Revenue) / Start Revenue) * 100%
-- Debt-to-Equity Ratio = Total Debt / Total Equity
-- Dividend Yield = (Dividends per Share / Price per Share) * 100%
-- P/E Ratio = Price per Share / Earnings per Share
-- Current Ratio = Current Assets / Current Liabilities
-- Quick Ratio = (Current Assets - Inventory) / Current Liabilities
-- Gross Margin = (Revenue - COGS) / Revenue
-- Operating Margin = Operating Income / Revenue
-- Cash Ratio = Cash and Cash Equivalents / Current Liabilities
-- Interest Coverage = Operating Income / Interest Expense
-- Inventory Turnover = COGS / Average Inventory
-- ROA (Return on Assets) = Net Income / Total Assets
-- Cash Burn Rate = Net Cash Used / Beginning Cash
-
-**When needs_calculation = True**:
-- Query explicitly asks to "calculate", "compute", "determine" a financial ratio/metric
-- Query asks for metrics that require combining 2+ data points (e.g., "What's the ROE?")
-- Query compares calculated metrics across companies or years
-
-**When needs_calculation = False**:
-- Query asks for raw financial data already in documents (e.g., "What's the revenue?")
-- Query asks for explanations or descriptions (e.g., "Explain ROE")
-- Query is about qualitative information
-
-**Sub-queries**: Break down into specific data points needed:
-- Format: "[Metric Name] for [Company] in [Year]"
-- Example: "Net Income for Amazon in 2023", "Total Assets for Amazon in 2023"
-- Be specific with years and company names
-
-**Examples**:
-Q: "What was Amazon's ROE in 2023?"
-→ needs_calculation=True, metrics_needed=["ROE"], sub_queries=["Net Income for Amazon in 2023", "Shareholders' Equity for Amazon in 2023"]
-
-Q: "Calculate Microsoft's revenue growth from 2021 to 2023"
-→ needs_calculation=True, metrics_needed=["Revenue Growth"], sub_queries=["Revenue for Microsoft in 2021", "Revenue for Microsoft in 2023"]
-
-Q: "What was Tesla's revenue in 2023?"
-→ needs_calculation=False, metrics_needed=[], sub_queries=[]
-
-Q: "Compare the P/E ratios of Apple and Google"
-→ needs_calculation=True, metrics_needed=["P/E Ratio"], sub_queries=["Price per Share for Apple", "EPS for Apple", "Price per Share for Google", "EPS for Google"]"""),
-        ("user", "Query: {question}")
-    ])
-    
-    return calculation_prompt | structured_llm
-
 def get_financial_analyst_grader_chain(llm):
     """
     FINANCIAL ANALYST DOCUMENT GRADING: Evaluates documents like a financial analyst.
-    Instead of binary yes/no, identifies what metrics ARE present and what's MISSING.
+    Simple and robust check if the documents can answer the question.
     """
-    structured_llm = llm.with_structured_output(FinancialAnalystGrade)
+    structured_llm = llm.with_structured_output(SimpleDocumentGrade)
     
     SYSTEM_PROMPT = """You are a SENIOR FINANCIAL ANALYST with expertise in SEC filings, 10-K reports, and financial statement analysis.
 
-**YOUR MISSION**: Evaluate retrieved documents to determine if they contain sufficient financial data to answer the user's question.
+**YOUR MISSION**: Evaluate the provided retrieved documents to determine if they contain sufficient financial data to answer the user's explicit question.
 
-**STRICT SCOPE RULE — MOST IMPORTANT**:
-Only evaluate data that the question EXPLICITLY asks for. Do NOT mark as missing:
-- Industry averages, benchmarks, or peer comparisons (unless the question asks to compare with peers)
-- Historical trends or multi-year data (unless the question asks for trends or multiple years)
-- Additional context like analyst ratings, forward guidance, or qualitative commentary (unless specifically asked)
-- Data for years NOT mentioned in the question
-
-If the question asks "What is Google's gross margin for 2023?", you only need: revenue 2023 AND cost of revenues 2023. That's it. Do NOT mark "historical gross margin trend" or "industry average gross margin" as missing.
-
-**ANALYSIS APPROACH**:
-
-1. **IDENTIFY REQUIRED DATA — BE MINIMAL**:
-   - Read the question carefully. What EXACTLY is being asked?
-   - List only the data points the question specifically needs — nothing more
-   - Example: "What is Amazon's ROE?" needs ONLY → Net Income (most recent year), Shareholders' Equity (same year)
-   - Example: "Compare Meta and Google revenue" needs ONLY → Meta Revenue, Google Revenue (same year)
-   - Example: "Show Tesla's gross margin" needs ONLY → Revenue + COGS (same year) OR gross margin directly
-
-2. **SCAN DOCUMENTS FOR METRICS**:
-   - Check each document for presence of required financial data
-   - Look for specific numbers, tables, financial statements
-   - Identify which companies are covered
-   - Identify which years/periods are covered
-   - Note which metrics ARE found vs which are MISSING (strictly from the required list only)
-
-3. **PER-COMPANY ASSESSMENT**:
-   For each company in the question, determine:
-   - **metrics_found**: List specific metrics present (e.g., "revenue 2023: $574B", "net income 2023", "total assets")
-   - **metrics_missing**: List ONLY metrics that are EXPLICITLY required by the question AND absent from documents
-   - **year_coverage**: Which years are covered (e.g., ["2023", "2024"])
-   - **confidence**: high (comprehensive data), medium (partial), low (minimal/no data)
-
-4. **OVERALL GRADE**:
-   - **sufficient**: Documents contain all required data (as defined by the question scope) → Can answer question
-   - **partial**: Documents are missing a critical raw input that the question explicitly requires
-   - **insufficient**: Documents lack critical data → Definitely need web search
-
-**FORMULA AWARENESS — CRITICAL RULE**:
-Many financial questions ask for CALCULATED metrics. These do NOT require the ratio to be explicitly listed in the document — they only require the raw component inputs.
-
-Common derived metrics and their required components:
-- **Current Ratio** = Current Assets ÷ Current Liabilities → needs: current assets, current liabilities
-- **Quick Ratio** = (Current Assets − Inventory) ÷ Current Liabilities → needs: current assets, inventory, current liabilities
-- **Debt-to-Equity Ratio** = Total Debt ÷ Total Equity → needs: total debt (or long-term + short-term debt), shareholders' equity
-- **ROE (Return on Equity)** = Net Income ÷ Shareholders' Equity → needs: net income, shareholders' equity
-- **ROA (Return on Assets)** = Net Income ÷ Total Assets → needs: net income, total assets
-- **Gross Margin** = (Revenue − COGS) ÷ Revenue → needs: revenue, cost of goods sold
-- **Operating Margin** = Operating Income ÷ Revenue → needs: operating income, revenue
-- **Interest Coverage** = Operating Income ÷ Interest Expense → needs: operating income, interest expense
-- **Inventory Turnover** = COGS ÷ Average Inventory → needs: COGS, inventory (beginning + ending)
-- **P/E Ratio** = Price per Share ÷ EPS → needs: stock price, earnings per share
-- **Net CapEx** = Ending PP&E − Beginning PP&E + Depreciation → needs: PP&E (two periods), depreciation
-
-**RULE**: If the question asks for a CALCULATED metric AND all required component inputs are present in the documents, list it as CALCULABLE under `metrics_found` (e.g., "current ratio [calculable from current assets + current liabilities]") — do NOT list it as missing. Mark that company as "sufficient".
-
-**RULE**: Only mark a metric as MISSING if one or more of its raw component inputs cannot be found anywhere in the documents.
-
-**GRADING CRITERIA**:
-
-✅ **"sufficient"** when:
-- All required metrics are present or calculable from present components
-- All companies mentioned in question have data
-- Years requested match years in documents
-- Enough detail to provide comprehensive answer
-
-⚠️ **"partial"** when:
-- Some metrics present/calculable but ONE OR MORE raw component inputs are missing
-- OR some companies covered but others missing
-- OR year mismatch (question asks 2020, docs show 2023)
-- OR data is too vague/high-level
-
-❌ **"insufficient"** when:
-- No relevant financial data in documents
-- Completely wrong companies
-- No numerical data at all
-
-**WEB SEARCH DOCUMENTS**:
-- Web search results are typically more fragmented
-- Be more lenient but still identify gaps
-- Note if web docs are from trusted sources (SEC.gov, investor.relations, etc.)
-
-**EXAMPLES**:
-
-Example 1:
-Question: "What is Amazon's 2023 revenue?"
-Documents: Amazon 10-K with income statement showing "Revenue: $574B" for 2023
-Assessment:
-- overall_grade: "sufficient"
-- company_coverage: [{{"company": "Amazon", "metrics_found": ["revenue 2023: $574B"], "metrics_missing": [], "year_coverage": ["2023"], "confidence": "high"}}]
-- can_answer_question: true
-- missing_data_summary: ""
-
-Example 2:
-Question: "Compare Meta and Google's 2023 net income"
-Documents: Meta 10-K with net income $39B (2023), Google 10-K with revenue only (no income)
-Assessment:
-- overall_grade: "partial"
-- company_coverage: [
-    {{"company": "Meta", "metrics_found": ["net income 2023: $39B"], "metrics_missing": [], "year_coverage": ["2023"], "confidence": "high"}},
-    {{"company": "Google", "metrics_found": ["revenue 2023"], "metrics_missing": ["net income 2023"], "year_coverage": ["2023"], "confidence": "medium"}}
-  ]
-- can_answer_question: false
-- missing_data_summary: "Google's net income for 2023 not found in documents"
-
-Example 3 (FORMULA CALCULATION - ALL COMPONENTS PRESENT):
-Question: "Calculate Amazon's current ratio for 2023"
-Documents: Amazon balance sheet with Current Assets: $86B and Current Liabilities: $155B for 2023
-Assessment:
-- overall_grade: "sufficient"  ← CORRECT: both components are present, ratio is calculable
-- company_coverage: [{{"company": "Amazon", "metrics_found": ["current assets 2023: $86B", "current liabilities 2023: $155B", "current ratio [calculable]"], "metrics_missing": [], "year_coverage": ["2023"], "confidence": "high"}}]
-- can_answer_question: true
-- missing_data_summary: ""
-
-Example 4 (FORMULA CALCULATION - COMPONENT MISSING):
-Question: "Calculate Tesla's debt-to-equity ratio for 2023"
-Documents: Tesla balance sheet with Total Assets, Total Equity, but NO debt breakdown
-Assessment:
-- overall_grade: "partial"  ← CORRECT: equity present but debt is the missing component
-- company_coverage: [{{"company": "Tesla", "metrics_found": ["total assets 2023", "shareholders equity 2023"], "metrics_missing": ["total debt 2023 (long-term + short-term debt)"], "year_coverage": ["2023"], "confidence": "medium"}}]
-- can_answer_question: false
-- missing_data_summary: "Tesla's total debt not found in documents - need debt breakdown for debt-to-equity calculation"
-
-**KEY PRINCIPLES**:
-- Be specific about what's found vs missing
-- Don't say "insufficient" if ANY relevant data exists
-- Trust 10-K documents from vectorstore - they're comprehensive
-- A calculated ratio is NOT missing if all its components are present — it's CALCULABLE
-- Only add to metrics_missing if a raw input value truly cannot be found in the documents
-- For web search docs, check if they're from trusted financial sources
-- Your analysis will be used to decide if we need to web search for missing data"""
+**CORE RULES**:
+1. Only evaluate data that the question EXPLICITLY asks for.
+2. If the question asks for a CALCULATED metric (like Operating Margin, ROE, Current Ratio, etc.) and ALL the raw components for the formula exist in the documents, it is SUFFICIENT. You do not need the exact ratio stated in the text if you can calculate it.
+3. If the documents contain enough information to answer the question, set `is_sufficient` to True, and `missing_data_summary` to empty.
+4. If critical raw component inputs are missing, set `is_sufficient` to False, and concisely state what exact data is missing in `missing_data_summary`."""
 
     grader_prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
         ("human", """Question: {question}
 
-Number of Documents: {doc_count}
+Sub-Queries Used for Retrieval:
+{sub_queries}
 
-Document Previews:
-{doc_previews}
+Document Content:
+{doc_content}
 
-Companies Detected in Question: {companies_detected}
-Query Type: {query_type}
-
-**YOUR TASK**:
-1. Identify what financial data the question requires (raw metrics AND any calculated ratios)
-2. For calculated metrics: check if ALL component inputs are present (if yes, it's calculable — not missing)
-3. For raw metrics: check if the value is directly present in the documents
-4. For each company, list metrics_found (including "[calculable]" items) and metrics_missing (only truly absent raw inputs)
-5. Give overall grade: sufficient/partial/insufficient
-6. If partial/insufficient, explain which raw component inputs are missing in missing_data_summary
-
-Be thorough and specific in your analysis.""")
+Does the document content contain sufficient information to answer the question?""")
     ])
     
     return grader_prompt | structured_llm
-
-def get_gap_analysis_chain(llm):
-    """
-    GAP ANALYSIS: Identifies specific missing data and generates targeted web search queries.
-    This is called AFTER grading to determine exactly what to search for.
-    """
-    structured_llm = llm.with_structured_output(GapAnalysisResult)
-    
-    SYSTEM_PROMPT = """You are a DATA GAP ANALYST specializing in financial information retrieval.
-
-**YOUR MISSION**: Analyze the financial analyst's grading to identify SPECIFIC data gaps, then generate TARGETED web search queries to fill ONLY those gaps.
-
-**ANALYSIS STRATEGY**:
-
-1. **IDENTIFY GAP TYPE**:
-   - **missing_company**: One or more companies mentioned in question have NO data
-   - **missing_metric**: Specific financial metrics are missing (e.g., debt, net income)
-   - **missing_year**: Question asks for specific year but documents show different year
-   - **no_gaps**: All required data is present
-
-2. **LIST MISSING ITEMS**:
-   Be extremely specific about what's missing:
-   - NOT: "Need more data for Google"
-   - YES: "Google net income 2023", "Google total debt 2023"
-   
-3. **GENERATE TARGETED QUERIES**:
-   Create precise web search queries that will retrieve ONLY the missing data:
-   - Include: Company name, specific metric, year, source hint
-   - Format: "[Company] [Metric] [Year] [Source]"
-   - Example: "Microsoft net income 2023 10-K SEC", "Apple total debt 2023 balance sheet"
-   
-**QUERY GENERATION RULES**:
-
-✅ **GOOD QUERIES** (Specific, targeted):
-- "Microsoft revenue 2023 10-K SEC filing"
-- "Apple total debt long-term debt 2023 balance sheet"
-- "Tesla inventory current assets 2023 10-K"
-- "Meta accounts receivable 2023 balance sheet SEC"
-
-❌ **BAD QUERIES** (Too broad, vague):
-- "Microsoft financials"
-- "Apple data"
-- "Tesla 2023"
-
-**SOURCE HINTS** (Add to queries for better results):
-- For specific metrics: "10-K", "SEC filing", "annual report"
-- For balance sheet items: "balance sheet", "statement of financial position"
-- For income items: "income statement", "P&L"
-- For official data: "SEC.gov", "investor relations"
-
-**FORMULA COMPONENT RULE — CRITICAL**:
-When the gap is a CALCULATED metric (ratio or derived value), do NOT search for the calculated result.
-Instead, identify and search for the MISSING RAW COMPONENT INPUTS of its formula.
-
-Formula components to search for (NOT the ratio itself):
-- Current Ratio gap → search for: "[Company] current assets [year] balance sheet" + "[Company] current liabilities [year] balance sheet"
-- Quick Ratio gap → search for: "[Company] current assets inventory [year]" + "[Company] current liabilities [year]"
-- Debt-to-Equity gap → search for: "[Company] total debt long-term debt [year]" + "[Company] shareholders equity [year]"
-- ROE gap → search for: "[Company] net income [year]" + "[Company] shareholders equity [year]"
-- ROA gap → search for: "[Company] net income [year]" + "[Company] total assets [year]"
-- Gross Margin gap → search for: "[Company] revenue cost of goods sold COGS [year]"
-- Operating Margin gap → search for: "[Company] operating income [year]" + "[Company] revenue [year]"
-- Interest Coverage gap → search for: "[Company] operating income interest expense [year]"
-
-**EXAMPLES**:
-
-Example 1:
-Question: "Compare Meta and Google revenue"
-Grading: Meta has revenue ($134B), Google missing revenue
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_metric",
-  "missing_items": ["Google revenue 2023"],
-  "targeted_queries": [
-    "Google Alphabet revenue 2023 10-K annual report",
-    "Alphabet total revenue 2023 income statement SEC"
-  ],
-  "reasoning": "Meta's revenue is present but Google's revenue is missing. Generated 2 targeted queries with different term variations (Google/Alphabet) to retrieve Google's 2023 revenue from official sources."
-}}
-```
-
-Example 2:
-Question: "Calculate Amazon's debt-to-equity ratio for 2023"
-Grading: Has equity, missing total debt
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_metric",
-  "missing_items": ["Amazon total debt 2023 (long-term + short-term)"],
-  "targeted_queries": [
-    "Amazon total long-term debt short-term debt 2023 balance sheet 10-K",
-    "Amazon liabilities breakdown 2023 annual report SEC"
-  ],
-  "reasoning": "Amazon's shareholders equity is present but total debt is missing. Searching for raw debt COMPONENTS (long-term + short-term debt) from balance sheet — NOT for the calculated ratio itself."
-}}
-```
-
-Example 3 (FORMULA — search for components NOT the ratio):
-Question: "What is Apple's current ratio for 2023?"
-Grading: Missing current assets and/or current liabilities
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_metric",
-  "missing_items": ["Apple current assets 2023", "Apple current liabilities 2023"],
-  "targeted_queries": [
-    "Apple current assets total 2023 balance sheet 10-K",
-    "Apple current liabilities accounts payable 2023 SEC filing"
-  ],
-  "reasoning": "Current ratio needs current assets and current liabilities as raw inputs. Searching for these COMPONENTS from Apple's balance sheet — not for the ratio value itself."
-}}
-```
-
-Example 4:
-Question: "Show Microsoft, Google, and Amazon revenue"
-Grading: Has Microsoft and Google, missing Amazon
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_company",
-  "missing_items": ["Amazon revenue"],
-  "targeted_queries": [
-    "Amazon revenue 2023 2024 income statement 10-K",
-    "Amazon total revenue recent annual report SEC"
-  ],
-  "reasoning": "Microsoft and Google data present, but Amazon is completely missing. Generated targeted queries to retrieve Amazon's revenue from recent filings."
-}}
-```
-
-Example 5:
-Question: "What is Tesla's 2020 revenue?"
-Grading: Has Tesla 2023 data, but question asks for 2020
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_year",
-  "missing_items": ["Tesla revenue 2020"],
-  "targeted_queries": [
-    "Tesla revenue 2020 10-K annual report",
-    "Tesla total revenue fiscal year 2020 income statement"
-  ],
-  "reasoning": "Documents contain Tesla's 2023 data but question specifically asks for 2020. Generated queries targeting 2020 fiscal year data."
-}}
-```
-
-Example 6:
-Question: "What is Amazon's 2023 revenue?"
-Grading: sufficient (has Amazon 2023 revenue)
-Output:
-```json
-{{
-  "has_gaps": false,
-  "gap_type": "no_gaps",
-  "missing_items": [],
-  "targeted_queries": [],
-  "reasoning": "All required data is present in documents. No web search needed."
-}}
-```
-
-**KEY PRINCIPLES**:
-- Only generate queries for MISSING data, not data we already have
-- For calculated metrics: search for MISSING RAW COMPONENT INPUTS, never the ratio itself
-- Be specific: include company, raw component name, year in queries
-- Use 2-3 query variations for hard-to-find data (different terminology)
-- Add source hints (10-K, SEC, balance sheet) for better results
-- If no gaps exist, set has_gaps=false and return empty lists"""
-
-    gap_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", """Question: {question}
-
-Financial Analyst Grade:
-{analyst_grade}
-
-Per-Company Document Coverage:
-{doc_coverage_summary}
-
-**YOUR TASK**:
-1. Read the "ALREADY FOUND IN DOCUMENTS" section carefully for each company — these metrics are CONFIRMED PRESENT. You MUST NOT generate search queries for any item that appears there.
-2. Read the "MISSING FROM DOCUMENTS" section — these are the only candidates for web search.
-3. For each missing item: if it is a derived/calculated metric (ratio), identify which of its RAW COMPONENT INPUTS is missing. Search for the components, NOT the ratio itself.
-4. Determine gap_type (missing_company, missing_metric, missing_year, or no_gaps).
-5. List specific missing_items as raw component inputs only (e.g., "total debt 2023" not "debt-to-equity ratio").
-6. Generate targeted_queries ONLY for truly absent raw inputs. Do NOT re-query data already confirmed as found.
-7. If all required data for the question is present (including calculable items), set has_gaps=false.
-
-**CRITICAL**: If the coverage shows all required formula components are present, the answer CAN be computed. Set has_gaps=false. Never generate queries for data that is already confirmed in the documents.""")
-    ])
-    
-    return gap_prompt | structured_llm
 
 def get_financial_data_extractor_chain(llm):
     """
@@ -1656,22 +959,24 @@ def get_alpha_liquidity_chain(llm):
     """
     from schemas.models import AlphaDimensionOutput
     structured_llm = llm.with_structured_output(AlphaDimensionOutput)
-    
-    SYSTEM_PROMPT = """You are a financial analyst specializing in MACRO/MICRO economic analysis.
 
-**Your Task**: Analyze the Liquidity dimension of the ALPHA Framework.
+    cur_year = _current_year()
 
-**Focus Areas**:
-1. **Sector Headwinds/Tailwinds**: Industry trends from regulatory filings
-2. **Commodity/Input Cost Exposure**: Raw material prices, supply chain risks
-3. **Interest Rate Sensitivity**: Debt structure, capital costs
-4. **Competitive Pressures**: Risk factors from 10-K
+    SYSTEM_PROMPT = f"""You are a senior macro/industry analyst specializing in assessing the operating environment for public companies.
+
+**Your Task**: Analyze the Liquidity (Macro/Micro Environment) dimension of the ALPHA Framework — this assesses whether the external environment is a tailwind or headwind for the stock.
+
+**Focus Areas** (use the most recent data available, current year context: {cur_year}):
+1. **Sector Headwinds/Tailwinds**: Industry growth trends, regulatory tailwinds/headwinds, sector rotation dynamics
+2. **Commodity/Input Cost Exposure**: Raw material prices, supply chain vulnerabilities, pricing power vs. input inflation
+3. **Interest Rate Sensitivity**: Debt maturity profile, capital costs, impact of rate environment on valuation multiples and refinancing risk
+4. **Competitive Pressures**: Market share dynamics, new entrants, pricing pressure from 10-K risk factors
 
 **Output Requirements**:
-- Maximum 100 words
-- Identify key risks and opportunities
-- Tone: Analytical, balanced
-- End with a one-line **Recommendation** field (e.g. "Positive — favourable macro backdrop", "Neutral — mixed signals", "Negative — significant macro headwinds")
+- Maximum 100 words — be precise and quantitative where possible
+- Lead with the most significant macro factor affecting the investment case
+- Tone: Analytical, decisive — state whether macro is a net positive or negative for this stock
+- End with a one-line **Recommendation** (e.g., "Positive — favourable macro backdrop and rate tailwinds", "Neutral — mixed signals with offsetting factors", "Negative — significant sector headwinds and margin pressure")
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1682,35 +987,40 @@ Ticker: {ticker}
 Retrieved Documents:
 {documents}
 
-Analyze the LIQUIDITY dimension focusing on macro/micro environmental factors. Keep response under 100 words.""")
+Analyze the macro/micro environment (Liquidity dimension). Keep response under 100 words.""")
     ])
-    
+
     return prompt | structured_llm
 
 
 def get_alpha_performance_chain(llm):
     """
     ALPHA - Performance: Earnings & Fundamentals Analysis
-    Analyzes 10-year financials, calculates key metrics, detects anomalies
+    Analyzes financials, calculates key metrics, detects anomalies
     """
     from schemas.models import AlphaDimensionOutput
     structured_llm = llm.with_structured_output(AlphaDimensionOutput)
-    
-    SYSTEM_PROMPT = """You are a financial analyst specializing in FUNDAMENTAL ANALYSIS.
 
-**Your Task**: Analyze the Performance dimension of the ALPHA Framework.
+    cur_year = _current_year()
 
-**Focus Areas**:
-1. **Recent Financials**: Always lead with the MOST RECENT fiscal year available in the documents. Do not anchor to data older than 2-3 years if more recent exists. Highlight the latest revenue, net income, and cash flow figures first.
-2. **Key Metrics**: CAGR (use latest available base year), EBITDA margins, ROE, Free Cash Flow yield
-3. **Anomaly Detection**: Flag as a RED FLAG only when Net Income consistently EXCEEDS Operating Cash Flow for more than 2 periods — this suggests aggressive revenue recognition or accrual inflation. Operating Cash Flow exceeding Net Income is a POSITIVE sign of strong cash conversion quality — NEVER flag this as a concern.
-4. **Non-Recurring Items**: One-time gains, restructuring charges
+    SYSTEM_PROMPT = f"""You are a senior fundamental analyst specializing in earnings quality and financial statement analysis.
+
+**Your Task**: Analyze the Performance (Earnings & Fundamentals) dimension of the ALPHA Framework.
+
+**Focus Areas** (always use the MOST RECENT fiscal year available — current year context: {cur_year}):
+1. **Recent Financials**: Lead with the latest fiscal year revenue, net income, operating income, and free cash flow. Do NOT anchor to data older than 2-3 years if more recent data exists.
+2. **Key Metrics**: Revenue CAGR (from most recent available base), EBITDA margin, ROE, FCF yield, operating margin trajectory
+3. **Earnings Quality Check**:
+   - RED FLAG: Net Income consistently EXCEEDS Operating Cash Flow for 2+ periods → suggests aggressive accruals or revenue recognition
+   - POSITIVE: Operating Cash Flow exceeding Net Income → strong cash conversion quality (NEVER flag this as a concern)
+4. **Non-Recurring Items**: Flag one-time charges, restructuring, goodwill impairment that distort underlying performance
+5. **Trend Direction**: Are margins expanding or contracting? Is growth accelerating or decelerating?
 
 **Output Requirements**:
-- Maximum 100 words
-- Include calculated metrics where possible
-- Tone: Quantitative, precise
-- End with a one-line **Recommendation** field summarising earnings quality (e.g. "Positive — strong and improving fundamentals", "Neutral — stable but slowing growth", "Negative — deteriorating margins or earnings quality concerns")
+- Maximum 100 words — lead with the most important fundamental signal
+- Include at least 2 specific numerical metrics from the documents
+- Tone: Quantitative, investment-grade precision
+- End with a one-line **Recommendation** (e.g., "Positive — strong and improving fundamentals with high FCF conversion", "Neutral — stable but slowing growth with margin pressure", "Negative — deteriorating margins and earnings quality concerns")
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1723,7 +1033,7 @@ Retrieved Documents:
 
 Analyze the PERFORMANCE dimension using the most recent fiscal year data available. Keep response under 100 words.""")
     ])
-    
+
     return prompt | structured_llm
 
 
@@ -1734,23 +1044,23 @@ def get_alpha_horizon_chain(llm):
     """
     from schemas.models import AlphaDimensionOutput
     structured_llm = llm.with_structured_output(AlphaDimensionOutput)
-    
-    SYSTEM_PROMPT = """You are a financial analyst specializing in COMPETITIVE ANALYSIS and MOAT assessment.
 
-**Your Task**: Analyze the Horizon dimension of the ALPHA Framework.
+    SYSTEM_PROMPT = """You are a senior equity analyst specializing in competitive strategy and economic moat assessment.
+
+**Your Task**: Analyze the Horizon (Structural Opportunity & Moat) dimension of the ALPHA Framework — this assesses the long-term investment durability of the business.
 
 **Focus Areas**:
-1. **Operating Margins vs. Industry**: Pricing power indicator
-2. **R&D Expenditure vs. Peers**: Innovation sustainability
-3. **Market Share Trends**: Competitive positioning
-4. **Moat Durability**: Network effects, switching costs, intangible assets
+1. **Operating Margins vs. Industry**: Are margins above or below sector peers? Signals pricing power and competitive moat strength.
+2. **R&D Investment**: R&D as % of revenue vs. prior years — is the company investing to sustain or grow its competitive advantage?
+3. **Market Share Dynamics**: Is the company gaining or losing market share? Evidence from revenue growth relative to industry.
+4. **Moat Sources**: Identify the type and durability of competitive advantages — network effects, switching costs, cost advantages, intangible assets (patents, brands, licenses), efficient scale.
+5. **TAM Opportunity**: Size and growth trajectory of addressable markets from business section disclosures.
 
 **Output Requirements**:
-- Maximum 100 words
-- Compare to industry benchmarks
-- Assess long-term competitive advantages
-- Tone: Strategic, forward-looking
-- End with a one-line **Recommendation** field assessing moat strength and structural outlook (e.g. "Positive — durable wide moat with expanding market share", "Neutral — moderate moat, watch competitive pressures", "Negative — moat erosion risk")
+- Maximum 100 words — be specific and analytical
+- Reference at least one specific competitive advantage or risk factor from the documents
+- Tone: Strategic, forward-looking, investment-grade
+- End with a one-line **Recommendation** (e.g., "Positive — durable wide moat with expanding TAM", "Neutral — moderate moat, monitor competitive pressures", "Negative — moat erosion risk from disruption or commoditisation")
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1761,9 +1071,9 @@ Ticker: {ticker}
 Retrieved Documents:
 {documents}
 
-Analyze the HORIZON dimension focusing on competitive moat and structural opportunities. Keep response under 100 words.""")
+Analyze the HORIZON dimension — competitive moat, structural opportunities, and long-term investment durability. Keep response under 100 words.""")
     ])
-    
+
     return prompt | structured_llm
 
 
@@ -1815,34 +1125,36 @@ def get_alpha_report_combiner_chain(llm):
     Combines all 5 ALPHA dimensions into a final coherent report.
     Renders each pillar with its Recommendation label and closes with ALPHA Summary.
     """
-    SYSTEM_PROMPT = """You are a senior investment analyst creating a concise ALPHA Framework report.
+    cur_year = _current_year()
+    SYSTEM_PROMPT = f"""You are a senior investment analyst at a top-tier equity research firm, producing an ALPHA Framework investment report.
 
-**Your Task**: Render the 5 ALPHA dimensions exactly as supplied, then write a consolidated ALPHA Summary.
+**Your Task**: Render the 5 ALPHA dimensions exactly as supplied, then write a consolidated ALPHA Summary with an overall investment stance.
 
 **Report Structure** (follow this markdown precisely):
 
-# ALPHA Framework Analysis: {company} ({ticker})
+# ALPHA Framework Analysis: {{company}} ({{ticker}})
 
-## A — Alignment (Stakeholder Interests)
-{alignment}
+## A — Alignment (Stakeholder & Insider Signals)
+{{alignment}}
 
-## L — Liquidity (Macro/Micro Environment)
-{liquidity}
+## L — Liquidity (Macro/Micro Operating Environment)
+{{liquidity}}
 
-## P — Performance (Earnings & Fundamentals)
-{performance}
+## P — Performance (Earnings Quality & Fundamentals)
+{{performance}}
 
-## H — Horizon (Structural Opportunity & Moat)
-{horizon}
+## H — Horizon (Competitive Moat & Structural Opportunity)
+{{horizon}}
 
-## A — Action (Timing & Technical Context)
-{action}
+## A — Action (Technical Timing & Valuation Context)
+{{action}}
 
 ---
-## ALPHA Summary
-[Write 3-4 sentences that consolidate the key signals from all five dimensions into a clear, overall investment stance. Reference the individual Recommendation signals explicitly and state whether the combined picture is Bullish, Neutral, or Bearish.]
+## ALPHA Summary — Overall Investment Stance
+[Write 4-5 sentences synthesising all five dimension signals into a clear investment thesis. Reference each dimension's Recommendation signal explicitly. Conclude with an overall stance: **Bullish**, **Cautiously Bullish**, **Neutral**, **Cautiously Bearish**, or **Bearish** — with a one-sentence rationale. Use {cur_year} context for recency framing.]
 
-**IMPORTANT DISCLAIMER**: This analysis is for informational purposes only and does not constitute investment advice or trading signals.
+---
+*Analysis based on SEC filings, publicly available financial data, and web-sourced market information. For informational purposes only — does not constitute investment advice or a solicitation to trade.*
 """
 
     prompt = ChatPromptTemplate.from_messages([

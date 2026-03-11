@@ -1,16 +1,16 @@
 "This module contains all info about about the nodes in the graph"
 import re
+from datetime import datetime
 from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_core.messages import AIMessage
 from langchain_tavily import TavilySearch
-from rag.vectordb.chains import (get_retrival_grader_chain, get_rag_chain,
-                                                          get_company_name, get_question_rewriter_chain,
+from rag.prompts.prompts import (get_rag_chain,
+                                                          get_question_rewriter_chain,
                                                           get_financial_analyst_grader_chain,
-                                                          get_financial_data_extractor_chain,
-                                                          get_gap_analysis_chain)
+                                                          get_financial_data_extractor_chain)
 from rag.vectordb.client import load_vector_database
 from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company
 load_dotenv()
@@ -158,7 +158,7 @@ def smart_extract_financial_data(documents, max_chars=80000):
     
     for doc in documents:
         source = doc.metadata.get("source", "") if hasattr(doc, 'metadata') else ""
-        is_web_doc = source in ["web_search", "integrate_web_search", "financial_web_search"]
+        is_web_doc = source in ["web_search", "integrate_web_search"]
         
         if is_web_doc:
             web_docs.append(doc)
@@ -286,7 +286,9 @@ def smart_extract_financial_data(documents, max_chars=80000):
     return extracted_docs
 
 
-def generate_comparison_subqueries(companies: list, year: str = "2024") -> dict:
+def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
+    if year is None:
+        year = str(datetime.now().year)
     """
     Generate optimized sub-queries for company comparison WITHOUT LLM.
 
@@ -416,7 +418,7 @@ def detect_segment_or_geographic_query(question: str) -> str:
 def _extract_years_from_question(question: str) -> list:
     """Extract explicitly mentioned 4-digit years (2000-2029) from the user question."""
     years = sorted(set(int(y) for y in re.findall(r'\b(20[0-2][0-9])\b', question)))
-    return years if years else [2024]
+    return years if years else [datetime.now().year]
 
 
 def generate_segment_subqueries(companies: list, question: str = "") -> dict:
@@ -558,8 +560,8 @@ def preprocess_and_analyze_query(state):
 
         print(f"📊 Companies: {', '.join(comparison_companies)}")
 
-        # Generate fixed sub-queries using the year from state (fallback to 2024)
-        comparison_year = str(state.get("year_start") or state.get("year_end") or "2024")
+        # Generate fixed sub-queries using the year from state (fallback to current year)
+        comparison_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
         print(f"📊 Comparison year: {comparison_year}")
         sub_query_analysis = generate_comparison_subqueries(comparison_companies, year=comparison_year)
 
@@ -613,7 +615,7 @@ def preprocess_and_analyze_query(state):
     print("---UNIVERSAL SUB-QUERY ANALYSIS---")
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
-    from rag.vectordb.chains import get_universal_sub_query_analyzer
+    from rag.prompts.prompts import get_universal_sub_query_analyzer
     sub_query_analyzer = get_universal_sub_query_analyzer(llm)
     
     # Analyze the question
@@ -650,64 +652,6 @@ def preprocess_and_analyze_query(state):
         "requested_years": analysis.requested_years,
         "sub_query_results": {}
     }
-
-def extract_multiple_companies_from_question(question, llm=None):
-    """
-    Extract multiple companies from the question for cross-referencing scenarios.
-    Uses LLM-based extraction for more accurate company identification.
-    """
-    try:
-        if llm:
-            from rag.vectordb.chains import get_multi_company_extractor_chain
-            
-            # Use structured LLM extraction
-            extractor_chain = get_multi_company_extractor_chain(llm)
-            extraction_result = extractor_chain.invoke({"question": question})
-            
-            print(f"Extracted companies: {extraction_result.companies}, Primary: {extraction_result.primary_company}, Is comparison: {extraction_result.is_comparison}")
-            
-            return extraction_result.companies
-        
-    except Exception as e:
-        print(f"Error in LLM-based company extraction: {e}")
-    
-    # Fallback to keyword matching
-    company_mappings = {
-        "amazon": ["amazon", "amzn", "amazon.com"],
-        "berkshire": ["berkshire", "berkshire hathaway", "brk"],
-        "google": ["google", "alphabet", "googl", "goog"],
-        "Jhonson and Jhonosn": ["johnson", "jnj", "johnson & johnson", "johnson and johnson"],
-        "jp morgan": ["jp morgan", "jpmorgan", "jpmc", "chase", "jpm"],
-        "meta": ["meta", "facebook", "fb", "meta platforms"],
-        "microsoft": ["microsoft", "msft", "ms"],
-        "nvidia": ["nvidia", "nvda"],
-        "tesla": ["tesla", "tsla"],
-        "visa": ["visa", "v"],
-        "walmart": ["walmart", "wmt"],
-        "pfizer": ["pfizer", "pfe"]
-    }
-    
-    question_lower = question.lower()
-    detected_companies = []
-    
-    for standard_name, variations in company_mappings.items():
-        for variation in variations:
-            if variation in question_lower:
-                if standard_name not in detected_companies:
-                    detected_companies.append(standard_name)
-                break
-    
-    # Also look for comparison keywords to determine if cross-referencing is likely
-    comparison_keywords = ["compare", "versus", "vs", "against", "with", "between", "and"]
-    has_comparison = any(keyword in question_lower for keyword in comparison_keywords)
-    
-    # If we found multiple companies or comparison keywords, return detected companies
-    if len(detected_companies) > 1 or (len(detected_companies) >= 1 and has_comparison):
-        return detected_companies
-    
-    # If only one company detected but no comparison context, still return it
-    return detected_companies
-
 
 def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
     """
@@ -811,7 +755,22 @@ def retrieve(state, config):
     
     # Extract requested years from state (set by preprocess_and_analyze_query for all paths)
     # Fall back to sub_query_analysis for backward compatibility
-    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [2024]
+    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [datetime.now().year]
+
+    # SEGMENT / GEOGRAPHIC OPTIMISATION:
+    # A 10-K covers the filing year + 2 prior years (3-year comparative).
+    #  span == 2  →  e.g. [2022, 2023, 2024]: the 2024 10-K already contains all three
+    #                years → query ONLY the last year.
+    #  span  > 2  →  e.g. [2020..2024]: no single 10-K covers the full range → query
+    #                first + last (their 10-Ks together cover the entire window).
+    if query_type in ("segment", "geographic") and len(requested_years) > 1:
+        year_span = requested_years[-1] - requested_years[0]
+        if year_span == 2:
+            requested_years = [requested_years[-1]]
+            print(f" Span=2y → querying only [{requested_years[0]}] (single 10-K covers all 3 years)")
+        elif year_span > 2:
+            requested_years = [requested_years[0], requested_years[-1]]
+            print(f" Span={year_span}y → querying [{requested_years[0]}, {requested_years[-1]}] (first+last 10-K covers full range)")
 
     target_tickers = set()
 
@@ -905,9 +864,9 @@ def retrieve(state, config):
                                 docs_from_ticker += 1
 
                     if docs_from_ticker > 0:
-                        print(f"      ✅ Found {docs_from_ticker} documents")
+                        print(f"      ✅ Found {docs_from_ticker} chunks")
                     else:
-                        print(f"      ⚠️  No documents found")
+                        print(f"      ⚠️  No chunks found")
 
                 except Exception as e:
                      # Likely collection not found (safe to ignore in retrieval)
@@ -938,9 +897,9 @@ def retrieve(state, config):
             }
 
             if len(step_docs) > 0:
-                print(f"   ✅ Total: {len(step_docs)} docs from {len(companies_found)} companies")
+                print(f"   ✅ Total: {len(step_docs)} chunks from {len(companies_found)} companies")
             else:
-                print(f"   ❌ No documents found for this sub-query")
+                print(f"   ❌ No chunks found for this sub-query")
 
     else:
         # ============================================================================
@@ -990,7 +949,7 @@ def retrieve(state, config):
                                     all_documents.append(doc)
                                     current_collection_docs += 1
                                     
-                    print(f"       Found {current_collection_docs} unique docs across requested years")
+                    print(f"       Found {current_collection_docs} unique chunks across requested years")
                     
                 except Exception as e:
                     print(f"      Error searching collection for {target_ticker}: {e}")
@@ -1004,13 +963,13 @@ def retrieve(state, config):
                     content_types[ctype] = content_types.get(ctype, 0) + 1
                     companies_found.add(doc.metadata.get('company', 'Unknown'))
 
-            print(f"\nRetrieved {len(all_documents)} total documents from {len(target_tickers)} collections")
+            print(f"\nRetrieved {len(all_documents)} chunks total from {len(target_tickers)} collections")
             print(f"    {content_types['text']} text,  {content_types['image']} images")
             print(f"    {', '.join(sorted(companies_found))}")
 
     # Final summary
     print(f"\n{'='*80}")
-    print(f" FINAL: {len(all_documents)} documents ready")
+    print(f" FINAL: {len(all_documents)} chunks ready")
     print(f"{'='*80}\n")
     
     tool_call_entry = {
@@ -1037,18 +996,18 @@ def generate(state):
     
     # Enhanced logging for debugging
     print(f" Question: {question[:100]}...")
-    print(f" Number of documents: {len(documents) if documents else 0}")
-    
-    # Log document content preview for debugging
+    print(f" Number of chunks: {len(documents) if documents else 0}")
+
+    # Log chunk content preview for debugging
     if documents:
-        for i, doc in enumerate(documents[:3]):  # Preview first 3 docs
+        for i, doc in enumerate(documents[:3]):  # Preview first 3 chunks
             if hasattr(doc, 'page_content'):
                 content_preview = doc.page_content[:200].replace('\n', ' ')
             else:
                 content_preview = str(doc)[:200].replace('\n', ' ')
-            print(f" Doc {i+1} preview: {content_preview}...")
+            print(f" Chunk {i+1} preview: {content_preview}...")
     else:
-        print(" WARNING: No documents available for generation!")
+        print(" WARNING: No chunks available for generation!")
     
     # ============================================================================
     # MESSAGE-BASED GENERATION: For "summarize" queries, use conversation messages
@@ -1221,17 +1180,14 @@ Please provide a clear, well-structured summary."""
 
 def grade_documents(state):
     """
-    FINANCIAL ANALYST DOCUMENT GRADING: Evaluates documents like a financial analyst.
-    
-    NEW APPROACH:
+    FINANCIAL ANALYST CHUNK GRADING: Evaluates retrieved chunks like a financial analyst.
+
     1. Identifies what financial metrics the question needs
-    2. Scans documents to find which metrics ARE present
+    2. Scans chunks to find which metrics ARE present
     3. Identifies which metrics are MISSING
-    4. Returns grading with specific gap analysis
-    
-    This replaces binary yes/no grading with intelligent financial analysis.
+    4. Returns grading result used by decide_to_generate
     """
-    print("---FINANCIAL ANALYST DOCUMENT GRADING---")
+    print("---FINANCIAL ANALYST CHUNK GRADING---")
     messages = state["messages"]
     question = messages[-1].content
     documents = state["documents"]
@@ -1258,36 +1214,19 @@ def grade_documents(state):
             print(f"Using portfolio context companies: {ctx_filter}")
             
     print(f"Companies Detected: {companies_detected}")
-    print(f"Documents to grade: {len(documents)}")
+    print(f"Chunks to grade: {len(documents)}")
 
-    # OPTIMIZATION: Check if we already graded these documents
-    # Avoid re-grading after web search if we only added a few documents
-    existing_grading = state.get("financial_grading")
-    if existing_grading and "documents_graded_count" in existing_grading:
-        previous_count = existing_grading["documents_graded_count"]
-        new_docs_count = len(documents) - previous_count
-
-        # If we only added < 10 new documents, skip re-grading
-        if new_docs_count < 10 and new_docs_count >= 0:
-            print(f"  ⚡ SKIPPING RE-GRADING: Only {new_docs_count} new docs added")
-            print(f"  Using cached grading result from {previous_count} docs")
-            return {
-                "documents": documents,
-                "financial_grading": existing_grading,
-                "tool_calls": state.get("tool_calls", [])
-            }
-
-    # CRITICAL: Handle empty documents case (e.g., company not in DB)
+    # CRITICAL: Handle empty chunks case (e.g., company not in DB)
     if not documents or len(documents) == 0:
-        print(" NO DOCUMENTS TO GRADE")
+        print(" NO CHUNKS TO GRADE")
         print(" Returning INSUFFICIENT grade → Will trigger web search")
-        
+
         return {
             "documents": [],
             "financial_grading": {
                 "overall_grade": "insufficient",
                 "can_answer": False,
-                "missing_data_summary": "No documents found in vector database",
+                "missing_data_summary": "No chunks found in vector database",
                 "company_coverage": []
             },
             "tool_calls": state.get("tool_calls", []) + [{
@@ -1296,356 +1235,96 @@ def grade_documents(state):
             }]
         }
     
-    # OPTIMIZATION: Parallel batch grading - grade ALL documents for maximum accuracy
-    # Process in batches to respect context limits while ensuring complete coverage
-
-    web_docs = [d for d in documents if d.metadata.get("source", "") in ["web_search", "integrate_web_search", "financial_web_search"]]
-    vectorstore_docs = [d for d in documents if d not in web_docs]
-
-    print(f"  Vectorstore docs: {len(vectorstore_docs)} (high quality)")
-    print(f"  Web docs: {len(web_docs)} (needs careful grading)")
-
-    # Grade ALL documents - no sampling to avoid missing data
-    docs_to_grade = documents
-    print(f"  Grading ALL {len(documents)} documents in batches")
-
-    # Batch size for parallel processing (fit in LLM context)
-    BATCH_SIZE = 20  # Grade 20 docs per LLM call
-
-    # Initialize financial analyst grader
+    # Initialize financial analyst grader with gpt-4o
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
     analyst_grader = get_financial_analyst_grader_chain(llm)
 
-    # Split documents into batches
-    doc_batches = [docs_to_grade[i:i + BATCH_SIZE] for i in range(0, len(docs_to_grade), BATCH_SIZE)]
-    print(f"  Processing {len(doc_batches)} batches in parallel...")
-
-    # Function to grade a single batch
-    def grade_batch(batch, batch_idx):
-        doc_previews = []
-        preview_chars_per_doc = min(900, 45000 // len(batch))
-
-        for i, doc in enumerate(batch, 1):
-            if hasattr(doc, 'page_content'):
-                content = doc.page_content[:preview_chars_per_doc]
-            elif isinstance(doc, dict) and 'page_content' in doc:
-                content = doc['page_content'][:preview_chars_per_doc]
-            else:
-                content = str(doc)[:preview_chars_per_doc]
-
-            # Include metadata for context
-            metadata_str = ""
-            if hasattr(doc, 'metadata'):
-                company = doc.metadata.get("company", "Unknown")
-                source = doc.metadata.get("source", "Unknown")
-                metadata_str = f" [Company: {company}, Source: {source}]"
-
-            doc_previews.append(f"--- Document {i} ---{metadata_str}\n{content}\n")
-
-        doc_preview_text = "\n".join(doc_previews)
-
-        try:
-            grade = analyst_grader.invoke({
-                "question": question,
-                "doc_count": len(batch),
-                "doc_previews": doc_preview_text,
-                "companies_detected": ", ".join(companies_detected) if companies_detected else "None",
-                "query_type": query_type
-            })
-            print(f"    ✅ Batch {batch_idx + 1}/{len(doc_batches)}: {len(batch)} docs graded")
-            return grade
-        except Exception as e:
-            print(f"    ❌ Batch {batch_idx + 1} failed: {e}")
-            return None
-
-    # Grade batches in parallel
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    batch_grades = []
-    with ThreadPoolExecutor(max_workers=min(5, len(doc_batches))) as executor:
-        futures = {executor.submit(grade_batch, batch, idx): idx
-                   for idx, batch in enumerate(doc_batches)}
-
-        for future in as_completed(futures):
-            grade = future.result()
-            if grade:
-                batch_grades.append(grade)
-
-    print(f"  ✅ Graded {len(batch_grades)} batches successfully")
-
-    # Aggregate results from all batches
-    if not batch_grades:
-        print("  ⚠️  No successful batch grades, using fallback")
-        doc_preview_text = ""  # Will trigger fallback in next block
-    else:
-        # Merge all batch grades into a single result
-        # Take the most conservative grade (if any batch says "insufficient", overall is "insufficient")
-        all_grades = [g.overall_grade for g in batch_grades if g]
-        if "insufficient" in all_grades:
-            overall_grade = "insufficient"
-        elif "partial" in all_grades:
-            overall_grade = "partial"
-        else:
-            overall_grade = "sufficient"
-
-        # Aggregate company coverage with proper deduplication
-        company_coverage_map = {}
-        for grade in batch_grades:
-            for cc in grade.company_coverage:
-                if cc.company not in company_coverage_map:
-                    # Create new entry with dict representation
-                    company_coverage_map[cc.company] = {
-                        "company": cc.company,
-                        "confidence": cc.confidence,
-                        "metrics_found": set(cc.metrics_found),
-                        "metrics_missing": set(cc.metrics_missing),
-                        "year_coverage": set(cc.year_coverage)
-                    }
-                else:
-                    # Merge metrics
-                    existing = company_coverage_map[cc.company]
-                    existing["metrics_found"].update(cc.metrics_found)
-                    existing["metrics_missing"].update(cc.metrics_missing)
-                    existing["year_coverage"].update(cc.year_coverage)
-
-        # Fix: Remove items from "missing" if they're in "found"
-        for company, data in company_coverage_map.items():
-            found = data["metrics_found"]
-            missing = data["metrics_missing"]
-            # Remove any metric from missing if it's in found
-            data["metrics_missing"] = missing - found
-            # Convert sets to lists
-            data["metrics_found"] = list(found)
-            data["metrics_missing"] = list(missing - found)
-            data["year_coverage"] = list(data["year_coverage"])
-
-        # Determine if we can answer based on missing data
-        can_answer = all(len(data["metrics_missing"]) == 0 for data in company_coverage_map.values())
-        if can_answer and overall_grade == "insufficient":
-            overall_grade = "excellent"
-
-        # Create aggregated analyst grade as a proper dict-like object
-        class AnalystGradeResult:
-            def __init__(self, grade_dict):
-                self._dict = grade_dict
-                self.overall_grade = grade_dict["overall_grade"]
-                self.can_answer_question = grade_dict["can_answer_question"]
-                self.reasoning = grade_dict["reasoning"]
-                self.company_coverage = grade_dict["company_coverage"]
-                self.missing_data_summary = grade_dict["missing_data_summary"]
-
-            def dict(self):
-                return self._dict
-
-        # Build a specific missing_data_summary from actual missing metrics
-        missing_parts = []
-        for company, data in company_coverage_map.items():
-            if data["metrics_missing"]:
-                missing_parts.append(
-                    f"{company}: missing {', '.join(data['metrics_missing'][:3])}"
-                )
-        specific_missing_summary = "; ".join(missing_parts) if missing_parts else ""
-
-        analyst_grade = AnalystGradeResult({
-            "overall_grade": overall_grade,
-            "can_answer_question": can_answer,
-            "reasoning": f"Aggregated from {len(batch_grades)} batches (parallel grading)",
-            "company_coverage": list(company_coverage_map.values()),
-            "missing_data_summary": specific_missing_summary
-        })
-
-        # Set up doc_preview_text for the try block (even though we don't use it now)
-        doc_preview_text = "Aggregated from batches"
-
-    print(f"  Final analysis complete")
+    # Concatenate all documents into a single massive context window
+    # gpt-4o has a 128k context window, allowing us to pass up to ~80k-100k chars easily
+    doc_previews = []
+    total_chars = 0
+    MAX_CHARS = 100000 
     
-    try:
-        # Analyst grade already computed above via parallel batch processing
-        # This try block now just handles the result formatting
-        
-        print(f"\n FINANCIAL ANALYST GRADE: {analyst_grade.overall_grade.upper()}")
-        print(f"Can Answer Question: {analyst_grade.can_answer_question}")
-        print(f"Reasoning: {analyst_grade.reasoning}")
-        
-        # Log per-company coverage
-        for company_coverage in analyst_grade.company_coverage:
-            # Handle both dict and object types
-            company = company_coverage.get("company") if isinstance(company_coverage, dict) else company_coverage.company
-            confidence = company_coverage.get("confidence") if isinstance(company_coverage, dict) else company_coverage.confidence
-            year_coverage = company_coverage.get("year_coverage", []) if isinstance(company_coverage, dict) else company_coverage.year_coverage
-            metrics_found = company_coverage.get("metrics_found", []) if isinstance(company_coverage, dict) else company_coverage.metrics_found
-            metrics_missing = company_coverage.get("metrics_missing", []) if isinstance(company_coverage, dict) else company_coverage.metrics_missing
+    for i, doc in enumerate(documents, 1):
+        if hasattr(doc, 'page_content'):
+            content = doc.page_content
+        elif isinstance(doc, dict) and 'page_content' in doc:
+            content = doc['page_content']
+        else:
+            content = str(doc)
 
-            print(f"\n  Company: {company}")
-            print(f"    Confidence: {confidence}")
-            print(f"    Years: {', '.join(year_coverage) if year_coverage else 'Unknown'}")
-            print(f"    Metrics Found: {', '.join(metrics_found[:5])}{'...' if len(metrics_found) > 5 else ''}")
-            if metrics_missing:
-                print(f"      Metrics Missing: {', '.join(metrics_missing[:3])}{'...' if len(metrics_missing) > 3 else ''}")
+        metadata_str = ""
+        if hasattr(doc, 'metadata'):
+            company = doc.metadata.get("company", "Unknown")
+            source = doc.metadata.get("source", "Unknown")
+            metadata_str = f" [Company: {company}, Source: {source}]"
+            
+        preview = f"--- Document {i} ---{metadata_str}\n{content}\n"
         
-        if analyst_grade.missing_data_summary:
-            print(f"\n   MISSING DATA: {analyst_grade.missing_data_summary}")
+        if total_chars + len(preview) > MAX_CHARS:
+            # Add a truncated version of the last document that fits
+            remaining = MAX_CHARS - total_chars
+            if remaining > 100:
+                doc_previews.append(preview[:remaining] + "...[TRUNCATED TO FIT CONTEXT]")
+            break
+            
+        doc_previews.append(preview)
+        total_chars += len(preview)
+
+    doc_preview_text = "\n".join(doc_previews)
+    print(f"  Sending {len(doc_previews)} documents ({total_chars} chars) to gpt-4o grader...")
+
+    sub_queries = "\n".join([f"- {sq}" for sq in sub_query_analysis.get("sub_queries", [])]) if sub_query_analysis.get("sub_queries") else "None"
+
+    try:
+        # Perform single LLM call
+        grade = analyst_grader.invoke({
+            "question": question,
+            "sub_queries": sub_queries,
+            "doc_content": doc_preview_text
+        })
+        
+        print(f"\n FINANCIAL ANALYST GRADE:")
+        print(f"  Is Sufficient: {grade.is_sufficient}")
+        if grade.missing_data_summary:
+            print(f"  Missing Data: {grade.missing_data_summary}")
+        
+        overall_grade = "sufficient" if grade.is_sufficient else "insufficient"
         
         # Store grading result in state for decision-making
         grading_result = {
-            "analyst_grade": analyst_grade.dict(),
-            "overall_grade": analyst_grade.overall_grade,
-            "can_answer": analyst_grade.can_answer_question,
-            "missing_data_summary": analyst_grade.missing_data_summary,
-            "company_coverage": analyst_grade.company_coverage,  # Already dicts, don't call .dict()
-            "documents_graded_count": len(documents)  # For caching
+            "overall_grade": overall_grade,
+            "can_answer": grade.is_sufficient,
+            "missing_data_summary": grade.missing_data_summary,
+            "company_coverage": [], # Removed complex coverage tracking
+            "documents_graded_count": len(doc_previews)
         }
-        
-        # For now, keep all documents (decision node will use grading to determine if web search needed)
-        # This is different from old approach which filtered here
-        filtered_docs = documents  # Keep all docs, let decision node use grading
-        
+
         tool_call_entry = {
             "tool": "financial_analyst_grader",
-            "grade": analyst_grade.overall_grade,
-            "can_answer": analyst_grade.can_answer_question
+            "grade": overall_grade,
+            "can_answer": grade.is_sufficient
         }
-        
-        print(f"\n GRADING COMPLETE: {len(filtered_docs)} documents retained")
+
+        print(f"\n GRADING COMPLETE: {len(documents)} chunks evaluated")
         print(f"   Next: Decision node will use this grading to determine if web search needed")
-        
+
         return {
-            "documents": filtered_docs,
+            "documents": documents,
             "financial_grading": grading_result,
             "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
         }
-        
+
     except Exception as e:
         print(f" Financial analyst grading failed: {e}")
-        print("  Falling back to keeping all documents")
-        
-        # Fallback: keep all documents
+        print("  Falling back to keeping all chunks")
+
+        # Fallback: keep all chunks
         return {
             "documents": documents,
             "financial_grading": {"overall_grade": "partial", "can_answer": False, "error": str(e)},
             "tool_calls": state.get("tool_calls", []) + [{"tool": "financial_analyst_grader", "error": str(e)}]
         }
-
-
-def perform_gap_analysis(state):
-    """
-    GAP ANALYSIS NODE: Identifies specific missing data points and generates targeted queries.
-
-    This runs AFTER grade_documents when the grade is partial/insufficient.
-    It returns targeted_gap_queries and gap_analysis into state so that
-    integrate_web_search can consume them properly.
-
-    Separating this from decide_to_generate (an edge) fixes the critical bug where
-    state mutations inside edge functions are silently discarded by LangGraph.
-    """
-    print("---PERFORM GAP ANALYSIS---")
-    messages = state["messages"]
-    question = messages[-1].content
-    financial_grading = state.get("financial_grading", {})
-
-    overall_grade = financial_grading.get("overall_grade", "partial")
-    missing_data_summary = financial_grading.get("missing_data_summary", "")
-
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    gap_analyzer = get_gap_analysis_chain(llm)
-
-    # Build per-company coverage summary with FULL metrics lists (not truncated)
-    # so the gap analysis LLM can see exactly what's present vs missing.
-    company_coverage = financial_grading.get("company_coverage", [])
-    all_found_metrics: list[str] = []
-    coverage_lines = []
-    for cc in company_coverage:
-        if isinstance(cc, dict):
-            company = cc.get("company", "Unknown")
-            confidence = cc.get("confidence", "unknown")
-            metrics_found = cc.get("metrics_found", [])
-            metrics_missing = cc.get("metrics_missing", [])
-            year_coverage = cc.get("year_coverage", [])
-        else:
-            company = getattr(cc, "company", "Unknown")
-            confidence = getattr(cc, "confidence", "unknown")
-            metrics_found = getattr(cc, "metrics_found", [])
-            metrics_missing = getattr(cc, "metrics_missing", [])
-            year_coverage = getattr(cc, "year_coverage", [])
-
-        all_found_metrics.extend(metrics_found)
-
-        # Show ALL found metrics (no truncation) so the LLM doesn't regenerate present data
-        found_str = "\n    - ".join(metrics_found) if metrics_found else "(none)"
-        missing_str = "\n    - ".join(metrics_missing) if metrics_missing else "(none)"
-        coverage_lines.append(
-            f"Company: {company} | Confidence: {confidence} | Years: {', '.join(year_coverage)}\n"
-            f"  ALREADY FOUND IN DOCUMENTS (DO NOT search for these):\n    - {found_str}\n"
-            f"  MISSING FROM DOCUMENTS (may need web search):\n    - {missing_str}"
-        )
-
-    if coverage_lines:
-        coverage_text = "\n\n".join(coverage_lines)
-    else:
-        coverage_text = "No company coverage data available"
-
-    # Include the specific missing_data_summary in the grade summary (cleaner than full dict)
-    grade_summary = (
-        f"Overall Grade: {overall_grade}\n"
-        f"Can Answer: {financial_grading.get('can_answer', False)}\n"
-        f"Missing Data Summary: {missing_data_summary if missing_data_summary else '(none specified)'}"
-    )
-
-    try:
-        gap_result = gap_analyzer.invoke({
-            "question": question,
-            "analyst_grade": grade_summary,
-            "doc_coverage_summary": coverage_text
-        })
-
-        print(f"\n GAP ANALYSIS RESULT:")
-        print(f"  Has Gaps: {gap_result.has_gaps}")
-        print(f"  Gap Type: {gap_result.gap_type}")
-        if gap_result.missing_items:
-            print(f"  Missing Items: {', '.join(gap_result.missing_items[:5])}")
-        if gap_result.targeted_queries:
-            print(f"  Targeted Queries ({len(gap_result.targeted_queries)}):")
-            for i, q in enumerate(gap_result.targeted_queries[:4], 1):
-                print(f"    {i}. {q}")
-        print(f"  Reasoning: {gap_result.reasoning}")
-
-        return {
-            "targeted_gap_queries": gap_result.targeted_queries if gap_result.has_gaps else [],
-            "gap_analysis": gap_result.dict(),
-        }
-
-    except Exception as e:
-        print(f"  Gap analysis failed: {e}")
-        # Fallback: build a simple targeted query from the missing_data_summary
-        fallback_queries = []
-        if missing_data_summary:
-            fallback_queries = [missing_data_summary[:200]]
-        return {
-            "targeted_gap_queries": fallback_queries,
-            "gap_analysis": {"has_gaps": bool(fallback_queries), "gap_type": "missing_metric",
-                             "missing_items": [], "targeted_queries": fallback_queries,
-                             "reasoning": f"Gap analysis failed: {e}"},
-        }
-
-
-def transform_query(state):
-    print("---TRANSFORM QUERY---")
-    messages = state["messages"]
-    question = messages[-1].content
-
-    #llm = ChatGroq(model="llama-3.1-8b-instant")
-    llm= ChatOpenAI(model="gpt-4o-mini")
-    question_rewriter = get_question_rewriter_chain(llm)
-    better_question = question_rewriter.invoke({"question": question})
-
-    tool_call_entry = {
-        "tool": "question_rewriter"
-    }
-
-    return {
-        "messages": [better_question],
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
-    }
 
 
 def web_search(state):
@@ -1733,30 +1412,28 @@ def web_search(state):
                     documents.append(doc)
                     total_chars += len(source['content'])
             
-            print(f"      → Found {len(sources)} sources, {len(documents)} unique total")
-        
-        print(f" ✓ Retrieved {len(documents)} unique documents across all sub-queries")
+            print(f"      → Found {len(sources)} sources, {len(documents)} chunks unique total")
+
+        print(f" ✓ Retrieved {len(documents)} unique chunks across all sub-queries")
     else:
         # Standard single search
         if search_query != question:
             print(f"Using optimized query for web search: {search_query[:150]}")
         else:
             print(f"Using original question for web search: {search_query[:150]}")
-        
+
         print(f" Restricting search to {len(TRUSTED_FINANCIAL_DOMAINS)} trusted financial domains")
         docs = web_search_tool.invoke({"query": search_query})
-        
-        # Parse Tavily response into individual sources
+
+        # Parse Tavily response into source chunks
         sources = _parse_tavily_response(docs, search_query)
-        
-        # Create separate documents for each source
+
         for source in sources:
-            # Include title and URL in document metadata for better traceability
             doc_content = f"**Source: {source['title']}**\n"
             if source['url']:
                 doc_content += f"URL: {source['url']}\n\n"
             doc_content += source['content']
-            
+
             doc = Document(
                 page_content=doc_content,
                 metadata={
@@ -1767,8 +1444,8 @@ def web_search(state):
             )
             documents.append(doc)
             total_chars += len(source['content'])
-        
-        print(f"Web search created {len(documents)} separate documents with {total_chars} total characters")
+
+        print(f"Web search produced {len(documents)} chunks ({total_chars} total chars)")
     
     if not documents or total_chars < 100:
         print("WARNING: Web search returned minimal content, response may be incomplete")
@@ -1896,427 +1573,93 @@ def _parse_tavily_response(docs, query):
     return sources
 
 
-def financial_web_search(state):
-    """
-    Fallback web search when vectorstore has no relevant documents.
-    Restricted to trusted financial domains, optimized for SEC filings.
-    Creates separate documents per source for better context utilization.
-    
-    NOW WITH UNIVERSAL SUB-QUERY SUPPORT:
-    - Uses sub_query_analysis from preprocessing
-    - Optimizes searches for SEC EDGAR filings
-    - Individual targeted searches for each data point
-    """
-    print("---FINANCIAL WEB SEARCH (SEC EDGAR FOCUSED)---")
-    messages = state["messages"]
-    question = messages[-1].content
-    enriched_query = state.get("enriched_query", question)
-    
-    # Use universal sub-query analysis
-    sub_query_analysis = state.get("sub_query_analysis", {})
-    needs_sub_queries = sub_query_analysis.get("needs_sub_queries", False)
-    sub_queries = sub_query_analysis.get("sub_queries", [])
-    companies_detected = sub_query_analysis.get("companies_detected", [])
-    
-    # Optimize for SEC filings
-    search_query = enriched_query if enriched_query != question else question
-    question_lower = question.lower()
-    is_sec_filing_query = any(kw in question_lower for kw in 
-        ['10-k', '10k', '10-q', '10q', 'annual report', 'md&a', 'mda', 
-         'management discussion', 'sec filing', 'edgar'])
-    
-    target_company = companies_detected[0] if companies_detected else None
-    
-    if is_sec_filing_query and target_company:
-        print(f"✓ SEC FILING QUERY FOR {target_company.upper()}")
-        import re
-        years = re.findall(r'\b(20\d{2})\b', question)
-        
-        if 'md&a' in question_lower or 'management discussion' in question_lower:
-            financial_search_query = f"{target_company} MD&A {' '.join(years) if years else ''} SEC 10-K financial data site:sec.gov"
-        elif '10-k' in question_lower or 'annual report' in question_lower:
-            financial_search_query = f"{target_company} 10-K {' '.join(years) if years else ''} financial statements site:sec.gov"
-        else:
-            financial_search_query = f"{search_query} financial data site:sec.gov/Archives/edgar"
-        print(f"✓ Optimized query: {financial_search_query[:100]}")
-    else:
-        financial_search_query = f"{search_query} financial data detailed numbers"
-    
-    # UNIVERSAL SUB-QUERY FINANCIAL WEB SEARCH
-    web_search_tool = TavilySearch(
-        max_results=5, 
-        include_raw_content=True,
-        include_domains=TRUSTED_FINANCIAL_DOMAINS
-    )
-    
-    documents = []
-    total_chars = 0
-    
-    if sub_queries:
-        print(f"---SUB-QUERY MODE: Searching individually for {len(sub_queries)} specific data points---")
-        seen_doc_ids = set()
-        
-        # Use the optimized SEC EDGAR query as base if we have it
-        base_query = financial_search_query if target_company else None
-        
-        for i, sq in enumerate(sub_queries, 1):
-            # For each sub-query, create a targeted search combining company + specific metric
-            if target_company:
-                # Example: "Meta 2023 current assets 10-K site:sec.gov/Archives/edgar"
-                sq_query = f"{target_company} {sq} 10-K site:sec.gov/Archives/edgar"
-            else:
-                sq_query = sq
-            
-            print(f"   {i}. Financial web searching for: {sq_query[:80]}...")
-            
-            # Search specifically for this data point
-            docs = web_search_tool.invoke({"query": sq_query})
-            sources = _parse_tavily_response(docs, sq_query)
-            
-            for source in sources:
-                doc_content = f"**Source: {source['title']}**\n"
-                if source['url']:
-                    doc_content += f"URL: {source['url']}\n\n"
-                doc_content += source['content']
-                
-                # Deduplicate by URL
-                doc_id = source['url'] if source['url'] else doc_content[:100]
-                if doc_id not in seen_doc_ids:
-                    seen_doc_ids.add(doc_id)
-                    doc = Document(
-                        page_content=doc_content,
-                        metadata={
-                            "source": "financial_web_search",
-                            "title": source['title'],
-                            "url": source['url']
-                        }
-                    )
-                    documents.append(doc)
-                    total_chars += len(source['content'])
-            
-            print(f"      → Found {len(sources)} sources, {len(documents)} unique total")
-        
-        print(f" ✓ Retrieved {len(documents)} unique documents across all sub-queries")
-    else:
-        # Standard single search with optimized query
-        if financial_search_query != question:
-            print(f"Using optimized query for financial web search: {financial_search_query[:150]}")
-        else:
-            print(f"Using original question for financial web search: {financial_search_query[:150]}")
-
-        print(f" Restricting search to {len(TRUSTED_FINANCIAL_DOMAINS)} trusted financial domains")
-        docs = web_search_tool.invoke({"query": financial_search_query})
-
-        # Parse Tavily response into individual sources
-        sources = _parse_tavily_response(docs, financial_search_query)
-        
-        # Create separate documents for each source
-        for source in sources:
-            # Include title and URL in document metadata for better traceability
-            doc_content = f"**Source: {source['title']}**\n"
-            if source['url']:
-                doc_content += f"URL: {source['url']}\n\n"
-            doc_content += source['content']
-            
-            doc = Document(
-                page_content=doc_content,
-                metadata={
-                    "source": "financial_web_search",
-                    "title": source['title'],
-                    "url": source['url']
-                }
-            )
-            documents.append(doc)
-            total_chars += len(source['content'])
-        
-        print(f"Financial web search created {len(documents)} separate documents with {total_chars} total characters")
-    
-    if not documents or total_chars < 100:
-        print("WARNING: Financial web search returned minimal content")
-
-    # Track sub-query results from web search
-    sub_query_results = state.get("sub_query_results", {})
-    if sub_queries and documents:
-        print("---EXTRACTING SUB-QUERY RESULTS FROM FINANCIAL WEB SEARCH---")
-        for sq in sub_queries:
-            if sq not in sub_query_results:
-                sub_query_results[sq] = {"found": False, "doc_count": 0, "sources": []}
-            
-            matched_docs = 0
-            for doc in documents:
-                sq_keywords = sq.lower().split()
-                doc_content = doc.page_content.lower()
-                if any(keyword in doc_content for keyword in sq_keywords if len(keyword) > 3):
-                    sub_query_results[sq]["sources"].append(doc.page_content[:500])
-                    matched_docs += 1
-            
-            if matched_docs > 0:
-                sub_query_results[sq]["found"] = True
-                sub_query_results[sq]["doc_count"] = matched_docs
-        
-        found_count = sum(1 for sq_data in sub_query_results.values() if isinstance(sq_data, dict) and sq_data.get("found", False))
-        print(f" Updated sub-query results: {found_count}/{len(sub_queries)} have data")
-    
-    # NEW: Extract actual financial metric values from web search documents
-    extracted_metrics = {}
-    sub_query_analysis = state.get("sub_query_analysis", {})
-    is_financial_calc = sub_query_analysis.get("query_type") == "financial_calculation"
-    
-    if is_financial_calc and documents:
-        print("---EXTRACTING FINANCIAL METRICS FROM WEB DOCUMENTS---")
-        extracted_metrics = extract_financial_metrics_from_documents(documents)
-        if extracted_metrics:
-            print(f"✓ Successfully extracted {len(extracted_metrics)} financial metrics from web documents")
-        else:
-            print("  Could not extract specific numeric values from web documents")
-
-    tool_call_entry = {
-        "tool": "financial_web_search",
-        "sub_queries_used": len(sub_queries) > 0,
-        "metrics_extracted": len(extracted_metrics) > 0
-    }
-
-    return {
-        "documents": documents,
-        "web_searched": True,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry],
-        "sub_query_results": sub_query_results,
-        "extracted_financial_metrics": extracted_metrics
-    }
-
-
 def integrate_web_search(state):
     """
-    SMART WEB SEARCH INTEGRATION: Uses targeted gap queries OR missing sub-queries.
-    
-    NEW ENHANCED APPROACH:
-    1. PRIORITY: Use targeted queries from gap analysis (specific missing data points)
-    2. FALLBACK: Use missing sub-queries if no gap analysis
-    3. Combine web results with existing vectorstore documents
-    
-    This implements the gap analysis strategy: search ONLY for specifically identified missing data.
+    WEB SEARCH INTEGRATION: Builds a single query from missing data + ticker + company name,
+    executes one search, and combines results with existing vectorstore documents.
     """
-    print("---INTEGRATE WEB SEARCH (GAP-AWARE TARGETED SEARCH)---")
+    print("---INTEGRATE WEB SEARCH---")
     messages = state["messages"]
     question = messages[-1].content
     existing_documents = state.get("documents", [])
-    
-    # NEW: Check if we have targeted gap queries from gap analysis
-    targeted_gap_queries = state.get("targeted_gap_queries", [])
-    gap_analysis = state.get("gap_analysis", {})
-    
-    # Get sub-query analysis and results (fallback if no gap analysis)
-    sub_query_analysis = state.get("sub_query_analysis", {})
-    sub_query_results = state.get("sub_query_results", {})
-    companies_detected = sub_query_analysis.get("companies_detected", [])
-    
-    #  NEW: Use portfolio company filter if available (takes priority over detected companies)
+
+    # Resolve company and ticker identifiers
     company_filter = state.get("company_filter", [])
+    companies_detected = state.get("sub_query_analysis", {}).get("companies_detected", []) or state.get("companies_detected", [])
+    ticker = state.get("ticker", "")
+
     if company_filter:
-        # Portfolio company filter (already scoped to specific companies)
-        target_company = company_filter[0] if isinstance(company_filter, list) else company_filter
-        print(f" Using portfolio company for web search: {target_company}")
+        company = company_filter[0] if isinstance(company_filter, list) else company_filter
     elif companies_detected:
-        target_company = companies_detected[0]
-        print(f" Using detected company for web search: {target_company}")
+        company = companies_detected[0]
     else:
-        target_company = None
-        print(f" No company specified for web search (will search generically)")
-    
-    # PRIORITY 1: Use targeted gap queries (most specific)
-    if targeted_gap_queries:
-        print(f" USING TARGETED GAP QUERIES FROM GAP ANALYSIS")
-        print(f"   Gap Type: {gap_analysis.get('gap_type', 'unknown')}")
-        print(f"   Missing Items: {', '.join(gap_analysis.get('missing_items', [])[:3])}")
-        print(f"   Targeted Queries: {len(targeted_gap_queries)}")
-        
-        search_queries_to_execute = targeted_gap_queries
-        mode = "gap_analysis"
-        
-        for i, query in enumerate(targeted_gap_queries, 1):
-            print(f"     {i}. {query}")
-    
-    # PRIORITY 2: Use missing sub-queries (fallback)
+        company = ""
+
+    # Build a single combined query using ticker, company name, and missing data summary
+    financial_grading = state.get("financial_grading", {})
+    missing_summary = financial_grading.get("missing_data_summary", "")
+
+    query_parts = []
+    if ticker:
+        query_parts.append(ticker)
+    if company:
+        query_parts.append(company)
+    if missing_summary:
+        query_parts.append(missing_summary)
     else:
-        print(f" USING MISSING SUB-QUERIES (no gap analysis available)")
-        
-        sub_queries = sub_query_analysis.get("sub_queries", [])
-        needs_sub_queries = sub_query_analysis.get("needs_sub_queries", False)
-        
-        missing_sub_queries = []
-        if needs_sub_queries and sub_queries:
-            # Find sub-queries with no data or incomplete data
-            for sq in sub_queries:
-                sq_data = sub_query_results.get(sq, {})
-                has_data = sq_data.get("found", False) if isinstance(sq_data, dict) else bool(sq_data)
-                
-                if not has_data:
-                    missing_sub_queries.append(sq)
-            
-            print(f"   Total sub-queries: {len(sub_queries)}")
-            print(f"   Sub-queries with data: {len(sub_queries) - len(missing_sub_queries)}")
-            print(f"   MISSING sub-queries: {len(missing_sub_queries)}")
-            
-            if missing_sub_queries:
-                for i, msq in enumerate(missing_sub_queries, 1):
-                    print(f"     {i}. {msq}")
+        query_parts.append(question)
 
-                # Convert missing sub-queries to search queries (include company name!)
-                search_queries_to_execute = []
-                for msq in missing_sub_queries:
-                    if target_company:
-                        search_query = f"{target_company} {msq} financial data annual report"
-                        print(f"    Query: {search_query}")
-                    else:
-                        search_query = f"{msq} financial data annual report"
-                    search_queries_to_execute.append(search_query)
+    search_query = " ".join(query_parts)
+    print(f"  Search query: {search_query[:150]}")
 
-                mode = "sub_queries"
-            else:
-                # No missing sub-queries — build a targeted fallback query
-                print("     No missing sub-queries, building targeted fallback query")
-                if target_company:
-                    search_queries_to_execute = [
-                        f"{target_company} financial statements balance sheet income statement annual report 10-K"
-                    ]
-                else:
-                    search_queries_to_execute = [
-                        f"{question} annual report 10-K SEC filing"
-                    ]
-                mode = "general"
-        else:
-            # No sub-query mode — build targeted fallback instead of raw question
-            print("   No sub-queries defined, building targeted fallback query")
-            if target_company:
-                search_queries_to_execute = [
-                    f"{target_company} financial statements balance sheet income statement annual report 10-K"
-                ]
-            else:
-                search_queries_to_execute = [
-                    f"{question} annual report 10-K SEC filing"
-                ]
-            mode = "general"
-    
-    # Setup web search tool
     web_search_tool = TavilySearch(
-        max_results=5, 
+        max_results=5,
         include_raw_content=True,
         include_domains=TRUSTED_FINANCIAL_DOMAINS
     )
-    
+
     web_documents = []
-    total_chars = 0
     seen_doc_ids = set()
-    updated_sub_query_results = dict(sub_query_results)
-    
-    # EXECUTE TARGETED SEARCHES
-    print(f"\n---EXECUTING {len(search_queries_to_execute)} TARGETED WEB SEARCHES ({mode} mode)---")
-    
-    for i, search_query in enumerate(search_queries_to_execute, 1):
-        print(f"\n   {i}/{len(search_queries_to_execute)}: {search_query[:100]}")
-        
-        try:
-            docs = web_search_tool.invoke({"query": search_query})
-            sources = _parse_tavily_response(docs, search_query)
-            
-            print(f"      Found {len(sources)} sources")
-            
-            # Create documents from sources
-            query_doc_count = 0
-            for source in sources:
-                doc_content = f"**Source: {source['title']}**\n"
-                if source['url']:
-                    doc_content += f"URL: {source['url']}\n\n"
-                doc_content += source['content']
-                
-                # Deduplicate by URL
-                doc_id = source['url'] if source['url'] else doc_content[:100]
-                if doc_id not in seen_doc_ids:
-                    seen_doc_ids.add(doc_id)
-                    doc = Document(
-                        page_content=doc_content,
-                        metadata={
-                            "source": "integrate_web_search",
-                            "title": source['title'],
-                            "url": source['url'],
-                            "search_query": search_query,
-                            "search_mode": mode
-                        }
-                    )
-                    web_documents.append(doc)
-                    total_chars += len(source['content'])
-                    query_doc_count += 1
-            
-            if query_doc_count > 0:
-                print(f"      ✓ Retrieved {query_doc_count} unique documents")
-            else:
-                print(f"        No unique documents (may be duplicates)")
-                
-        except Exception as e:
-            print(f"        ERROR: {e}")
-    
-    print(f"\n---WEB SEARCH COMPLETE---")
-    print(f"Total unique documents: {len(web_documents)}")
-    print(f"Total characters: {total_chars:,}")
-    print(f"Mode: {mode}")
-    
-    # Combine existing and web documents
+    total_chars = 0
+
+    try:
+        docs = web_search_tool.invoke({"query": search_query})
+        sources = _parse_tavily_response(docs, search_query)
+        print(f"  Found {len(sources)} sources")
+
+        for source in sources:
+            doc_id = source["url"] if source["url"] else source["content"][:100]
+            if doc_id in seen_doc_ids:
+                continue
+            seen_doc_ids.add(doc_id)
+            doc_content = f"**Source: {source['title']}**\n"
+            if source["url"]:
+                doc_content += f"URL: {source['url']}\n\n"
+            doc_content += source["content"]
+            web_documents.append(Document(
+                page_content=doc_content,
+                metadata={
+                    "source": "integrate_web_search",
+                    "title": source["title"],
+                    "url": source["url"],
+                    "search_query": search_query,
+                }
+            ))
+            total_chars += len(source["content"])
+    except Exception as e:
+        print(f"  ERROR during web search: {e}")
+
     combined_documents = existing_documents + web_documents
-    
-    tool_call_entry = {
-        "tool": "integrate_web_search",
-        "search_mode": mode,
-        "queries_executed": len(search_queries_to_execute),
-        "web_docs_retrieved": len(web_documents)
-    }
-    
-    print(f"\n✓ INTEGRATED WEB SEARCH RESULT:")
-    print(f"  Existing docs: {len(existing_documents)}")
-    print(f"  New web docs: {len(web_documents)} ({total_chars:,} chars)")
-    print(f"  Total combined: {len(combined_documents)}")
-    
+    print(f"  Existing chunks: {len(existing_documents)} | New web chunks: {len(web_documents)} | Total: {len(combined_documents)}")
+
     return {
         "documents": combined_documents,
         "web_searched": True,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry],
-        "sub_query_results": updated_sub_query_results  # Update with web search results
-    }
-
-
-def evaluate_vectorstore_quality(state):
-    """
-    Evaluate the quality of vectorstore results to determine if web search is needed.
-    """
-    print("---EVALUATE VECTORSTORE QUALITY---")
-    messages = state["messages"]
-    question = messages[-1].content
-    documents = state.get("documents", [])
-
-    # Simple heuristics to evaluate vectorstore quality
-    quality = "none"
-    needs_web_fallback = True
-
-    if documents:
-        # Check if we have sufficient relevant documents
-        if len(documents) >= 2:
-            quality = "good"
-            needs_web_fallback = False
-        elif len(documents) == 1:
-            quality = "poor"
-            needs_web_fallback = True
-        else:
-            quality = "none"
-            needs_web_fallback = True
-    
-    tool_call_entry = {
-        "tool": "evaluate_vectorstore_quality"
-    }
-
-    print(f"VECTORSTORE QUALITY: {quality}, NEEDS WEB FALLBACK: {needs_web_fallback}")
-    return {
-        "vectorstore_quality": quality,
-        "needs_web_fallback": needs_web_fallback,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
+        "tool_calls": state.get("tool_calls", []) + [{
+            "tool": "integrate_web_search",
+            "query": search_query,
+            "web_docs_retrieved": len(web_documents)
+        }],
     }
 
 
@@ -2574,7 +1917,7 @@ def generate_comparison_chart(state):
         fig = go.Figure(data=bars)
         
         # Update layout - with support for negative values
-        chart_year = str(state.get("year_start") or state.get("year_end") or "2024")
+        chart_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
         title = f'Financial Comparison: {company1} vs {company2}'
         if company3:
             title += f" vs {company3}"
@@ -2900,7 +2243,7 @@ def alpha_dimension_retrieve(state):
             'documents': liquidity_docs,
             'query_count': len(vdb_queries) + len(web_queries)
         }
-        print(f"    Retrieved {len(liquidity_docs)} documents (mixed sources)")
+        print(f"    Retrieved {len(liquidity_docs)} chunks (mixed sources)")
         
     except Exception as e:
         print(f"    Error: {e}")
@@ -2911,10 +2254,11 @@ def alpha_dimension_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
     try:
+        _cur_yr = datetime.now().year
         performance_queries = [
-            f"{ticker} revenue net income latest annual fiscal year 2025 2026 financial results",
-            f"{ticker} operating cash flow free cash flow income statement most recent annual 2025 2026",
-            f"{ticker} EBITDA margins ROE profitability metrics latest fiscal year 2025 2026 "
+            f"{ticker} revenue net income latest annual fiscal year {_cur_yr} {_cur_yr + 1} financial results",
+            f"{ticker} operating cash flow free cash flow income statement most recent annual {_cur_yr} {_cur_yr + 1}",
+            f"{ticker} EBITDA margins ROE profitability metrics latest fiscal year {_cur_yr} {_cur_yr + 1}"
         ]
         
         performance_docs = []
@@ -2934,7 +2278,7 @@ def alpha_dimension_retrieve(state):
             'documents': performance_docs[:6],
             'query_count': len(performance_queries)
         }
-        print(f"    Retrieved {len(performance_docs[:6])} documents")
+        print(f"    Retrieved {len(performance_docs[:6])} chunks")
         
     except Exception as e:
         print(f"    Error: {e}")
@@ -2970,7 +2314,7 @@ def alpha_dimension_retrieve(state):
             'documents': horizon_docs,
             'query_count': len(horizon_queries)
         }
-        print(f"    Retrieved {len(horizon_docs)} documents (SeekingAlpha)")
+        print(f"    Retrieved {len(horizon_docs)} chunks (SeekingAlpha)")
 
     except Exception as e:
         print(f"    Error: {e}")
@@ -3120,7 +2464,7 @@ def alpha_dimension_retrieve(state):
         }
     
     print("\n" + "="*80)
-    print(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total documents")
+    print(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total chunks")
     print("="*80 + "\n")
     
     return {
@@ -3141,7 +2485,7 @@ def alpha_generate_report(state):
     alpha_dimensions = state.get("alpha_dimensions", {})
     
     from langchain_openai import ChatOpenAI
-    from rag.vectordb.chains import (
+    from rag.prompts.prompts import (
         get_alpha_alignment_chain,
         get_alpha_liquidity_chain,
         get_alpha_performance_chain,
@@ -3448,8 +2792,9 @@ def scenario_data_retrieve(state):
     # 1. Analyst Ratings & Brokerage Price Targets
     # -------------------------------------------------------------------------
     print(" [1/6] Analyst ratings & brokerage price targets")
+    _s_yr = datetime.now().year
     analyst_queries = [
-        f"{ticker} analyst rating consensus buy sell hold price target 2025",
+        f"{ticker} analyst rating consensus buy sell hold price target {_s_yr}",
         f"{ticker} Goldman Sachs Morgan Stanley JPMorgan BofA Citi analyst recommendation",
         f"{ticker} Wells Fargo Barclays UBS Bernstein Wolfe Evercore analyst price target",
         f"{ticker} analyst upgrade downgrade rating change latest",
@@ -3473,7 +2818,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [2/6] Valuation metrics")
     valuation_queries = [
-        f"{ticker} P/E ratio EV/EBITDA price to sales valuation 2025",
+        f"{ticker} P/E ratio EV/EBITDA price to sales valuation {_s_yr}",
         f"{ticker} fair value DCF intrinsic value analyst estimate",
     ]
     for q in valuation_queries:
@@ -3495,7 +2840,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [3/6] Growth catalysts & bull drivers")
     catalyst_queries = [
-        f"{ticker} growth drivers catalysts bullish case upside 2025 2026",
+        f"{ticker} growth drivers catalysts bullish case upside {_s_yr} {_s_yr + 1}",
         f"{ticker} new product launch market expansion revenue growth opportunity",
         f"{ticker} competitive advantage pricing power margin expansion",
     ]
@@ -3518,7 +2863,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [4/6] Downside risks & bear headwinds")
     risk_queries = [
-        f"{ticker} risks headwinds bearish case downside 2025",
+        f"{ticker} risks headwinds bearish case downside {_s_yr}",
         f"{ticker} competition market share loss regulatory risk",
         f"{ticker} margin compression debt leverage concern analyst warning",
     ]
@@ -3541,7 +2886,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [5/6] Credit rating agency reports")
     credit_queries = [
-        f"{ticker} credit rating S&P Moody's Fitch rating outlook 2025",
+        f"{ticker} credit rating S&P Moody's Fitch rating outlook {_s_yr}",
         f"{ticker} bond rating investment grade speculative debt outlook",
     ]
     for q in credit_queries:
@@ -3563,7 +2908,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     print(" [6/6] Macro & sector environment")
     macro_queries = [
-        f"{ticker} sector macro outlook interest rate impact 2025",
+        f"{ticker} sector macro outlook interest rate impact {_s_yr}",
         f"{ticker} industry trends tailwinds headwinds economic environment",
     ]
     for q in macro_queries:
@@ -3605,7 +2950,7 @@ def scenario_generate_report(state):
     scenario_data = state.get("scenario_data", {})
 
     from langchain_openai import ChatOpenAI
-    from rag.vectordb.chains import (
+    from rag.prompts.prompts import (
         get_scenario_bull_chain,
         get_scenario_bear_chain,
         get_scenario_base_chain,
