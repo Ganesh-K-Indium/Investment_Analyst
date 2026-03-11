@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from rag.graph.builder import BuildingGraph
-from rag.graph.semantic_cache import SemanticCache
 from app.database.connection import init_db
 from app.api.portfolios import router as portfolio_router
 from app.api.rag import router as rag_router
@@ -39,7 +38,6 @@ app.add_middleware(
 # Global instances
 graph_obj = None
 agent = None
-semantic_cache = None
 checkpointer_context = None
 checkpointer = None
 stock_supervisor = None
@@ -48,7 +46,7 @@ stock_supervisor = None
 @app.on_event("startup")
 async def startup_event():
     """Initialize database, graph, cache, and stock agents on startup"""
-    global graph_obj, agent, semantic_cache, checkpointer_context, checkpointer, stock_supervisor
+    global graph_obj, agent, checkpointer_context, checkpointer, stock_supervisor
     
     print("\n" + "="*70)
     print("Starting Investment Analyst API v2.1...")
@@ -68,13 +66,8 @@ async def startup_event():
     graph_obj = BuildingGraph()
     agent = await graph_obj.get_graph(checkpointer=checkpointer)
     
-    # Initialize semantic cache
-    print("Initializing semantic cache...")
-    semantic_cache = SemanticCache()
-    
     # Set global instances in RAG router
     rag_router_module.set_agent(agent)
-    rag_router_module.set_semantic_cache(semantic_cache)
     
     # Initialize Stock Analysis Agents (with separate checkpointer)
     print("\nInitializing Stock Analysis System...")
@@ -193,8 +186,7 @@ async def health_check():
         "services": {
             "document_analysis": {
                 "status": "operational" if agent is not None else "unavailable",
-                "graph_initialized": agent is not None,
-                "cache_initialized": semantic_cache is not None
+                "graph_initialized": agent is not None
             },
             "stock_analysis": {
                 "status": "operational" if stock_supervisor is not None else "unavailable",

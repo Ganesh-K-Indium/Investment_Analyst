@@ -38,7 +38,6 @@ class CompareInput(BaseModel):
 class HealthStatusResponse(BaseModel):
     status: str
     agent_initialized: bool
-    cache_initialized: bool
     timestamp: str
 
 
@@ -51,19 +50,12 @@ class CapabilitiesResponse(BaseModel):
 
 # Global references (set by main app)
 agent = None
-semantic_cache = None
 
 
 def set_agent(agent_instance):
     """Set the global agent instance"""
     global agent
     agent = agent_instance
-
-
-def set_semantic_cache(cache_instance):
-    """Set the global semantic cache instance"""
-    global semantic_cache
-    semantic_cache = cache_instance
 
 
 @router.post("/ask")
@@ -136,20 +128,6 @@ async def ask_agent(
         print(f"   Tickers: {company_tickers}")
         
         config = {"configurable": {"thread_id": thread_id}}
-        
-        # Check semantic cache
-        if semantic_cache:
-            start_time = datetime.datetime.now()
-            # Cache key is just the query for this thread context
-            cache_query = query
-            cached_data = semantic_cache.lookup(cache_query, thread_id=thread_id)
-            if cached_data:
-                print(f"Returning cached response for: {cache_query}")
-                response = cached_data.get("response")
-                response["thread_id"] = thread_id
-                elapsed = (datetime.datetime.now() - start_time).total_seconds()
-                print(f"Cache response time: {elapsed:.4f}s")
-                return response
         
         # Standard execution
         inputs = {
@@ -257,11 +235,6 @@ async def ask_agent(
             json.dump(response_data, f, indent=4)
         
         print(f"Response saved to: {json_path}")
-        
-        # Update cache
-        if semantic_cache:
-            cache_query = query
-            semantic_cache.update(cache_query, response_data, thread_id=thread_id)
         
         return response_data
         
@@ -520,13 +493,11 @@ async def health_check():
     - Semantic cache is initialized
     - System is ready to handle queries
     """
-    overall_healthy = agent is not None and semantic_cache is not None
-    status = "healthy" if overall_healthy else "unhealthy"
-    
+    status = "healthy" if agent is not None else "unhealthy"
+
     return HealthStatusResponse(
         status=status,
         agent_initialized=agent is not None,
-        cache_initialized=semantic_cache is not None,
         timestamp=datetime.datetime.now().isoformat()
     )
 
@@ -541,7 +512,6 @@ async def get_capabilities():
             "Multi-document context synthesis",
             "Source citations and document references",
             "Web search fallback for missing information",
-            "Semantic caching for faster responses",
             "Human-in-the-loop clarification requests",
             "Sub-query decomposition for complex questions"
         ],
