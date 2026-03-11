@@ -757,6 +757,21 @@ def retrieve(state, config):
     # Fall back to sub_query_analysis for backward compatibility
     requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [datetime.now().year]
 
+    # SEGMENT / GEOGRAPHIC OPTIMISATION:
+    # A 10-K covers the filing year + 2 prior years (3-year comparative).
+    #  span == 2  →  e.g. [2022, 2023, 2024]: the 2024 10-K already contains all three
+    #                years → query ONLY the last year.
+    #  span  > 2  →  e.g. [2020..2024]: no single 10-K covers the full range → query
+    #                first + last (their 10-Ks together cover the entire window).
+    if query_type in ("segment", "geographic") and len(requested_years) > 1:
+        year_span = requested_years[-1] - requested_years[0]
+        if year_span == 2:
+            requested_years = [requested_years[-1]]
+            print(f" Span=2y → querying only [{requested_years[0]}] (single 10-K covers all 3 years)")
+        elif year_span > 2:
+            requested_years = [requested_years[0], requested_years[-1]]
+            print(f" Span={year_span}y → querying [{requested_years[0]}, {requested_years[-1]}] (first+last 10-K covers full range)")
+
     target_tickers = set()
 
     # Strategy: Strictly use provided inputs
@@ -1220,220 +1235,82 @@ def grade_documents(state):
             }]
         }
     
-    # Parallel batch grading - grade ALL chunks for maximum accuracy
-    # Process in batches to respect context limits while ensuring complete coverage
-
-    web_docs = [d for d in documents if d.metadata.get("source", "") in ["web_search", "integrate_web_search"]]
-    vectorstore_docs = [d for d in documents if d not in web_docs]
-
-    print(f"  Vectorstore chunks: {len(vectorstore_docs)} (high quality)")
-    print(f"  Web chunks: {len(web_docs)} (needs careful grading)")
-
-    # Grade ALL chunks - no sampling to avoid missing data
-    docs_to_grade = documents
-    print(f"  Grading ALL {len(documents)} chunks in batches")
-
-    # Batch size for parallel processing (fit in LLM context)
-    BATCH_SIZE = 20  # Grade 20 chunks per LLM call
-
-    # Initialize financial analyst grader
+    # Initialize financial analyst grader with gpt-4o
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
     analyst_grader = get_financial_analyst_grader_chain(llm)
 
-    # Split chunks into batches
-    doc_batches = [docs_to_grade[i:i + BATCH_SIZE] for i in range(0, len(docs_to_grade), BATCH_SIZE)]
-    print(f"  Processing {len(doc_batches)} batches in parallel...")
-
-    # Function to grade a single batch
-    def grade_batch(batch, batch_idx):
-        doc_previews = []
-        preview_chars_per_doc = min(900, 45000 // len(batch))
-
-        for i, doc in enumerate(batch, 1):
-            if hasattr(doc, 'page_content'):
-                content = doc.page_content[:preview_chars_per_doc]
-            elif isinstance(doc, dict) and 'page_content' in doc:
-                content = doc['page_content'][:preview_chars_per_doc]
-            else:
-                content = str(doc)[:preview_chars_per_doc]
-
-            # Include metadata for context
-            metadata_str = ""
-            if hasattr(doc, 'metadata'):
-                company = doc.metadata.get("company", "Unknown")
-                source = doc.metadata.get("source", "Unknown")
-                metadata_str = f" [Company: {company}, Source: {source}]"
-
-            doc_previews.append(f"--- Document {i} ---{metadata_str}\n{content}\n")
-
-        doc_preview_text = "\n".join(doc_previews)
-
-        try:
-            grade = analyst_grader.invoke({
-                "question": question,
-                "doc_count": len(batch),
-                "doc_previews": doc_preview_text,
-                "companies_detected": ", ".join(companies_detected) if companies_detected else "None",
-                "query_type": query_type
-            })
-            print(f"    ✅ Batch {batch_idx + 1}/{len(doc_batches)}: {len(batch)} chunks graded")
-            return grade
-        except Exception as e:
-            print(f"    ❌ Batch {batch_idx + 1} failed: {e}")
-            return None
-
-    # Grade batches in parallel
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    batch_grades = []
-    with ThreadPoolExecutor(max_workers=min(5, len(doc_batches))) as executor:
-        futures = {executor.submit(grade_batch, batch, idx): idx
-                   for idx, batch in enumerate(doc_batches)}
-
-        for future in as_completed(futures):
-            grade = future.result()
-            if grade:
-                batch_grades.append(grade)
-
-    print(f"  ✅ Graded {len(batch_grades)} batches successfully")
-
-    # Aggregate results from all batches
-    if not batch_grades:
-        print("  ⚠️  No successful batch grades, using fallback")
-        doc_preview_text = ""  # Will trigger fallback in next block
-    else:
-        # Merge all batch grades into a single result
-        # Take the most conservative grade (if any batch says "insufficient", overall is "insufficient")
-        all_grades = [g.overall_grade for g in batch_grades if g]
-        if "insufficient" in all_grades:
-            overall_grade = "insufficient"
-        elif "partial" in all_grades:
-            overall_grade = "partial"
-        else:
-            overall_grade = "sufficient"
-
-        # Aggregate company coverage with proper deduplication
-        company_coverage_map = {}
-        for grade in batch_grades:
-            for cc in grade.company_coverage:
-                if cc.company not in company_coverage_map:
-                    # Create new entry with dict representation
-                    company_coverage_map[cc.company] = {
-                        "company": cc.company,
-                        "confidence": cc.confidence,
-                        "metrics_found": set(cc.metrics_found),
-                        "metrics_missing": set(cc.metrics_missing),
-                        "year_coverage": set(cc.year_coverage)
-                    }
-                else:
-                    # Merge metrics
-                    existing = company_coverage_map[cc.company]
-                    existing["metrics_found"].update(cc.metrics_found)
-                    existing["metrics_missing"].update(cc.metrics_missing)
-                    existing["year_coverage"].update(cc.year_coverage)
-
-        # Fix: Remove items from "missing" if they're in "found"
-        for company, data in company_coverage_map.items():
-            found = data["metrics_found"]
-            missing = data["metrics_missing"]
-            # Remove any metric from missing if it's in found
-            data["metrics_missing"] = missing - found
-            # Convert sets to lists
-            data["metrics_found"] = list(found)
-            data["metrics_missing"] = list(missing - found)
-            data["year_coverage"] = list(data["year_coverage"])
-
-        # Determine if we can answer based on missing data
-        can_answer = all(len(data["metrics_missing"]) == 0 for data in company_coverage_map.values())
-        if can_answer and overall_grade == "insufficient":
-            overall_grade = "excellent"
-
-        # Create aggregated analyst grade as a proper dict-like object
-        class AnalystGradeResult:
-            def __init__(self, grade_dict):
-                self._dict = grade_dict
-                self.overall_grade = grade_dict["overall_grade"]
-                self.can_answer_question = grade_dict["can_answer_question"]
-                self.reasoning = grade_dict["reasoning"]
-                self.company_coverage = grade_dict["company_coverage"]
-                self.missing_data_summary = grade_dict["missing_data_summary"]
-
-            def dict(self):
-                return self._dict
-
-        # Build a specific missing_data_summary from actual missing metrics
-        missing_parts = []
-        for company, data in company_coverage_map.items():
-            if data["metrics_missing"]:
-                missing_parts.append(
-                    f"{company}: missing {', '.join(data['metrics_missing'][:3])}"
-                )
-        specific_missing_summary = "; ".join(missing_parts) if missing_parts else ""
-
-        analyst_grade = AnalystGradeResult({
-            "overall_grade": overall_grade,
-            "can_answer_question": can_answer,
-            "reasoning": f"Aggregated from {len(batch_grades)} batches (parallel grading)",
-            "company_coverage": list(company_coverage_map.values()),
-            "missing_data_summary": specific_missing_summary
-        })
-
-        # Set up doc_preview_text for the try block (even though we don't use it now)
-        doc_preview_text = "Aggregated from batches"
-
-    print(f"  Final analysis complete")
+    # Concatenate all documents into a single massive context window
+    # gpt-4o has a 128k context window, allowing us to pass up to ~80k-100k chars easily
+    doc_previews = []
+    total_chars = 0
+    MAX_CHARS = 100000 
     
-    try:
-        # Analyst grade already computed above via parallel batch processing
-        # This try block now just handles the result formatting
-        
-        print(f"\n FINANCIAL ANALYST GRADE: {analyst_grade.overall_grade.upper()}")
-        print(f"Can Answer Question: {analyst_grade.can_answer_question}")
-        print(f"Reasoning: {analyst_grade.reasoning}")
-        
-        # Log per-company coverage
-        for company_coverage in analyst_grade.company_coverage:
-            # Handle both dict and object types
-            company = company_coverage.get("company") if isinstance(company_coverage, dict) else company_coverage.company
-            confidence = company_coverage.get("confidence") if isinstance(company_coverage, dict) else company_coverage.confidence
-            year_coverage = company_coverage.get("year_coverage", []) if isinstance(company_coverage, dict) else company_coverage.year_coverage
-            metrics_found = company_coverage.get("metrics_found", []) if isinstance(company_coverage, dict) else company_coverage.metrics_found
-            metrics_missing = company_coverage.get("metrics_missing", []) if isinstance(company_coverage, dict) else company_coverage.metrics_missing
+    for i, doc in enumerate(documents, 1):
+        if hasattr(doc, 'page_content'):
+            content = doc.page_content
+        elif isinstance(doc, dict) and 'page_content' in doc:
+            content = doc['page_content']
+        else:
+            content = str(doc)
 
-            print(f"\n  Company: {company}")
-            print(f"    Confidence: {confidence}")
-            print(f"    Years: {', '.join(year_coverage) if year_coverage else 'Unknown'}")
-            print(f"    Metrics Found: {', '.join(metrics_found[:5])}{'...' if len(metrics_found) > 5 else ''}")
-            if metrics_missing:
-                print(f"      Metrics Missing: {', '.join(metrics_missing[:3])}{'...' if len(metrics_missing) > 3 else ''}")
+        metadata_str = ""
+        if hasattr(doc, 'metadata'):
+            company = doc.metadata.get("company", "Unknown")
+            source = doc.metadata.get("source", "Unknown")
+            metadata_str = f" [Company: {company}, Source: {source}]"
+            
+        preview = f"--- Document {i} ---{metadata_str}\n{content}\n"
         
-        if analyst_grade.missing_data_summary:
-            print(f"\n   MISSING DATA: {analyst_grade.missing_data_summary}")
+        if total_chars + len(preview) > MAX_CHARS:
+            # Add a truncated version of the last document that fits
+            remaining = MAX_CHARS - total_chars
+            if remaining > 100:
+                doc_previews.append(preview[:remaining] + "...[TRUNCATED TO FIT CONTEXT]")
+            break
+            
+        doc_previews.append(preview)
+        total_chars += len(preview)
+
+    doc_preview_text = "\n".join(doc_previews)
+    print(f"  Sending {len(doc_previews)} documents ({total_chars} chars) to gpt-4o grader...")
+
+    sub_queries = "\n".join([f"- {sq}" for sq in sub_query_analysis.get("sub_queries", [])]) if sub_query_analysis.get("sub_queries") else "None"
+
+    try:
+        # Perform single LLM call
+        grade = analyst_grader.invoke({
+            "question": question,
+            "sub_queries": sub_queries,
+            "doc_content": doc_preview_text
+        })
+        
+        print(f"\n FINANCIAL ANALYST GRADE:")
+        print(f"  Is Sufficient: {grade.is_sufficient}")
+        if grade.missing_data_summary:
+            print(f"  Missing Data: {grade.missing_data_summary}")
+        
+        overall_grade = "sufficient" if grade.is_sufficient else "insufficient"
         
         # Store grading result in state for decision-making
         grading_result = {
-            "analyst_grade": analyst_grade.dict(),
-            "overall_grade": analyst_grade.overall_grade,
-            "can_answer": analyst_grade.can_answer_question,
-            "missing_data_summary": analyst_grade.missing_data_summary,
-            "company_coverage": analyst_grade.company_coverage,  # Already dicts, don't call .dict()
-            "documents_graded_count": len(documents)
+            "overall_grade": overall_grade,
+            "can_answer": grade.is_sufficient,
+            "missing_data_summary": grade.missing_data_summary,
+            "company_coverage": [], # Removed complex coverage tracking
+            "documents_graded_count": len(doc_previews)
         }
-
-        # Pass all chunks through; decision node uses grading to determine if web search needed
-        filtered_docs = documents
 
         tool_call_entry = {
             "tool": "financial_analyst_grader",
-            "grade": analyst_grade.overall_grade,
-            "can_answer": analyst_grade.can_answer_question
+            "grade": overall_grade,
+            "can_answer": grade.is_sufficient
         }
 
-        print(f"\n GRADING COMPLETE: {len(filtered_docs)} chunks")
+        print(f"\n GRADING COMPLETE: {len(documents)} chunks evaluated")
         print(f"   Next: Decision node will use this grading to determine if web search needed")
 
         return {
-            "documents": filtered_docs,
+            "documents": documents,
             "financial_grading": grading_result,
             "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
         }

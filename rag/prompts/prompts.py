@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 def _current_year() -> int:
     return datetime.now().year
 from schemas.models import (GradeHallucinations, GradeAnswer,
-                                        UniversalSubQueryAnalysis, FinancialAnalystGrade,
+                                        UniversalSubQueryAnalysis, SimpleDocumentGrade,
                                         StructuredFinancialData)
 
 
@@ -750,164 +750,31 @@ You are a FINANCIAL ANALYST EXPERT. Use your deep knowledge of 10-K document str
 def get_financial_analyst_grader_chain(llm):
     """
     FINANCIAL ANALYST DOCUMENT GRADING: Evaluates documents like a financial analyst.
-    Instead of binary yes/no, identifies what metrics ARE present and what's MISSING.
+    Simple and robust check if the documents can answer the question.
     """
-    structured_llm = llm.with_structured_output(FinancialAnalystGrade)
+    structured_llm = llm.with_structured_output(SimpleDocumentGrade)
     
     SYSTEM_PROMPT = """You are a SENIOR FINANCIAL ANALYST with expertise in SEC filings, 10-K reports, and financial statement analysis.
 
-**YOUR MISSION**: Evaluate retrieved documents to determine if they contain sufficient financial data to answer the user's question.
+**YOUR MISSION**: Evaluate the provided retrieved documents to determine if they contain sufficient financial data to answer the user's explicit question.
 
-**STRICT SCOPE RULE — MOST IMPORTANT**:
-Only evaluate data that the question EXPLICITLY asks for. Do NOT mark as missing:
-- Industry averages, benchmarks, or peer comparisons (unless the question asks to compare with peers)
-- Historical trends or multi-year data (unless the question asks for trends or multiple years)
-- Additional context like analyst ratings, forward guidance, or qualitative commentary (unless specifically asked)
-- Data for years NOT mentioned in the question
-
-**ANALYSIS APPROACH**:
-
-1. **IDENTIFY REQUIRED DATA — BE MINIMAL**:
-   - Read the question carefully. What EXACTLY is being asked?
-   - List only the data points the question specifically needs — nothing more
-   - Example: "What is Amazon's ROE?" needs ONLY → Net Income (most recent year), Shareholders' Equity (same year)
-   - Example: "Compare Meta and Google revenue" needs ONLY → Meta Revenue, Google Revenue (same year)
-   - Example: "Show Tesla's gross margin" needs ONLY → Revenue + COGS (same year) OR gross margin directly
-
-2. **SCAN DOCUMENTS FOR METRICS**:
-   - Check each document for presence of required financial data
-   - Look for specific numbers, tables, financial statements
-   - Identify which companies are covered
-   - Identify which years/periods are covered
-   - Note which metrics are FOUND vs which are MISSING (strictly from the required list only)
-
-3. **PER-COMPANY ASSESSMENT**:
-   For each company in the question, determine:
-   - **metrics_found**: List specific metrics present (e.g., "revenue 2023: $574B", "net income 2023", "total assets")
-   - **metrics_missing**: List ONLY metrics that are EXPLICITLY required by the question AND absent from documents
-   - **year_coverage**: Which years are covered (e.g., ["2023", "2024"])
-   - **confidence**: high (comprehensive data), medium (partial), low (minimal/no data)
-
-4. **OVERALL GRADE**:
-   - **sufficient**: Documents contain all required data (as defined by the question scope) → Can answer question
-   - **partial**: Documents are missing a critical raw input that the question explicitly requires
-   - **insufficient**: Documents lack critical data → Definitely need web search
-
-**FORMULA AWARENESS — CRITICAL RULE**:
-Many financial questions ask for CALCULATED metrics. These do NOT require the ratio to be explicitly listed in the document — they only require the raw component inputs.
-
-Common derived metrics and their required components:
-- **Current Ratio** = Current Assets ÷ Current Liabilities → needs: current assets, current liabilities
-- **Quick Ratio** = (Current Assets − Inventory) ÷ Current Liabilities → needs: current assets, inventory, current liabilities
-- **Debt-to-Equity Ratio** = Total Debt ÷ Total Equity → needs: total debt (or long-term + short-term debt), shareholders' equity
-- **ROE (Return on Equity)** = Net Income ÷ Shareholders' Equity → needs: net income, shareholders' equity
-- **ROA (Return on Assets)** = Net Income ÷ Total Assets → needs: net income, total assets
-- **Gross Margin** = (Revenue − COGS) ÷ Revenue → needs: revenue, cost of goods sold
-- **Operating Margin** = Operating Income ÷ Revenue → needs: operating income, revenue
-- **Interest Coverage** = Operating Income ÷ Interest Expense → needs: operating income, interest expense
-- **Inventory Turnover** = COGS ÷ Average Inventory → needs: COGS, inventory (beginning + ending)
-- **P/E Ratio** = Price per Share ÷ EPS → needs: stock price, earnings per share
-- **Net CapEx** = Ending PP&E − Beginning PP&E + Depreciation → needs: PP&E (two periods), depreciation
-
-**RULE**: If the question asks for a CALCULATED metric AND all required component inputs are present in the documents, list it as CALCULABLE under `metrics_found` (e.g., "current ratio [calculable from current assets + current liabilities]") — do NOT list it as missing. Mark that company as "sufficient".
-
-**RULE**: Only mark a metric as MISSING if one or more of its raw component inputs cannot be found anywhere in the documents.
-
-**GRADING CRITERIA**:
-
-✅ **"sufficient"** when:
-- All required metrics are present or calculable from present components
-- All companies mentioned in question have data
-- Years requested match years in documents
-- Enough detail to provide comprehensive answer
-
-⚠️ **"partial"** when:
-- Some metrics present/calculable but ONE OR MORE raw component inputs are missing
-- OR some companies covered but others missing
-- OR year mismatch (question asks 2020, docs show 2023)
-- OR data is too vague/high-level
-
-❌ **"insufficient"** when:
-- No relevant financial data in documents
-- Completely wrong companies
-- No numerical data at all
-
-**WEB SEARCH DOCUMENTS**:
-- Web search results are typically more fragmented
-- Be more lenient but still identify gaps
-- Note if web docs are from trusted sources (SEC.gov, investor.relations, etc.)
-
-**EXAMPLES**:
-
-Example 1:
-Question: "What is Amazon's 2023 revenue?"
-Documents: Amazon 10-K with income statement showing "Revenue: $574B" for 2023
-Assessment:
-- overall_grade: "sufficient"
-- company_coverage: [{{"company": "Amazon", "metrics_found": ["revenue 2023: $574B"], "metrics_missing": [], "year_coverage": ["2023"], "confidence": "high"}}]
-- can_answer_question: true
-- missing_data_summary: ""
-
-Example 2:
-Question: "Compare Meta and Google's 2023 net income"
-Documents: Meta 10-K with net income $39B (2023), Google 10-K with revenue only (no income)
-Assessment:
-- overall_grade: "partial"
-- company_coverage: [
-    {{"company": "Meta", "metrics_found": ["net income 2023: $39B"], "metrics_missing": [], "year_coverage": ["2023"], "confidence": "high"}},
-    {{"company": "Google", "metrics_found": ["revenue 2023"], "metrics_missing": ["net income 2023"], "year_coverage": ["2023"], "confidence": "medium"}}
-  ]
-- can_answer_question: false
-- missing_data_summary: "Google's net income for 2023 not found in documents"
-
-Example 3 (FORMULA CALCULATION - ALL COMPONENTS PRESENT):
-Question: "Calculate Amazon's current ratio for 2023"
-Documents: Amazon balance sheet with Current Assets: $86B and Current Liabilities: $155B for 2023
-Assessment:
-- overall_grade: "sufficient"  ← CORRECT: both components are present, ratio is calculable
-- company_coverage: [{{"company": "Amazon", "metrics_found": ["current assets 2023: $86B", "current liabilities 2023: $155B", "current ratio [calculable]"], "metrics_missing": [], "year_coverage": ["2023"], "confidence": "high"}}]
-- can_answer_question: true
-- missing_data_summary: ""
-
-Example 4 (FORMULA CALCULATION - COMPONENT MISSING):
-Question: "Calculate Tesla's debt-to-equity ratio for 2023"
-Documents: Tesla balance sheet with Total Assets, Total Equity, but NO debt breakdown
-Assessment:
-- overall_grade: "partial"  ← CORRECT: equity present but debt is the missing component
-- company_coverage: [{{"company": "Tesla", "metrics_found": ["total assets 2023", "shareholders equity 2023"], "metrics_missing": ["total debt 2023 (long-term + short-term debt)"], "year_coverage": ["2023"], "confidence": "medium"}}]
-- can_answer_question: false
-- missing_data_summary: "Tesla's total debt not found in documents - need debt breakdown for debt-to-equity calculation"
-
-**KEY PRINCIPLES**:
-- Be specific about what's found vs missing
-- Don't say "insufficient" if ANY relevant data exists
-- Trust 10-K documents from vectorstore - they're comprehensive
-- A calculated ratio is NOT missing if all its components are present — it's CALCULABLE
-- Only add to metrics_missing if a raw input value truly cannot be found in the documents
-- For web search docs, check if they're from trusted financial sources
-- Your analysis will be used to decide if we need to web search for missing data"""
+**CORE RULES**:
+1. Only evaluate data that the question EXPLICITLY asks for.
+2. If the question asks for a CALCULATED metric (like Operating Margin, ROE, Current Ratio, etc.) and ALL the raw components for the formula exist in the documents, it is SUFFICIENT. You do not need the exact ratio stated in the text if you can calculate it.
+3. If the documents contain enough information to answer the question, set `is_sufficient` to True, and `missing_data_summary` to empty.
+4. If critical raw component inputs are missing, set `is_sufficient` to False, and concisely state what exact data is missing in `missing_data_summary`."""
 
     grader_prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
         ("human", """Question: {question}
 
-Number of Documents: {doc_count}
+Sub-Queries Used for Retrieval:
+{sub_queries}
 
-Document Previews:
-{doc_previews}
+Document Content:
+{doc_content}
 
-Companies Detected in Question: {companies_detected}
-Query Type: {query_type}
-
-**YOUR TASK**:
-1. Identify what financial data the question requires (raw metrics AND any calculated ratios)
-2. For calculated metrics: check if ALL component inputs are present (if yes, it's calculable — not missing)
-3. For raw metrics: check if the value is directly present in the documents
-4. For each company, list metrics_found (including "[calculable]" items) and metrics_missing (only truly absent raw inputs)
-5. Give overall grade: sufficient/partial/insufficient
-6. If partial/insufficient, explain which raw component inputs are missing in missing_data_summary
-
-Be thorough and specific in your analysis.""")
+Does the document content contain sufficient information to answer the question?""")
     ])
     
     return grader_prompt | structured_llm
