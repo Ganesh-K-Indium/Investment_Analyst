@@ -757,6 +757,21 @@ def retrieve(state, config):
     # Fall back to sub_query_analysis for backward compatibility
     requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [datetime.now().year]
 
+    # SEGMENT / GEOGRAPHIC OPTIMISATION:
+    # A 10-K covers the filing year + 2 prior years (3-year comparative).
+    #  span == 2  →  e.g. [2022, 2023, 2024]: the 2024 10-K already contains all three
+    #                years → query ONLY the last year.
+    #  span  > 2  →  e.g. [2020..2024]: no single 10-K covers the full range → query
+    #                first + last (their 10-Ks together cover the entire window).
+    if query_type in ("segment", "geographic") and len(requested_years) > 1:
+        year_span = requested_years[-1] - requested_years[0]
+        if year_span == 2:
+            requested_years = [requested_years[-1]]
+            print(f" Span=2y → querying only [{requested_years[0]}] (single 10-K covers all 3 years)")
+        elif year_span > 2:
+            requested_years = [requested_years[0], requested_years[-1]]
+            print(f" Span={year_span}y → querying [{requested_years[0]}, {requested_years[-1]}] (first+last 10-K covers full range)")
+
     target_tickers = set()
 
     # Strategy: Strictly use provided inputs
