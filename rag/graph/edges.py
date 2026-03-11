@@ -83,7 +83,7 @@ def decide_to_generate(state):
     web_searched = state.get("web_searched", False)
 
     doc_count = len(filtered_documents) if filtered_documents else 0
-    print(f"Documents: {doc_count}, Web searched: {web_searched}")
+    print(f"Chunks: {doc_count}, Web searched: {web_searched}")
 
     # Web search already done → generate with whatever we have
     if web_searched:

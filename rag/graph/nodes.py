@@ -849,9 +849,9 @@ def retrieve(state, config):
                                 docs_from_ticker += 1
 
                     if docs_from_ticker > 0:
-                        print(f"      ✅ Found {docs_from_ticker} documents")
+                        print(f"      ✅ Found {docs_from_ticker} chunks")
                     else:
-                        print(f"      ⚠️  No documents found")
+                        print(f"      ⚠️  No chunks found")
 
                 except Exception as e:
                      # Likely collection not found (safe to ignore in retrieval)
@@ -882,9 +882,9 @@ def retrieve(state, config):
             }
 
             if len(step_docs) > 0:
-                print(f"   ✅ Total: {len(step_docs)} docs from {len(companies_found)} companies")
+                print(f"   ✅ Total: {len(step_docs)} chunks from {len(companies_found)} companies")
             else:
-                print(f"   ❌ No documents found for this sub-query")
+                print(f"   ❌ No chunks found for this sub-query")
 
     else:
         # ============================================================================
@@ -934,7 +934,7 @@ def retrieve(state, config):
                                     all_documents.append(doc)
                                     current_collection_docs += 1
                                     
-                    print(f"       Found {current_collection_docs} unique docs across requested years")
+                    print(f"       Found {current_collection_docs} unique chunks across requested years")
                     
                 except Exception as e:
                     print(f"      Error searching collection for {target_ticker}: {e}")
@@ -948,13 +948,13 @@ def retrieve(state, config):
                     content_types[ctype] = content_types.get(ctype, 0) + 1
                     companies_found.add(doc.metadata.get('company', 'Unknown'))
 
-            print(f"\nRetrieved {len(all_documents)} total documents from {len(target_tickers)} collections")
+            print(f"\nRetrieved {len(all_documents)} chunks total from {len(target_tickers)} collections")
             print(f"    {content_types['text']} text,  {content_types['image']} images")
             print(f"    {', '.join(sorted(companies_found))}")
 
     # Final summary
     print(f"\n{'='*80}")
-    print(f" FINAL: {len(all_documents)} documents ready")
+    print(f" FINAL: {len(all_documents)} chunks ready")
     print(f"{'='*80}\n")
     
     tool_call_entry = {
@@ -981,18 +981,18 @@ def generate(state):
     
     # Enhanced logging for debugging
     print(f" Question: {question[:100]}...")
-    print(f" Number of documents: {len(documents) if documents else 0}")
-    
-    # Log document content preview for debugging
+    print(f" Number of chunks: {len(documents) if documents else 0}")
+
+    # Log chunk content preview for debugging
     if documents:
-        for i, doc in enumerate(documents[:3]):  # Preview first 3 docs
+        for i, doc in enumerate(documents[:3]):  # Preview first 3 chunks
             if hasattr(doc, 'page_content'):
                 content_preview = doc.page_content[:200].replace('\n', ' ')
             else:
                 content_preview = str(doc)[:200].replace('\n', ' ')
-            print(f" Doc {i+1} preview: {content_preview}...")
+            print(f" Chunk {i+1} preview: {content_preview}...")
     else:
-        print(" WARNING: No documents available for generation!")
+        print(" WARNING: No chunks available for generation!")
     
     # ============================================================================
     # MESSAGE-BASED GENERATION: For "summarize" queries, use conversation messages
@@ -1165,17 +1165,14 @@ Please provide a clear, well-structured summary."""
 
 def grade_documents(state):
     """
-    FINANCIAL ANALYST DOCUMENT GRADING: Evaluates documents like a financial analyst.
-    
-    NEW APPROACH:
+    FINANCIAL ANALYST CHUNK GRADING: Evaluates retrieved chunks like a financial analyst.
+
     1. Identifies what financial metrics the question needs
-    2. Scans documents to find which metrics ARE present
+    2. Scans chunks to find which metrics ARE present
     3. Identifies which metrics are MISSING
-    4. Returns grading with specific gap analysis
-    
-    This replaces binary yes/no grading with intelligent financial analysis.
+    4. Returns grading result used by decide_to_generate
     """
-    print("---FINANCIAL ANALYST DOCUMENT GRADING---")
+    print("---FINANCIAL ANALYST CHUNK GRADING---")
     messages = state["messages"]
     question = messages[-1].content
     documents = state["documents"]
@@ -1202,19 +1199,19 @@ def grade_documents(state):
             print(f"Using portfolio context companies: {ctx_filter}")
             
     print(f"Companies Detected: {companies_detected}")
-    print(f"Documents to grade: {len(documents)}")
+    print(f"Chunks to grade: {len(documents)}")
 
-    # CRITICAL: Handle empty documents case (e.g., company not in DB)
+    # CRITICAL: Handle empty chunks case (e.g., company not in DB)
     if not documents or len(documents) == 0:
-        print(" NO DOCUMENTS TO GRADE")
+        print(" NO CHUNKS TO GRADE")
         print(" Returning INSUFFICIENT grade → Will trigger web search")
-        
+
         return {
             "documents": [],
             "financial_grading": {
                 "overall_grade": "insufficient",
                 "can_answer": False,
-                "missing_data_summary": "No documents found in vector database",
+                "missing_data_summary": "No chunks found in vector database",
                 "company_coverage": []
             },
             "tool_calls": state.get("tool_calls", []) + [{
@@ -1223,27 +1220,27 @@ def grade_documents(state):
             }]
         }
     
-    # OPTIMIZATION: Parallel batch grading - grade ALL documents for maximum accuracy
+    # Parallel batch grading - grade ALL chunks for maximum accuracy
     # Process in batches to respect context limits while ensuring complete coverage
 
     web_docs = [d for d in documents if d.metadata.get("source", "") in ["web_search", "integrate_web_search"]]
     vectorstore_docs = [d for d in documents if d not in web_docs]
 
-    print(f"  Vectorstore docs: {len(vectorstore_docs)} (high quality)")
-    print(f"  Web docs: {len(web_docs)} (needs careful grading)")
+    print(f"  Vectorstore chunks: {len(vectorstore_docs)} (high quality)")
+    print(f"  Web chunks: {len(web_docs)} (needs careful grading)")
 
-    # Grade ALL documents - no sampling to avoid missing data
+    # Grade ALL chunks - no sampling to avoid missing data
     docs_to_grade = documents
-    print(f"  Grading ALL {len(documents)} documents in batches")
+    print(f"  Grading ALL {len(documents)} chunks in batches")
 
     # Batch size for parallel processing (fit in LLM context)
-    BATCH_SIZE = 20  # Grade 20 docs per LLM call
+    BATCH_SIZE = 20  # Grade 20 chunks per LLM call
 
     # Initialize financial analyst grader
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
     analyst_grader = get_financial_analyst_grader_chain(llm)
 
-    # Split documents into batches
+    # Split chunks into batches
     doc_batches = [docs_to_grade[i:i + BATCH_SIZE] for i in range(0, len(docs_to_grade), BATCH_SIZE)]
     print(f"  Processing {len(doc_batches)} batches in parallel...")
 
@@ -1279,7 +1276,7 @@ def grade_documents(state):
                 "companies_detected": ", ".join(companies_detected) if companies_detected else "None",
                 "query_type": query_type
             })
-            print(f"    ✅ Batch {batch_idx + 1}/{len(doc_batches)}: {len(batch)} docs graded")
+            print(f"    ✅ Batch {batch_idx + 1}/{len(doc_batches)}: {len(batch)} chunks graded")
             return grade
         except Exception as e:
             print(f"    ❌ Batch {batch_idx + 1} failed: {e}")
@@ -1420,33 +1417,32 @@ def grade_documents(state):
             "can_answer": analyst_grade.can_answer_question,
             "missing_data_summary": analyst_grade.missing_data_summary,
             "company_coverage": analyst_grade.company_coverage,  # Already dicts, don't call .dict()
-            "documents_graded_count": len(documents)  # For caching
+            "documents_graded_count": len(documents)
         }
-        
-        # For now, keep all documents (decision node will use grading to determine if web search needed)
-        # This is different from old approach which filtered here
-        filtered_docs = documents  # Keep all docs, let decision node use grading
-        
+
+        # Pass all chunks through; decision node uses grading to determine if web search needed
+        filtered_docs = documents
+
         tool_call_entry = {
             "tool": "financial_analyst_grader",
             "grade": analyst_grade.overall_grade,
             "can_answer": analyst_grade.can_answer_question
         }
-        
-        print(f"\n GRADING COMPLETE: {len(filtered_docs)} documents retained")
+
+        print(f"\n GRADING COMPLETE: {len(filtered_docs)} chunks")
         print(f"   Next: Decision node will use this grading to determine if web search needed")
-        
+
         return {
             "documents": filtered_docs,
             "financial_grading": grading_result,
             "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
         }
-        
+
     except Exception as e:
         print(f" Financial analyst grading failed: {e}")
-        print("  Falling back to keeping all documents")
-        
-        # Fallback: keep all documents
+        print("  Falling back to keeping all chunks")
+
+        # Fallback: keep all chunks
         return {
             "documents": documents,
             "financial_grading": {"overall_grade": "partial", "can_answer": False, "error": str(e)},
@@ -1539,30 +1535,28 @@ def web_search(state):
                     documents.append(doc)
                     total_chars += len(source['content'])
             
-            print(f"      → Found {len(sources)} sources, {len(documents)} unique total")
-        
-        print(f" ✓ Retrieved {len(documents)} unique documents across all sub-queries")
+            print(f"      → Found {len(sources)} sources, {len(documents)} chunks unique total")
+
+        print(f" ✓ Retrieved {len(documents)} unique chunks across all sub-queries")
     else:
         # Standard single search
         if search_query != question:
             print(f"Using optimized query for web search: {search_query[:150]}")
         else:
             print(f"Using original question for web search: {search_query[:150]}")
-        
+
         print(f" Restricting search to {len(TRUSTED_FINANCIAL_DOMAINS)} trusted financial domains")
         docs = web_search_tool.invoke({"query": search_query})
-        
-        # Parse Tavily response into individual sources
+
+        # Parse Tavily response into source chunks
         sources = _parse_tavily_response(docs, search_query)
-        
-        # Create separate documents for each source
+
         for source in sources:
-            # Include title and URL in document metadata for better traceability
             doc_content = f"**Source: {source['title']}**\n"
             if source['url']:
                 doc_content += f"URL: {source['url']}\n\n"
             doc_content += source['content']
-            
+
             doc = Document(
                 page_content=doc_content,
                 metadata={
@@ -1573,8 +1567,8 @@ def web_search(state):
             )
             documents.append(doc)
             total_chars += len(source['content'])
-        
-        print(f"Web search created {len(documents)} separate documents with {total_chars} total characters")
+
+        print(f"Web search produced {len(documents)} chunks ({total_chars} total chars)")
     
     if not documents or total_chars < 100:
         print("WARNING: Web search returned minimal content, response may be incomplete")
@@ -1779,7 +1773,7 @@ def integrate_web_search(state):
         print(f"  ERROR during web search: {e}")
 
     combined_documents = existing_documents + web_documents
-    print(f"  Existing: {len(existing_documents)} | New: {len(web_documents)} | Total: {len(combined_documents)}")
+    print(f"  Existing chunks: {len(existing_documents)} | New web chunks: {len(web_documents)} | Total: {len(combined_documents)}")
 
     return {
         "documents": combined_documents,
@@ -2372,7 +2366,7 @@ def alpha_dimension_retrieve(state):
             'documents': liquidity_docs,
             'query_count': len(vdb_queries) + len(web_queries)
         }
-        print(f"    Retrieved {len(liquidity_docs)} documents (mixed sources)")
+        print(f"    Retrieved {len(liquidity_docs)} chunks (mixed sources)")
         
     except Exception as e:
         print(f"    Error: {e}")
@@ -2407,7 +2401,7 @@ def alpha_dimension_retrieve(state):
             'documents': performance_docs[:6],
             'query_count': len(performance_queries)
         }
-        print(f"    Retrieved {len(performance_docs[:6])} documents")
+        print(f"    Retrieved {len(performance_docs[:6])} chunks")
         
     except Exception as e:
         print(f"    Error: {e}")
@@ -2443,7 +2437,7 @@ def alpha_dimension_retrieve(state):
             'documents': horizon_docs,
             'query_count': len(horizon_queries)
         }
-        print(f"    Retrieved {len(horizon_docs)} documents (SeekingAlpha)")
+        print(f"    Retrieved {len(horizon_docs)} chunks (SeekingAlpha)")
 
     except Exception as e:
         print(f"    Error: {e}")
@@ -2593,7 +2587,7 @@ def alpha_dimension_retrieve(state):
         }
     
     print("\n" + "="*80)
-    print(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total documents")
+    print(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total chunks")
     print("="*80 + "\n")
     
     return {
