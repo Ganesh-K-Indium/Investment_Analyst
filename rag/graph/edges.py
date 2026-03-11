@@ -71,112 +71,54 @@ def route_question(state):
     
 def decide_to_generate(state):
     """
-    ROUTING DECISION: Determines whether to generate, perform gap analysis, or web search.
-
-    Gap analysis itself has been moved to a dedicated 'gap_analysis' node so that
-    the targeted queries it produces are properly persisted in graph state.
+    ROUTING DECISION: Route after grading to either generate or web search.
 
     Flow:
       grade_documents → decide_to_generate
-        ├─ "generate"          (sufficient grade, or web search already done)
-        ├─ "gap_analysis"      (partial/insufficient, web search not yet done)
-        └─ "financial_web_search" (no docs after all searches)
+        ├─ "generate"              (sufficient grade, or web search already done)
+        └─ "integrate_web_search"  (partial/insufficient and web search not yet done)
     """
     print("---DECIDE TO GENERATE---")
     filtered_documents = state["documents"]
-    vectorstore_searched = state.get("vectorstore_searched", False)
     web_searched = state.get("web_searched", False)
 
     doc_count = len(filtered_documents) if filtered_documents else 0
-    print(f"Documents: {doc_count}")
-    print(f"Vectorstore searched: {vectorstore_searched}, Web searched: {web_searched}")
+    print(f"Documents: {doc_count}, Web searched: {web_searched}")
 
-    # CRITICAL: Prevent infinite loops - if both searches done, must generate
-    if web_searched and vectorstore_searched:
-        if not filtered_documents:
-            print("---DECISION: NO DOCS AFTER BOTH SEARCHES, FALLBACK TO FINANCIAL WEB SEARCH---")
-            return "financial_web_search"
-        print("---DECISION: BOTH SEARCHES COMPLETE, GENERATE TO AVOID LOOP---")
+    # Web search already done → generate with whatever we have
+    if web_searched:
+        print("---DECISION: WEB SEARCH DONE, GENERATE---")
         return "generate"
 
-    # No documents at all
+    # No documents → go get them
     if not filtered_documents:
-        if not web_searched and vectorstore_searched:
-            print("---DECISION: NO DOCUMENTS, PERFORM GAP ANALYSIS THEN WEB SEARCH---")
-            return "gap_analysis"
-        print("---DECISION: NO DOCS AFTER ALL SEARCHES, FALLBACK---")
-        return "financial_web_search"
+        print("---DECISION: NO DOCUMENTS, INTEGRATE WEB SEARCH---")
+        return "integrate_web_search"
 
     financial_grading = state.get("financial_grading", {})
 
     if not financial_grading or "overall_grade" not in financial_grading:
-        print("  No financial grading found, using fallback logic")
-        if doc_count >= 3:
-            return "generate"
-        elif not web_searched:
-            return "gap_analysis"
-        return "generate"
+        print("  No financial grading found, generating with available docs")
+        return "generate" if doc_count >= 3 else "integrate_web_search"
 
     overall_grade = financial_grading.get("overall_grade")
     can_answer = financial_grading.get("can_answer", False)
+    print(f"Grade: {overall_grade} | Can Answer: {can_answer}")
 
-    print(f"Financial Analyst Grade: {overall_grade}")
-    print(f"Can Answer: {can_answer}")
-
-    # 1. SUFFICIENT grade → Generate directly
     if overall_grade == "sufficient" and can_answer:
-        print("---DECISION: SUFFICIENT DATA, GENERATE ANSWER---")
+        print("---DECISION: SUFFICIENT, GENERATE---")
         return "generate"
 
-    # 2. PARTIAL/INSUFFICIENT and web search NOT done → Gap analysis node
-    if overall_grade in ["partial", "insufficient"] and not web_searched:
-        print(f"---DECISION: {overall_grade.upper()} GRADE, RUNNING GAP ANALYSIS---")
-        return "gap_analysis"
+    if overall_grade in ["partial", "insufficient"]:
+        print(f"---DECISION: {overall_grade.upper()}, INTEGRATE WEB SEARCH---")
+        return "integrate_web_search"
 
-    # 3. PARTIAL + web search done → Generate with available data
-    if overall_grade == "partial" and web_searched:
-        print("---DECISION: PARTIAL DATA + WEB SEARCH DONE, GENERATE WITH AVAILABLE---")
-        return "generate"
-
-    # 4. INSUFFICIENT + web search done → Financial web search as last resort
-    if overall_grade == "insufficient" and web_searched:
-        print("---DECISION: STILL INSUFFICIENT AFTER WEB SEARCH, FINANCIAL WEB SEARCH---")
-        return "financial_web_search"
-
-    # 5. Default fallback
-    print(f"---DECISION: DEFAULT FALLBACK (grade={overall_grade}, web_searched={web_searched})---")
-    if doc_count >= 2:
-        return "generate"
-    elif not web_searched:
-        return "gap_analysis"
-    return "generate"
+    return "generate" if doc_count >= 2 else "integrate_web_search"
 
 
 
-def decide_after_web_integration(state):
-    """
-    Decides next step after web search integration.
-    
-    Args:
-        state (dict): The current graph state
-        
-    Returns:
-        str: Next node to call
-    """
-    print("---DECIDE AFTER WEB INTEGRATION---")
-    documents = state.get("documents", [])
-    
-    if documents:
-        print("---DECISION: DOCUMENTS AVAILABLE AFTER WEB INTEGRATION, GRADE THEM---")
-        return "grade_documents"
-    else:
-        print("---DECISION: NO DOCUMENTS AFTER WEB INTEGRATION, FALLBACK TO FINANCIAL WEB SEARCH---")
-        return "financial_web_search"
-
-
-# REMOVED: decide_cross_reference_approach and decide_after_cross_reference_analysis
-# Cross-reference analysis now happens BEFORE retrieval (after routing), not after grading.
-# This optimization reduces overhead by analyzing needs upfront.
+# REMOVED: decide_after_web_integration — integrate_web_search now goes directly to generate.
+# REMOVED: decide_after_gap_analysis — gap_analysis node removed; routing goes straight to integrate_web_search.
 
 
 def _is_direct_vectordb_mode(state) -> bool:
@@ -207,31 +149,6 @@ def route_after_retrieve(state):
         return "generate"
     else:
         return "grade_documents"
-
-
-def decide_after_gap_analysis(state):
-    """
-    Routes after the gap_analysis node.
-
-    - If targeted queries were generated → integrate_web_search (fetch missing components)
-    - If no actionable gaps → generate (proceed with available data)
-    """
-    print("---DECIDE AFTER GAP ANALYSIS---")
-    targeted_gap_queries = state.get("targeted_gap_queries", [])
-    gap_analysis = state.get("gap_analysis", {})
-
-    if targeted_gap_queries:
-        print(f"---DECISION: {len(targeted_gap_queries)} TARGETED QUERIES, RUNNING WEB SEARCH---")
-        for i, q in enumerate(targeted_gap_queries[:3], 1):
-            print(f"  {i}. {q}")
-        return "integrate_web_search"
-    else:
-        has_gaps = gap_analysis.get("has_gaps", False)
-        reasoning = gap_analysis.get("reasoning", "")
-        print(f"---DECISION: NO TARGETED QUERIES (has_gaps={has_gaps}), GENERATE WITH AVAILABLE DATA---")
-        if reasoning:
-            print(f"  Reasoning: {reasoning[:200]}")
-        return "generate"
 
 
 def decide_chart_generation(state):

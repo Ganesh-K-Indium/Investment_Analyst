@@ -8,17 +8,15 @@ from langchain_core.messages import HumanMessage
 from rag.graph.state import GraphState
 from rag.graph.nodes import (web_search, retrieve,
                          grade_documents, generate,
-                         financial_web_search, show_result, integrate_web_search,
+                         show_result, integrate_web_search,
                          preprocess_and_analyze_query,
                          generate_comparison_chart,
                          detect_alpha_query, alpha_dimension_retrieve, alpha_generate_report,
-                         perform_gap_analysis,
                          detect_scenario_query, scenario_data_retrieve, scenario_generate_report)
 from rag.graph.edges import (route_question, decide_to_generate,
-                         decide_after_web_integration, decide_chart_generation,
+                         decide_chart_generation,
                          route_alpha_workflow,
-                         route_after_retrieve,
-                         decide_after_gap_analysis)
+                         route_after_retrieve)
 from rag.graph.benchmark import time_node, node_timer
 load_dotenv()
 os.environ["GROQ_API_KEY"]=os.getenv("GROQ_API_KEY")
@@ -66,11 +64,9 @@ class BuildingGraph:
         workflow.add_node("retrieve", time_node("retrieve")(retrieve))
         workflow.add_node("grade_documents", time_node("grade_documents")(grade_documents))
         workflow.add_node("generate", time_node("generate")(generate))
-        workflow.add_node("financial_web_search", time_node("financial_web_search")(financial_web_search))
         workflow.add_node("show_result", time_node("show_result")(show_result))
         workflow.add_node("integrate_web_search", time_node("integrate_web_search")(integrate_web_search))
         workflow.add_node("generate_chart", time_node("generate_chart")(generate_comparison_chart))
-        workflow.add_node("gap_analysis", time_node("gap_analysis")(perform_gap_analysis))
         
         # START -> detect_alpha (first: check for ALPHA buy-timing queries)
         workflow.add_edge(START, "detect_alpha")
@@ -126,33 +122,13 @@ class BuildingGraph:
             "grade_documents",
             decide_to_generate,
             {
-                "financial_web_search": "financial_web_search",
                 "generate": "generate",
-                "gap_analysis": "gap_analysis",   # NEW: dedicated gap analysis node
-            },
-        )
-
-        # Gap analysis node → decide whether to web search or generate
-        workflow.add_conditional_edges(
-            "gap_analysis",
-            decide_after_gap_analysis,
-            {
                 "integrate_web_search": "integrate_web_search",
-                "generate": "generate",
             },
         )
 
-        # After web integration, re-grade the enriched document set
-        workflow.add_conditional_edges(
-            "integrate_web_search",
-            decide_after_web_integration,
-            {
-                "grade_documents": "grade_documents",
-                "financial_web_search": "financial_web_search",
-            },
-        )
-
-        workflow.add_edge("financial_web_search", "generate")
+        # integrate_web_search → generate directly (no re-grading)
+        workflow.add_edge("integrate_web_search", "generate")
 
         # Generate always goes directly to chart decision (no hallucination grading)
         workflow.add_edge("generate", "decide_chart")

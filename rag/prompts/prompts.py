@@ -8,7 +8,7 @@ def _current_year() -> int:
     return datetime.now().year
 from schemas.models import (GradeHallucinations, GradeAnswer,
                                         UniversalSubQueryAnalysis, FinancialAnalystGrade,
-                                        GapAnalysisResult, StructuredFinancialData)
+                                        StructuredFinancialData)
 
 
 def get_rag_chain(llm_generate):
@@ -764,8 +764,6 @@ Only evaluate data that the question EXPLICITLY asks for. Do NOT mark as missing
 - Additional context like analyst ratings, forward guidance, or qualitative commentary (unless specifically asked)
 - Data for years NOT mentioned in the question
 
-If the question asks "What is Google's gross margin for 2023?", you only need: revenue 2023 AND cost of revenues 2023. That's it. Do NOT mark "historical gross margin trend" or "industry average gross margin" as missing.
-
 **ANALYSIS APPROACH**:
 
 1. **IDENTIFY REQUIRED DATA — BE MINIMAL**:
@@ -780,7 +778,7 @@ If the question asks "What is Google's gross margin for 2023?", you only need: r
    - Look for specific numbers, tables, financial statements
    - Identify which companies are covered
    - Identify which years/periods are covered
-   - Note which metrics ARE found vs which are MISSING (strictly from the required list only)
+   - Note which metrics are FOUND vs which are MISSING (strictly from the required list only)
 
 3. **PER-COMPANY ASSESSMENT**:
    For each company in the question, determine:
@@ -912,202 +910,6 @@ Be thorough and specific in your analysis.""")
     ])
     
     return grader_prompt | structured_llm
-
-def get_gap_analysis_chain(llm):
-    """
-    GAP ANALYSIS: Identifies specific missing data and generates targeted web search queries.
-    This is called AFTER grading to determine exactly what to search for.
-    """
-    structured_llm = llm.with_structured_output(GapAnalysisResult)
-    
-    SYSTEM_PROMPT = """You are a DATA GAP ANALYST specializing in financial information retrieval.
-
-**YOUR MISSION**: Analyze the financial analyst's grading to identify SPECIFIC data gaps, then generate TARGETED web search queries to fill ONLY those gaps.
-
-**ANALYSIS STRATEGY**:
-
-1. **IDENTIFY GAP TYPE**:
-   - **missing_company**: One or more companies mentioned in question have NO data
-   - **missing_metric**: Specific financial metrics are missing (e.g., debt, net income)
-   - **missing_year**: Question asks for specific year but documents show different year
-   - **no_gaps**: All required data is present
-
-2. **LIST MISSING ITEMS**:
-   Be extremely specific about what's missing:
-   - NOT: "Need more data for Google"
-   - YES: "Google net income 2023", "Google total debt 2023"
-   
-3. **GENERATE TARGETED QUERIES**:
-   Create precise web search queries that will retrieve ONLY the missing data:
-   - Include: Company name, specific metric, year, source hint
-   - Format: "[Company] [Metric] [Year] [Source]"
-   - Example: "Microsoft net income 2023 10-K SEC", "Apple total debt 2023 balance sheet"
-   
-**QUERY GENERATION RULES**:
-
-✅ **GOOD QUERIES** (Specific, targeted):
-- "Microsoft revenue 2023 10-K SEC filing"
-- "Apple total debt long-term debt 2023 balance sheet"
-- "Tesla inventory current assets 2023 10-K"
-- "Meta accounts receivable 2023 balance sheet SEC"
-
-❌ **BAD QUERIES** (Too broad, vague):
-- "Microsoft financials"
-- "Apple data"
-- "Tesla 2023"
-
-**SOURCE HINTS** (Add to queries for better results):
-- For specific metrics: "10-K", "SEC filing", "annual report"
-- For balance sheet items: "balance sheet", "statement of financial position"
-- For income items: "income statement", "P&L"
-- For official data: "SEC.gov", "investor relations"
-
-**FORMULA COMPONENT RULE — CRITICAL**:
-When the gap is a CALCULATED metric (ratio or derived value), do NOT search for the calculated result.
-Instead, identify and search for the MISSING RAW COMPONENT INPUTS of its formula.
-
-Formula components to search for (NOT the ratio itself):
-- Current Ratio gap → search for: "[Company] current assets [year] balance sheet" + "[Company] current liabilities [year] balance sheet"
-- Quick Ratio gap → search for: "[Company] current assets inventory [year]" + "[Company] current liabilities [year]"
-- Debt-to-Equity gap → search for: "[Company] total debt long-term debt [year]" + "[Company] shareholders equity [year]"
-- ROE gap → search for: "[Company] net income [year]" + "[Company] shareholders equity [year]"
-- ROA gap → search for: "[Company] net income [year]" + "[Company] total assets [year]"
-- Gross Margin gap → search for: "[Company] revenue cost of goods sold COGS [year]"
-- Operating Margin gap → search for: "[Company] operating income [year]" + "[Company] revenue [year]"
-- Interest Coverage gap → search for: "[Company] operating income interest expense [year]"
-
-**EXAMPLES**:
-
-Example 1:
-Question: "Compare Meta and Google revenue"
-Grading: Meta has revenue ($134B), Google missing revenue
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_metric",
-  "missing_items": ["Google revenue 2023"],
-  "targeted_queries": [
-    "Google Alphabet revenue 2023 10-K annual report",
-    "Alphabet total revenue 2023 income statement SEC"
-  ],
-  "reasoning": "Meta's revenue is present but Google's revenue is missing. Generated 2 targeted queries with different term variations (Google/Alphabet) to retrieve Google's 2023 revenue from official sources."
-}}
-```
-
-Example 2:
-Question: "Calculate Amazon's debt-to-equity ratio for 2023"
-Grading: Has equity, missing total debt
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_metric",
-  "missing_items": ["Amazon total debt 2023 (long-term + short-term)"],
-  "targeted_queries": [
-    "Amazon total long-term debt short-term debt 2023 balance sheet 10-K",
-    "Amazon liabilities breakdown 2023 annual report SEC"
-  ],
-  "reasoning": "Amazon's shareholders equity is present but total debt is missing. Searching for raw debt COMPONENTS (long-term + short-term debt) from balance sheet — NOT for the calculated ratio itself."
-}}
-```
-
-Example 3 (FORMULA — search for components NOT the ratio):
-Question: "What is Apple's current ratio for 2023?"
-Grading: Missing current assets and/or current liabilities
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_metric",
-  "missing_items": ["Apple current assets 2023", "Apple current liabilities 2023"],
-  "targeted_queries": [
-    "Apple current assets total 2023 balance sheet 10-K",
-    "Apple current liabilities accounts payable 2023 SEC filing"
-  ],
-  "reasoning": "Current ratio needs current assets and current liabilities as raw inputs. Searching for these COMPONENTS from Apple's balance sheet — not for the ratio value itself."
-}}
-```
-
-Example 4:
-Question: "Show Microsoft, Google, and Amazon revenue"
-Grading: Has Microsoft and Google, missing Amazon
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_company",
-  "missing_items": ["Amazon revenue"],
-  "targeted_queries": [
-    "Amazon revenue 2023 2024 income statement 10-K",
-    "Amazon total revenue recent annual report SEC"
-  ],
-  "reasoning": "Microsoft and Google data present, but Amazon is completely missing. Generated targeted queries to retrieve Amazon's revenue from recent filings."
-}}
-```
-
-Example 5:
-Question: "What is Tesla's 2020 revenue?"
-Grading: Has Tesla 2023 data, but question asks for 2020
-Output:
-```json
-{{
-  "has_gaps": true,
-  "gap_type": "missing_year",
-  "missing_items": ["Tesla revenue 2020"],
-  "targeted_queries": [
-    "Tesla revenue 2020 10-K annual report",
-    "Tesla total revenue fiscal year 2020 income statement"
-  ],
-  "reasoning": "Documents contain Tesla's 2023 data but question specifically asks for 2020. Generated queries targeting 2020 fiscal year data."
-}}
-```
-
-Example 6:
-Question: "What is Amazon's 2023 revenue?"
-Grading: sufficient (has Amazon 2023 revenue)
-Output:
-```json
-{{
-  "has_gaps": false,
-  "gap_type": "no_gaps",
-  "missing_items": [],
-  "targeted_queries": [],
-  "reasoning": "All required data is present in documents. No web search needed."
-}}
-```
-
-**KEY PRINCIPLES**:
-- Only generate queries for MISSING data, not data we already have
-- For calculated metrics: search for MISSING RAW COMPONENT INPUTS, never the ratio itself
-- Be specific: include company, raw component name, year in queries
-- Use 2-3 query variations for hard-to-find data (different terminology)
-- Add source hints (10-K, SEC, balance sheet) for better results
-- If no gaps exist, set has_gaps=false and return empty lists"""
-
-    gap_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", """Question: {question}
-
-Financial Analyst Grade:
-{analyst_grade}
-
-Per-Company Document Coverage:
-{doc_coverage_summary}
-
-**YOUR TASK**:
-1. Read the "ALREADY FOUND IN DOCUMENTS" section carefully for each company — these metrics are CONFIRMED PRESENT. You MUST NOT generate search queries for any item that appears there.
-2. Read the "MISSING FROM DOCUMENTS" section — these are the only candidates for web search.
-3. For each missing item: if it is a derived/calculated metric (ratio), identify which of its RAW COMPONENT INPUTS is missing. Search for the components, NOT the ratio itself.
-4. Determine gap_type (missing_company, missing_metric, missing_year, or no_gaps).
-5. List specific missing_items as raw component inputs only (e.g., "total debt 2023" not "debt-to-equity ratio").
-6. Generate targeted_queries ONLY for truly absent raw inputs. Do NOT re-query data already confirmed as found.
-7. If all required data for the question is present (including calculable items), set has_gaps=false.
-
-**CRITICAL**: If the coverage shows all required formula components are present, the answer CAN be computed. Set has_gaps=false. Never generate queries for data that is already confirmed in the documents.""")
-    ])
-    
-    return gap_prompt | structured_llm
 
 def get_financial_data_extractor_chain(llm):
     """
