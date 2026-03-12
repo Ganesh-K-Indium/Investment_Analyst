@@ -877,14 +877,15 @@ def generate(state):
         request_timeout=30,
         max_retries=2
     )
-    rag_chain = get_rag_chain(llm)
+    # Extract query type to format prompt appropriately
+    sub_query_analysis = state.get("sub_query_analysis", {})
+    query_type = sub_query_analysis.get("query_type", "general")
+    
+    rag_chain = get_rag_chain(llm, query_type=query_type)
     
     generation_input = {
         "documents": documents,
-        "question": enriched_question,
-        "financial_formulas": "",
-        "sub_query_summary": "",
-        "extracted_metrics": ""
+        "question": enriched_question
     }
     
     Intermediate_message = rag_chain.invoke(generation_input)
