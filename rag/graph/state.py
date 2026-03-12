@@ -58,6 +58,7 @@ class GraphState(TypedDict):
     year_end: Optional[int]    # End year for comparison (e.g. 2024)
     chart_url: str  # Cloudinary URL of generated comparison chart
     chart_filename: str  # Filename of generated chart
+    financial_grading: Dict[str, Any]  # Store grading output, overall_grade, and missing_data_summary
     #vectordb_instance: Any  # REMOVED: Managed via VectorDBManager singleton
     company_filter: List[str]  # List of companies this DB instance is filtered for
     ticker: Optional[str]  # Ticker symbol for collection selection

@@ -946,9 +946,10 @@ def grade_documents(state):
                 "overall_grade": "insufficient",
                 "can_answer": False,
                 "missing_data_summary": "No chunks found in vector database",
-                "company_coverage": []
+                "company_coverage": [],
+                "documents_graded_count": 0
             }
-    }
+        }
     
     # Initialize financial analyst grader with gpt-4o
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
@@ -1307,11 +1308,26 @@ def integrate_web_search(state):
     if ticker and ticker.lower() not in [q.lower() for q in query_parts] and ticker.lower() != company.lower():
         query_parts.append(ticker)
 
-    if missing_summary and str(missing_summary).strip() and str(missing_summary).lower() != "none" and "no chunks" not in str(missing_summary).lower():
+    missing_summary_str = ""
+    if missing_summary:
+        missing_summary_str = str(missing_summary).strip()
+        
+    print(f"  [DEBUG] grading missing_summary: {repr(missing_summary)}")
+    
+    # Is there a valid missing data summary? (Not None, not empty, and not specifically 'no chunks found in vector database')
+    has_valid_missing_target = (
+        bool(missing_summary_str) and 
+        missing_summary_str.lower() != "none" and 
+        "no chunks found" not in missing_summary_str.lower()
+    )
+
+    if has_valid_missing_target:
         # Missing data summary is the target - use it directly
-        query_parts.append(str(missing_summary).strip())
+        print("  [DEBUG] Using missing data summary for web search target.")
+        query_parts.append(missing_summary_str)
     else:
         # Fallback to the original question only if there is no explicit missing data summary
+        print("  [DEBUG] Using original question for web search fallback.")
         query_parts.append(question)
 
     search_query = " ".join(query_parts)
