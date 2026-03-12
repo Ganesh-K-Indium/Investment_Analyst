@@ -411,6 +411,6 @@ def save_quant_response(response, session_id: str, user_id: str, portfolio_id: O
         with open(filepath, "w") as f:
             json.dump(response_data, f, indent=4)
         
-        print(f"📁 Stock analysis response saved to {filepath}")
+        print(f" Stock analysis response saved to {filepath}")
     except Exception as e:
         print(f"ERROR: Failed to save quant response: {str(e)}")

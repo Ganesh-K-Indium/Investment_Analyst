@@ -134,7 +134,7 @@ class SemanticCache:
             
             if results:
                 hit = results[0]
-                print(f"⚡ SemanticCache: HIT (Score: {hit.score:.4f}, Thread: {thread_id})")
+                print(f" SemanticCache: HIT (Score: {hit.score:.4f}, Thread: {thread_id})")
                 return hit.payload
             else:
                 scope_msg = f"Thread: {thread_id}" if thread_id else "Global"

@@ -368,7 +368,7 @@ def preprocess_and_analyze_query(state):
     is_comparison_mode = state.get("is_comparison_mode", False)
 
     if is_comparison_mode:
-        print("📊 COMPARISON MODE DETECTED - Using pre-optimized 10-K queries")
+        print(" COMPARISON MODE DETECTED - Using pre-optimized 10-K queries")
 
         # Extract companies from state
         comparison_companies = []
@@ -379,11 +379,11 @@ def preprocess_and_analyze_query(state):
         if state.get("comparison_company3"):
             comparison_companies.append(state["comparison_company3"])
 
-        print(f"📊 Companies: {', '.join(comparison_companies)}")
+        print(f" Companies: {', '.join(comparison_companies)}")
 
         # Generate fixed sub-queries using the year from state (fallback to current year)
         comparison_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
-        print(f"📊 Comparison year: {comparison_year}")
+        print(f" Comparison year: {comparison_year}")
         sub_query_analysis = generate_comparison_subqueries(comparison_companies, year=comparison_year)
 
         return {
@@ -412,10 +412,10 @@ def preprocess_and_analyze_query(state):
 
         if companies:
             if seg_geo_type == "segment":
-                print(f"📊 SEGMENT QUERY DETECTED - Using pre-optimized segment templates for {companies}")
+                print(f" SEGMENT QUERY DETECTED - Using pre-optimized segment templates for {companies}")
                 sub_query_analysis = generate_segment_subqueries(companies, question=question)
             else:
-                print(f"🌍 GEOGRAPHIC QUERY DETECTED - Using pre-optimized geographic templates for {companies}")
+                print(f" GEOGRAPHIC QUERY DETECTED - Using pre-optimized geographic templates for {companies}")
                 sub_query_analysis = generate_geographic_subqueries(companies, question=question)
 
             return {
@@ -629,11 +629,11 @@ def retrieve(state, config):
     seen_doc_ids = set()
     
     if needs_sub_queries and sub_queries:
-        print(f"\n🎯 SUB-QUERY MODE: {len(sub_queries)} data points")
+        print(f"\n SUB-QUERY MODE: {len(sub_queries)} data points")
         print("-" * 80)
         
         for i, sq in enumerate(sub_queries, 1):
-            print(f"\n📍 {i}/{len(sub_queries)}: {sq}")
+            print(f"\n {i}/{len(sub_queries)}: {sq}")
 
             # Intelligently detect which tickers are mentioned in THIS sub-query
             sq_tickers_for_step = detect_tickers_in_query(sq, target_tickers)
@@ -641,13 +641,13 @@ def retrieve(state, config):
             # If no specific ticker detected, query ALL allowed tickers
             # (This handles cases where the sub-query doesn't explicitly mention a company)
             if not sq_tickers_for_step:
-                print(f"   ⚠️  No specific company detected, querying all: {list(target_tickers)}")
+                print(f"     No specific company detected, querying all: {list(target_tickers)}")
                 sq_tickers_for_step = target_tickers
             else:
-                print(f"   🎯 Detected companies: {list(sq_tickers_for_step)}")
+                print(f"    Detected companies: {list(sq_tickers_for_step)}")
             
             if not sq_tickers_for_step:
-                print(f"   ❌ No allowed tickers found. Skipping vector search.")
+                print(f"    No allowed tickers found. Skipping vector search.")
                 sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
                 continue
             
@@ -656,7 +656,7 @@ def retrieve(state, config):
             for t_ticker in sq_tickers_for_step:
                 try:
                     company_name = map_ticker_to_company(t_ticker.lower())
-                    print(f"   🔍 Querying ticker_{t_ticker.lower()} ({company_name})...")
+                    print(f"    Querying ticker_{t_ticker.lower()} ({company_name})...")
 
                     # Get instance for this ticker (DO NOT CREATE if missing)
                     db_instance = vectordb_mgr.get_instance(t_ticker, create_if_missing=False)
@@ -685,13 +685,13 @@ def retrieve(state, config):
                                 docs_from_ticker += 1
 
                     if docs_from_ticker > 0:
-                        print(f"      ✅ Found {docs_from_ticker} chunks")
+                        print(f"       Found {docs_from_ticker} chunks")
                     else:
-                        print(f"      ⚠️  No chunks found")
+                        print(f"        No chunks found")
 
                 except Exception as e:
                      # Likely collection not found (safe to ignore in retrieval)
-                     print(f"      ❌ Collection not found or error: {e}")
+                     print(f"       Collection not found or error: {e}")
 
             # Deduplicate and Collect results for this sub-query
             companies_found = set()
@@ -718,9 +718,9 @@ def retrieve(state, config):
             }
 
             if len(step_docs) > 0:
-                print(f"   ✅ Total: {len(step_docs)} chunks from {len(companies_found)} companies")
+                print(f"    Total: {len(step_docs)} chunks from {len(companies_found)} companies")
             else:
-                print(f"   ❌ No chunks found for this sub-query")
+                print(f"    No chunks found for this sub-query")
 
     else:
         # ============================================================================

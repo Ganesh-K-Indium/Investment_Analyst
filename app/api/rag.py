@@ -339,9 +339,9 @@ Compare {comparison_str} {year_str}:
             content=f"Compare {comparison_str}"
         )
 
-        # NOTE: create_temporary might be redundant if we use existing ticker collections.
+        # Create_temporary might be redundant if we use existing ticker collections.
         # But for now we kept existing logic in vectordb_manager.
-        # We will bypass using the returned company_filter and use our mapped tickers.
+        # Bypass using the returned company_filter and use our mapped tickers.
         vectordb_mgr = get_vectordb_manager()
         # db_instance, _ = vectordb_mgr.create_temporary(thread_id, companies) 
         # Commenting out create_temporary as we want to use existing collections

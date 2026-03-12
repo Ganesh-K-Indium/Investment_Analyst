@@ -477,17 +477,17 @@ Even if a question appears simple (e.g. "What is Google's gross margin?"), if it
 
 1. **ALWAYS USE MULTIPLE SEARCH TERMS FOR THE SAME CONCEPT** (Increases retrieval accuracy):
    - For segment data: Create 2-3 sub-queries with different terms
-     * ✅ "Amazon segment revenue business segments"
-     * ✅ "Amazon operating segments reportable segments revenue"
-     * ✅ "Amazon segment information notes financial statements"
+     *  "Amazon segment revenue business segments"
+     *  "Amazon operating segments reportable segments revenue"
+     *  "Amazon segment information notes financial statements"
    
    - For debt: Use multiple terms
-     * ✅ "Meta total debt long-term debt balance sheet"
-     * ✅ "Meta debt obligations notes payable borrowings"
+     *  "Meta total debt long-term debt balance sheet"
+     *  "Meta debt obligations notes payable borrowings"
    
    - For profitability: Use synonyms
-     * ✅ "Tesla net income profit earnings income statement"
-     * ✅ "Tesla operating income operating profit EBIT"
+     *  "Tesla net income profit earnings income statement"
+     *  "Tesla operating income operating profit EBIT"
 
 2. **INCLUDE DOCUMENT LOCATION CLUES** (Where in 10-K to look):
    - Balance Sheet items: "balance sheet", "statement of financial position"
@@ -560,9 +560,9 @@ Even if a question appears simple (e.g. "What is Google's gross margin?"), if it
    - EBITDA = "earnings before interest tax depreciation amortization", "operating profit"
 
 8. **FOR TEMPORAL QUERIES** (Include year + variations):
-   - ✅ "Meta revenue 2023 2024 year-over-year growth income statement"
-   - ✅ "Amazon balance sheet 2023 vs 2024 comparison"
-   - ✅ "Tesla cash flow 2022 2023 operating cash flow changes"
+   -  "Meta revenue 2023 2024 year-over-year growth income statement"
+   -  "Amazon balance sheet 2023 vs 2024 comparison"
+   -  "Tesla cash flow 2022 2023 operating cash flow changes"
 
 9. **SMART QUERY STRATEGY FOR HARD-TO-FIND DATA**:
     - Create 3-5 sub-queries with progressively broader/different terms
@@ -719,7 +719,7 @@ Example 6b: "Calculate ROE for Meta using 2023 data"
 
 **CRITICAL SUCCESS PRINCIPLE:**
 
-🎯 **MORE SUB-QUERIES WITH MORE TERM VARIATIONS = BETTER RETRIEVAL**
+ **MORE SUB-QUERIES WITH MORE TERM VARIATIONS = BETTER RETRIEVAL**
 
 When analyzing a query:
 1. **Don't be conservative** - If a concept might have multiple names in 10-K documents, create multiple sub-queries
@@ -808,7 +808,7 @@ def get_financial_data_extractor_chain(llm):
 
 **WHAT TO EXTRACT**:
 
-📊 **Income Statement**:
+ **Income Statement**:
 - revenue (also called: total revenue, net sales)
 - cost_of_revenue (also called: COGS, cost of sales)
 - gross_profit
@@ -816,21 +816,21 @@ def get_financial_data_extractor_chain(llm):
 - operating_income (also called: operating profit, EBIT)
 - net_income (also called: net profit, earnings)
 
-📊 **Balance Sheet**:
+ **Balance Sheet**:
 - total_assets
 - current_assets
 - total_liabilities
 - current_liabilities
 - shareholders_equity (also called: stockholders equity, total equity)
 
-📊 **Cash Flow**:
+ **Cash Flow**:
 - operating_cash_flow (also called: cash from operations)
 - free_cash_flow
 
-📊 **Key Metrics**:
+ **Key Metrics**:
 - earnings_per_share (also called: EPS, diluted EPS)
 
-📊 **Other** (use other_metrics dict):
+ **Other** (use other_metrics dict):
 - Any ratios, margins, growth rates, segment data, etc.
 
 **EXAMPLES**:

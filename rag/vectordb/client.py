@@ -145,7 +145,7 @@ class load_vector_database():
             collections = self.qdrant_client.get_collections().collections
             exists = any(c.name == self.collection_name for c in collections)
             if not exists:
-                print(f"⚠️ Collection '{self.collection_name}' does not exist (read-only mode).")
+                print(f" Collection '{self.collection_name}' does not exist (read-only mode).")
         except Exception as e:
             print(f"Error checking collection existence: {e}")
 

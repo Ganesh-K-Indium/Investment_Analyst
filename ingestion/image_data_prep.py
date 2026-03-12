@@ -66,9 +66,9 @@ class ImageDescription:
         except Exception as e:
             # If Tesseract not installed, gracefully degrade
             if "TesseractNotFoundError" in str(type(e).__name__):
-                print(f"   ⚠️  Tesseract OCR not installed - using vision-only mode")
+                print(f"     Tesseract OCR not installed - using vision-only mode")
                 return "[OCR unavailable - using GPT-4o vision only]"
-            print(f"   ⚠️  OCR extraction failed for {os.path.basename(image_path)}: {e}")
+            print(f"     OCR extraction failed for {os.path.basename(image_path)}: {e}")
             return ""
         if not self.openai_client.api_key:
             raise ValueError("OpenAI API key not found in environment variables")
@@ -284,7 +284,7 @@ class ImageDescription:
         processed_images = 0
         
         try:
-            print(f"\n🖼️  Processing PDF: {os.path.basename(self.pdf_path)}")
+            print(f"\n  Processing PDF: {os.path.basename(self.pdf_path)}")
             
             # Process each page with progress bar
             for page_num in tqdm(range(len(pdf_document)), desc="Scanning pages for images", unit="page"):
@@ -377,13 +377,13 @@ class ImageDescription:
             
         try:
             # Step 1: Extract ALL text using OCR
-            print(f"   📝 Running OCR on {os.path.basename(image_path)}...")
+            print(f"    Running OCR on {os.path.basename(image_path)}...")
             ocr_text = self.extract_text_from_image_ocr(image_path)
             
             if ocr_text:
-                print(f"   ✅ OCR extracted {len(ocr_text)} characters")
+                print(f"    OCR extracted {len(ocr_text)} characters")
             else:
-                print(f"   ⚠️  OCR found no text")
+                print(f"     OCR found no text")
             
             # Step 2: Encode image for GPT-4o
             image_base64 = self.encode_image(image_path)
@@ -482,8 +482,8 @@ class ImageDescription:
             - ✓ All labels and headers
             
             CHART VALIDATION EXAMPLE:
-            ❌ BAD: "Data Series 1 [Stock A]: Data points not numerically specified"
-            ✅ GOOD: "Data Series 1 [Stock A]: 12/19=$100, 3/20=$95, 6/20=$110, 9/20=$130..."
+             BAD: "Data Series 1 [Stock A]: Data points not numerically specified"
+             GOOD: "Data Series 1 [Stock A]: 12/19=$100, 3/20=$95, 6/20=$110, 9/20=$130..."
             
             Only respond "INVALID_IMAGE" if this is purely decorative (logo, border, background) with ZERO data.
             """
@@ -548,7 +548,7 @@ class ImageDescription:
             
             # Debug logging
             if not result or len(result) < 10:
-                print(f"\n⚠️  WARNING: Got very short/empty response for {os.path.basename(image_path)}")
+                print(f"\n  WARNING: Got very short/empty response for {os.path.basename(image_path)}")
                 print(f"Response length: {len(result)}, Content: '{result[:100]}'")
             
             # Only skip if explicitly marked invalid (and only if it's truly a logo/decoration)
@@ -573,7 +573,7 @@ class ImageDescription:
         image_analyses = {}
         output_file = os.path.splitext(self.pdf_path)[0] + "_analysis.json"
         
-        print(f"\n🤖 Analyzing {len(contexts)} images with GPT-4o...")
+        print(f"\n Analyzing {len(contexts)} images with GPT-4o...")
         processed_count = 0
         skipped_count = 0
         
@@ -584,7 +584,7 @@ class ImageDescription:
                 # Only skip if explicitly None (truly invalid decoration)
                 if result is None:
                     skipped_count += 1
-                    print(f"\n⏭️  Skipped decorative image: {os.path.basename(image_path)}")
+                    print(f"\n  Skipped decorative image: {os.path.basename(image_path)}")
                     continue
                 
                 # Store result even if it contains INVALID_IMAGE string (might have other data)
@@ -594,10 +594,10 @@ class ImageDescription:
                 
                 # Warn if result seems insufficient
                 if len(result) < 50:
-                    print(f"\n⚠️  Short description for {os.path.basename(image_path)}: {len(result)} chars")
+                    print(f"\n  Short description for {os.path.basename(image_path)}: {len(result)} chars")
                 
             except Exception as e:
-                print(f"\n❌ Error analyzing {image_path}: {e}")
+                print(f"\n Error analyzing {image_path}: {e}")
                 # Store error message instead of skipping
                 image_analyses[image_path] = f"[Analysis error: {str(e)}]"
                 continue
@@ -615,7 +615,7 @@ class ImageDescription:
         with open(output_file, "w", encoding="utf-8") as json_file:
             json.dump(analysis_data, json_file, ensure_ascii=False, indent=2)
         
-        print(f"\n✅ Analysis complete:")
+        print(f"\n Analysis complete:")
         print(f"   • Successfully analyzed: {processed_count}/{len(contexts)} images")
         print(f"   • Skipped (decorative/invalid): {skipped_count} images")
         print(f"   • Results saved to: {output_file}")

@@ -47,7 +47,7 @@ class VectorDBManager:
         collection_name = f"ticker_{ticker_key}"
         
         # Create DB instance
-        # Note: We need to update load_vector_database to respect a 'create' flag 
+        # We need to update load_vector_database to respect a 'create' flag 
         # or we rely on it checking existence. 
         # For now, we instantiate it, but we'll modify load_vector_database next to not auto-create.
         db_instance = load_vector_database(

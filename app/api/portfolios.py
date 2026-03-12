@@ -61,9 +61,9 @@ class PortfolioResponse(BaseModel):
         super().__init__(**data)
 
 # Simplify Payload mapping approach:
-# We will manually map the DB object to this Pydantic model in the endpoint if auto-mapping fails for renamed fields.
+# Manually map the DB object to this Pydantic model in the endpoint if auto-mapping fails for renamed fields.
 # Actually, Pydantic V2 alias_generator might be complex. 
-# Let's keep it simple: Use a static method or just map manually in the route if needed. 
+# Keep it simple: Use a static method or just map manually in the route if needed. 
 # OR: Just use `company_names` field in Response but annotated as tickers? 
 # No, user wants refactor.
 

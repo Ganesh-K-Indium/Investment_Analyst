@@ -9,24 +9,24 @@ def format_graph_output(data: dict) -> str:
     
     # Main Answer
     if "answer" in data and isinstance(data["answer"], str):
-        lines.append("## 📝 Final Answer")
+        lines.append("##  Final Answer")
         lines.append(data["answer"])
         lines.append("")
     
     # Thread ID
     if "thread_id" in data:
-        lines.append("## 🔗 Thread ID")
+        lines.append("##  Thread ID")
         lines.append(f"`{data['thread_id']}`")
         lines.append("")
     
     # Intermediate Message
     if "intermediate_message" in data and data["intermediate_message"]:
-        lines.append("## 🔄 Intermediate Message")
+        lines.append("##  Intermediate Message")
         lines.append(data["intermediate_message"])
         lines.append("")
     
     # Search Status
-    lines.append("## 🔍 Search Status")
+    lines.append("##  Search Status")
     lines.append(f"- **Vectorstore Searched:** {data.get('vectorstore_searched', False)}")
     lines.append(f"- **Web Searched:** {data.get('web_searched', False)}")
     lines.append(f"- **Vectorstore Quality:** {data.get('vectorstore_quality', 'none')}")
@@ -36,13 +36,13 @@ def format_graph_output(data: dict) -> str:
     
     # Summary Strategy
     if "summary_strategy" in data:
-        lines.append("## 📊 Summary Strategy")
+        lines.append("##  Summary Strategy")
         lines.append(f"`{data['summary_strategy']}`")
         lines.append("")
     
     # Tool Calls
     if "tool_calls" in data and data["tool_calls"]:
-        lines.append("## 🛠️ Tool Calls")
+        lines.append("##  Tool Calls")
         for i, call in enumerate(data["tool_calls"], 1):
             if isinstance(call, dict):
                 tool_name = call.get('tool', 'Unknown')
@@ -59,7 +59,7 @@ def format_graph_output(data: dict) -> str:
     
     # Messages
     if "messages" in data and data["messages"]:
-        lines.append("## 💬 Messages")
+        lines.append("##  Messages")
         for i, msg in enumerate(data["messages"], 1):
             if isinstance(msg, dict):
                 msg_type = msg.get("type", "unknown")
@@ -73,7 +73,7 @@ def format_graph_output(data: dict) -> str:
     
     # Documents
     if "documents" in data and data["documents"]:
-        lines.append("## 📄 Retrieved Documents")
+        lines.append("##  Retrieved Documents")
         lines.append(f"**Total Documents:** {len(data['documents'])}")
         lines.append("")
         for i, doc in enumerate(data["documents"], 1):
@@ -96,7 +96,7 @@ def format_graph_output(data: dict) -> str:
     
     # Document Sources
     if "document_sources" in data and data["document_sources"]:
-        lines.append("## 📚 Document Sources")
+        lines.append("##  Document Sources")
         for source_type, sources in data["document_sources"].items():
             lines.append(f"### {source_type}")
             lines.append(f"Count: {len(sources) if isinstance(sources, list) else 1}")
@@ -104,7 +104,7 @@ def format_graph_output(data: dict) -> str:
     
     # Citation Info
     if "citation_info" in data and data["citation_info"]:
-        lines.append("## 📖 Citation Information")
+        lines.append("##  Citation Information")
         for i, citation in enumerate(data["citation_info"], 1):
             lines.append(f"{i}. {json.dumps(citation, indent=2)}")
         lines.append("")
@@ -186,4 +186,4 @@ def log_response(payload: dict, data: dict, folder: str = "responses") -> None:
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(md_content)
     
-    print(f"📝 Response logged to: {filepath}")
+    print(f" Response logged to: {filepath}")

@@ -34,7 +34,7 @@ async def wait_for_server(url: str, timeout: int = 10):
             result = sock.connect_ex((host, port))
             sock.close()
             if result == 0:
-                print(f"✅ Research MCP server is up at {url}")
+                print(f" Research MCP server is up at {url}")
                 return True
         except:
             pass

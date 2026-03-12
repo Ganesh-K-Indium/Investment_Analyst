@@ -2,7 +2,7 @@
 
 This directory contains scripts to manage the Investment Analyst API and its services.
 
-## 📁 Available Scripts
+##  Available Scripts
 
 ### 1. `start_mcp_servers.sh` - MCP Servers Manager
 **Purpose**: Start/stop/manage the 3 MCP servers required for stock analysis
@@ -54,7 +54,7 @@ Simple server startup (kept for backwards compatibility)
 ```
 
 
-## 🪟 Windows Usage
+##  Windows Usage
 
 Equivalent batch scripts are available for Windows users.
 
@@ -84,7 +84,7 @@ REM Development mode
 .\scripts\start_api.bat --dev
 ```
 
-## 🚀 Quick Start Guide
+##  Quick Start Guide
 
 ### Option 1: Full System (Recommended)
 
@@ -116,7 +116,7 @@ Run without stock analysis features:
 ./scripts/start_api.sh
 ```
 
-## 📊 Service Architecture
+##  Service Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -136,7 +136,7 @@ Run without stock analysis features:
    └─────────┘   └─────────┘  └─────────┘
 ```
 
-## 📝 Configuration
+##  Configuration
 
 ### Environment Variables
 
@@ -155,7 +155,7 @@ Logs are stored in:
 - **PID Files**: `logs/mcp/pids/*.pid`
 - **API Logs**: Console output
 
-## 🔧 Troubleshooting
+##  Troubleshooting
 
 ### API Continuously Restarting in Dev Mode
 
@@ -217,7 +217,7 @@ pip install -r requirements.txt
 tail -f logs/mcp/stock_info.log
 ```
 
-## 🧪 Testing
+##  Testing
 
 After starting services:
 
@@ -234,7 +234,7 @@ curl http://localhost:8567/health  # Research
 curl http://localhost:8000/quant/health
 ```
 
-## 💡 Development Tips
+##  Development Tips
 
 ### Auto-reload During Development
 
@@ -266,25 +266,25 @@ nohup ./scripts/start_api.sh > api.log 2>&1 &
 kill $(lsof -ti:8000)
 ```
 
-## 📦 What Each Script Does
+##  What Each Script Does
 
 ### start_mcp_servers.sh
-- ✅ Checks virtual environment
-- ✅ Creates log directories
-- ✅ Starts 3 MCP servers in background
-- ✅ Saves PIDs for management
-- ✅ Provides status checking
-- ✅ Handles graceful shutdown
+-  Checks virtual environment
+-  Creates log directories
+-  Starts 3 MCP servers in background
+-  Saves PIDs for management
+-  Provides status checking
+-  Handles graceful shutdown
 
 ### start_api.sh
-- ✅ Checks dependencies
-- ✅ Validates .env file
-- ✅ Optionally starts MCP servers
-- ✅ Shows MCP status
-- ✅ Starts API with proper configuration
-- ✅ Supports dev/prod modes
+-  Checks dependencies
+-  Validates .env file
+-  Optionally starts MCP servers
+-  Shows MCP status
+-  Starts API with proper configuration
+-  Supports dev/prod modes
 
-## 🎯 Common Workflows
+##  Common Workflows
 
 ### Daily Development
 
@@ -322,22 +322,22 @@ kill $(lsof -ti:8000)
 # Stock analysis returns 503 (expected)
 ```
 
-## 📚 More Information
+##  More Information
 
 - **Main README**: `../README.md`
 - **Integration Guide**: `../docs/QUANT_INTEGRATION.md`
 - **API Docs**: http://localhost:8000/docs (after starting)
 
-## 🔗 Quick Links
+##  Quick Links
 
 After starting the API:
 
-- 🏠 **API Root**: http://localhost:8000
-- 📚 **Documentation**: http://localhost:8000/docs
-- 🏥 **Health Check**: http://localhost:8000/health
-- 📈 **Stock System**: http://localhost:8000/quant/health
-- 💼 **Portfolios**: http://localhost:8000/portfolios
-- 💡 **Web UI**: Open `static/index.html` in browser
+-  **API Root**: http://localhost:8000
+-  **Documentation**: http://localhost:8000/docs
+-  **Health Check**: http://localhost:8000/health
+-  **Stock System**: http://localhost:8000/quant/health
+-  **Portfolios**: http://localhost:8000/portfolios
+-  **Web UI**: Open `static/index.html` in browser
 
 ---
 

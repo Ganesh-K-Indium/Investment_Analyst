@@ -46,7 +46,7 @@ async def wait_for_server(url: str, timeout: int = 10):
             result = sock.connect_ex((host, port))
             sock.close()
             if result == 0:
-                print(f"✅ MCP server is up at {url}")
+                print(f" MCP server is up at {url}")
                 return True
         except:
             pass
@@ -57,31 +57,31 @@ async def wait_for_server(url: str, timeout: int = 10):
 async def main():
     """Main supervisor agent that coordinates stock analysis sub-agents."""
     
-    print("🚀 Initializing Stock Analysis Supervisor Agent...")
+    print(" Initializing Stock Analysis Supervisor Agent...")
     print("=" * 80)
     
     # Initialize memory saver
-    print("💾 Initializing SQLite memory...")
+    print(" Initializing SQLite memory...")
     db_path = os.getenv("SQLITE_DB_PATH", "sqlite:///checkpoints.db")
     
     async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
         await saver.setup()  # Creates tables if needed
-        print("✅ Memory initialized successfully")
+        print(" Memory initialized successfully")
         
         # Wait for MCP servers to be ready
-        print("⏳ Waiting for MCP servers...")
+        print(" Waiting for MCP servers...")
         await wait_for_server("http://localhost:8565/mcp")  # Stock Information
         await wait_for_server("http://localhost:8566/mcp")  # Technical Analysis
         await wait_for_server("http://localhost:8567/mcp")  # Research
         
         # Create sub-agents
-        print("🔧 Creating sub-agents...")
+        print(" Creating sub-agents...")
         stock_info_agent = await create_stock_information_agent(checkpointer=saver)
         technical_agent = await create_technical_analysis_agent(checkpointer=saver)
         ticker_finder = await create_ticker_finder_agent(checkpointer=saver)
         research_agent = await create_research_agent(checkpointer=saver)
         
-        print("✅ Sub-agents created successfully")
+        print(" Sub-agents created successfully")
     
         supervisor_graph = create_supervisor(
             model=ChatOpenAI(temperature=0, model_name="gpt-4o"),
@@ -131,10 +131,10 @@ async def main():
         supervisor.recursion_limit = 50
         
         print("\n" + "="*80)
-        print("🤖 STOCK ANALYSIS SUPERVISOR AGENT - Ready for Commands")
+        print(" STOCK ANALYSIS SUPERVISOR AGENT - Ready for Commands")
         print("="*80)
-        print("\n📋 What I can help you with:")
-        print("\n📊 FUNDAMENTAL ANALYSIS:")
+        print("\n What I can help you with:")
+        print("\n FUNDAMENTAL ANALYSIS:")
         print("  • Current stock prices and market data")
         print("  • Historical price charts and trends")
         print("  • Financial news and sentiment analysis")
@@ -144,7 +144,7 @@ async def main():
         print("  • Holder information and institutional ownership")
         print("  • 5-year projections and growth estimates")
         
-        print("\n📈 TECHNICAL ANALYSIS:")
+        print("\n TECHNICAL ANALYSIS:")
         print("  • Moving averages (SMA, EMA)")
         print("  • RSI and momentum indicators")
         print("  • Bollinger Bands and volatility")
@@ -153,7 +153,7 @@ async def main():
         print("  • Support and resistance levels")
         print("  • Comprehensive technical charting")
         
-        print("\n🔬 RESEARCH & SCENARIOS:")
+        print("\n RESEARCH & SCENARIOS:")
         print("  • Web search for analyst ratings and news")
         print("  • Aggregated analyst consensus and price targets")
         print("  • Sentiment analysis of market commentary")
@@ -162,11 +162,11 @@ async def main():
         print("  • Comprehensive investment research")
         print("  • Upgrades, downgrades, and rating changes")
         
-        print("\n🔍 TICKER LOOKUP:")
+        print("\n TICKER LOOKUP:")
         print("  • Find ticker symbols from company names")
         print("  • Support for US and international stocks")
         
-        print("\n🤖 INTELLIGENT FEATURES:")
+        print("\n INTELLIGENT FEATURES:")
         print("  • Automatic ticker resolution from company names")
         print("  • Context-aware conversation (remembers previous tickers)")
         print("  • Multi-part query handling (fundamentals + technicals + research)")
@@ -178,13 +178,13 @@ async def main():
             try:
                 user_input = input("\n>>> ").strip()
                 if user_input.lower() in ['quit', 'exit', 'q']:
-                    print("👋 Goodbye!")
+                    print(" Goodbye!")
                     break
                 
                 if not user_input:
                     continue
                 
-                print(f"\n🧠 Processing: {user_input}")
+                print(f"\n Processing: {user_input}")
                 print("-" * 50)
                 
                 # Get the current state to know how many messages exist
@@ -214,7 +214,7 @@ async def main():
                 elif final_message is None:
                     final_message = all_messages[-1]
                 
-                print("\n🤖 Response:")
+                print("\n Response:")
                 print(final_message.content)
 
                 def serialize_response(obj):
@@ -241,18 +241,18 @@ async def main():
                 filepath = os.path.join(responses_dir, filename)
                 with open(filepath, "w") as f:
                     json.dump(serialize_response(response), f, indent=4)
-                print(f"📁 Response saved to {filepath}")
+                print(f" Response saved to {filepath}")
                 
             except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
+                print("\n Goodbye!")
                 break
             except Exception as e:
-                print(f"\n❌ Error: {str(e)}")
+                print(f"\n Error: {str(e)}")
                 import traceback
                 traceback.print_exc()
                 continue
         
-        print("💾 Memory saved successfully")
+        print(" Memory saved successfully")
 
 
 if __name__ == "__main__":

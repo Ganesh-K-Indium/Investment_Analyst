@@ -24,7 +24,7 @@ class Form4Parser:
             period_of_report = self._get_text(root, 'periodOfReport')
             
             # 2. Reporting Owner Info (Can be multiple)
-            # We will take the first one as primary for now.
+            # Take the first one as primary for now.
             owners = root.findall('reportingOwner')
             if not owners: return None
             
