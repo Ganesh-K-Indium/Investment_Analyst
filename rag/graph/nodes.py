@@ -68,7 +68,7 @@ def extract_financial_metrics_from_documents(documents, metrics_list):
         'inventory': [r'inventory[:\s]+\$?([\d,]+(?:\.\d+)?)', r'inventories[:\s]+\$?([\d,]+(?:\.\d+)?)'],
         'shareholders equity': [r'shareholders[\']? equity[:\s]+\$?([\d,]+(?:\.\d+)?)', r'total equity[:\s]+\$?([\d,]+(?:\.\d+)?)'],
         'net income': [r'net income[:\s]+\$?([\d,]+(?:\.\d+)?)'],
-        'revenue': [r'total revenue[:\s]+\$?([\d,]+(?:\.\d+)?)', r'revenue[:\s]+\$?([\d,]+(?:\.\d+)?)'],
+        'revenue': [r'total revenue[:\s]+\$?([\d,]+(?:\.\d+)?)', r'revenue[:\s]+\$?([\d,]+(?:\.\d+)?)']
     }
     
     for doc in documents:
@@ -388,7 +388,6 @@ def preprocess_and_analyze_query(state):
 
         return {
             "companies_detected": comparison_companies,
-            "context_strategy": "documents",
             "sub_query_analysis": sub_query_analysis,
             "requested_years": sub_query_analysis["requested_years"],
             "sub_query_results": {}
@@ -420,7 +419,6 @@ def preprocess_and_analyze_query(state):
 
             return {
                 "companies_detected": companies,
-                "context_strategy": "documents",
                 "sub_query_analysis": sub_query_analysis,
                 "requested_years": sub_query_analysis["requested_years"],
                 "sub_query_results": {}
@@ -793,17 +791,9 @@ def retrieve(state, config):
     print(f" FINAL: {len(all_documents)} chunks ready")
     print(f"{'='*80}\n")
     
-    tool_call_entry = {
-        "tool": "ticker_hybrid_retriever",
-        "sub_queries_used": len(sub_queries) > 0,
-        "hybrid_search": True,
-        "primary_ticker": primary_ticker
-    }
-    
     return {
         "documents": all_documents,
         "vectorstore_searched": True,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry],
         "sub_query_results": sub_query_results,
         "ticker": primary_ticker  # Store resolved ticker in state
     }
@@ -841,18 +831,40 @@ def generate(state):
     MAX_TOTAL_CHARS = 150000  # Safe limit for generation
     
     if total_chars > MAX_TOTAL_CHARS:
-        print(f"[DOC SIZE] {total_chars:,} chars exceeds limit ({MAX_TOTAL_CHARS:,}). Truncating proportionally.")
-        budget_per_doc = MAX_TOTAL_CHARS // max(len(documents), 1)
-        truncated_docs = []
+        print(f"[DOC SIZE] {total_chars:,} chars exceeds limit ({MAX_TOTAL_CHARS:,}). Truncating ONLY web search documents.")
+        
+        # separate docs by source
+        vector_docs = []
+        web_docs = []
         for doc in documents:
-            if len(doc.page_content) <= budget_per_doc:
-                truncated_docs.append(doc)
+            source = doc.metadata.get("source", "")
+            if source in ["web_search", "integrate_web_search"]:
+                web_docs.append(doc)
             else:
-                truncated_docs.append(Document(
-                    page_content=doc.page_content[:budget_per_doc],
-                    metadata=doc.metadata
-                ))
-        documents = truncated_docs
+                vector_docs.append(doc)
+                
+        vector_chars = sum(len(d.page_content) for d in vector_docs)
+        remaining_budget = MAX_TOTAL_CHARS - vector_chars
+        
+        if remaining_budget <= 0:
+            # If vector docs alone exceed budget (very rare), we have to proportionally truncate everything
+            print(f"[DOC SIZE] WARNING: Vectorstore docs exceed total budget ({vector_chars:,} chars). Absolute truncation required.")
+            budget_per_doc = MAX_TOTAL_CHARS // max(len(vector_docs), 1)
+            documents = [Document(page_content=d.page_content[:budget_per_doc], metadata=d.metadata) for d in vector_docs]
+        elif web_docs:
+            print(f"[DOC SIZE] Vectorstore docs take {vector_chars:,} chars. Truncating {len(web_docs)} web chunks into remaining {remaining_budget:,} chars.")
+            budget_per_web_doc = remaining_budget // len(web_docs)
+            truncated_web = []
+            for doc in web_docs:
+                if len(doc.page_content) <= budget_per_web_doc:
+                    truncated_web.append(doc)
+                else:
+                    truncated_web.append(Document(
+                        page_content=doc.page_content[:budget_per_web_doc] + "...[TRUNCATED]",
+                        metadata=doc.metadata
+                    ))
+            documents = vector_docs + truncated_web
+            
         total_chars = sum(len(doc.page_content) for doc in documents)
         print(f"[DOC SIZE] After truncation: {total_chars:,} chars")
     else:
@@ -879,15 +891,9 @@ def generate(state):
 
     retry_count = state.get("retry_count", 0)
 
-    tool_call_entry = {
-        "tool": "rag_chain",
-        "financial_calculation_mode": needs_calculation
-    }
-
     return {
         "Intermediate_message": Intermediate_message,
-        "retry_count": retry_count + 1,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
+        "retry_count": retry_count + 1
     }
 
 
@@ -941,12 +947,8 @@ def grade_documents(state):
                 "can_answer": False,
                 "missing_data_summary": "No chunks found in vector database",
                 "company_coverage": []
-            },
-            "tool_calls": state.get("tool_calls", []) + [{
-                "tool": "financial_analyst_grader",
-                "result": "no_documents"
-            }]
-        }
+            }
+    }
     
     # Initialize financial analyst grader with gpt-4o
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
@@ -1013,20 +1015,13 @@ def grade_documents(state):
             "documents_graded_count": len(doc_previews)
         }
 
-        tool_call_entry = {
-            "tool": "financial_analyst_grader",
-            "grade": overall_grade,
-            "can_answer": grade.is_sufficient
-        }
-
         print(f"\n GRADING COMPLETE: {len(documents)} chunks evaluated")
         print(f"   Next: Decision node will use this grading to determine if web search needed")
 
         return {
             "documents": documents,
-            "financial_grading": grading_result,
-            "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
-        }
+            "financial_grading": grading_result
+    }
 
     except Exception as e:
         print(f" Financial analyst grading failed: {e}")
@@ -1035,9 +1030,8 @@ def grade_documents(state):
         # Fallback: keep all chunks
         return {
             "documents": documents,
-            "financial_grading": {"overall_grade": "partial", "can_answer": False, "error": str(e)},
-            "tool_calls": state.get("tool_calls", []) + [{"tool": "financial_analyst_grader", "error": str(e)}]
-        }
+            "financial_grading": {"overall_grade": "partial", "can_answer": False, "error": str(e)}
+    }
 
 
 def web_search(state):
@@ -1186,15 +1180,9 @@ def web_search(state):
         found_count = sum(1 for sq_data in sub_query_results.values() if isinstance(sq_data, dict) and sq_data.get("found", False))
         print(f" Updated sub-query results: {found_count}/{len(sub_queries)} have data")
 
-    tool_call_entry = {
-        "tool": "web_search",
-        "sub_queries_used": len(sub_queries) > 0
-    }
-
     return {
         "documents": documents,
         "web_searched": True,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry],
         "sub_query_results": sub_query_results
     }
 
@@ -1301,29 +1289,33 @@ def integrate_web_search(state):
     companies_detected = state.get("sub_query_analysis", {}).get("companies_detected", []) or state.get("companies_detected", [])
     ticker = state.get("ticker", "")
 
+    company = ""
     if company_filter:
         company = company_filter[0] if isinstance(company_filter, list) else company_filter
     elif companies_detected:
         company = companies_detected[0]
-    else:
-        company = ""
 
     # Build a single combined query using ticker, company name, and missing data summary
     financial_grading = state.get("financial_grading", {})
     missing_summary = financial_grading.get("missing_data_summary", "")
 
     query_parts = []
-    if ticker:
-        query_parts.append(ticker)
-    if company:
+    # Avoid duplicate terms (like repeating company name multiple times)
+    if company and company.lower() not in [q.lower() for q in query_parts]:
         query_parts.append(company)
-    if missing_summary:
-        query_parts.append(missing_summary)
+    
+    if ticker and ticker.lower() not in [q.lower() for q in query_parts] and ticker.lower() != company.lower():
+        query_parts.append(ticker)
+
+    if missing_summary and str(missing_summary).strip() and str(missing_summary).lower() != "none" and "no chunks" not in str(missing_summary).lower():
+        # Missing data summary is the target - use it directly
+        query_parts.append(str(missing_summary).strip())
     else:
+        # Fallback to the original question only if there is no explicit missing data summary
         query_parts.append(question)
 
     search_query = " ".join(query_parts)
-    print(f"  Search query: {search_query[:150]}")
+    print(f"  Search query: {search_query}")
 
     web_search_tool = TavilySearch(
         max_results=5,
@@ -1355,8 +1347,8 @@ def integrate_web_search(state):
                     "source": "integrate_web_search",
                     "title": source["title"],
                     "url": source["url"],
-                    "search_query": search_query,
-                }
+                    "search_query": search_query
+    }
             ))
             total_chars += len(source["content"])
     except Exception as e:
@@ -1367,12 +1359,7 @@ def integrate_web_search(state):
 
     return {
         "documents": combined_documents,
-        "web_searched": True,
-        "tool_calls": state.get("tool_calls", []) + [{
-            "tool": "integrate_web_search",
-            "query": search_query,
-            "web_docs_retrieved": len(web_documents)
-        }],
+        "web_searched": True
     }
 
 
@@ -1380,14 +1367,9 @@ def show_result(state):
     print("---SHOW RESULT---")
     Final_answer = AIMessage(content=state["Intermediate_message"])
 
-    tool_call_entry = {
-        "tool": "final_output"
-    }
-
     print(f'SHOWING THE RESULTS: {Final_answer}')
     return {
-        "messages": Final_answer,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
+        "messages": Final_answer
     }
 
 
@@ -2459,8 +2441,8 @@ def detect_scenario_query(state):
             "scenario_mode": True,
             "ticker": ticker,
             "scenario_data": {},
-            "scenario_report": "",
-        }
+            "scenario_report": ""
+    }
     else:
         print(" Normal query (not a Scenario request)")
         print("=" * 80 + "\n")
@@ -2498,7 +2480,7 @@ def scenario_data_retrieve(state):
         "catalyst_data": [],
         "risk_data": [],
         "credit_data": [],
-        "macro_data": [],
+        "macro_data": []
     }
 
     # -------------------------------------------------------------------------
@@ -2520,8 +2502,8 @@ def scenario_data_retrieve(state):
                 scenario_data["analyst_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['analyst_data'])} analyst sources collected")
@@ -2542,8 +2524,8 @@ def scenario_data_retrieve(state):
                 scenario_data["valuation_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['valuation_data'])} valuation sources collected")
@@ -2565,8 +2547,8 @@ def scenario_data_retrieve(state):
                 scenario_data["catalyst_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['catalyst_data'])} catalyst sources collected")
@@ -2588,8 +2570,8 @@ def scenario_data_retrieve(state):
                 scenario_data["risk_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['risk_data'])} risk sources collected")
@@ -2610,8 +2592,8 @@ def scenario_data_retrieve(state):
                 scenario_data["credit_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['credit_data'])} credit sources collected")
@@ -2632,8 +2614,8 @@ def scenario_data_retrieve(state):
                 scenario_data["macro_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['macro_data'])} macro sources collected")
@@ -2701,8 +2683,8 @@ def scenario_generate_report(state):
             "ticker": ticker,
             "analyst_data": analyst_text,
             "valuation_data": valuation_text,
-            "catalyst_data": catalyst_text,
-        })
+            "catalyst_data": catalyst_text
+    })
         print(f"    Bull target: {bull_result.price_target}  upside: {bull_result.upside_downside}")
     except Exception as e:
         print(f"    Error: {e}")
@@ -2716,8 +2698,8 @@ def scenario_generate_report(state):
             "ticker": ticker,
             "analyst_data": analyst_text,
             "risk_data": risk_text,
-            "credit_data": credit_text,
-        })
+            "credit_data": credit_text
+    })
         print(f"    Bear target: {bear_result.price_target}  downside: {bear_result.upside_downside}")
     except Exception as e:
         print(f"    Error: {e}")
@@ -2731,8 +2713,8 @@ def scenario_generate_report(state):
             "ticker": ticker,
             "analyst_data": analyst_text,
             "valuation_data": valuation_text,
-            "macro_data": macro_text,
-        })
+            "macro_data": macro_text
+    })
         print(f"    Base target: {base_result.price_target}  return: {base_result.upside_downside}")
     except Exception as e:
         print(f"    Error: {e}")
@@ -2778,8 +2760,8 @@ def scenario_generate_report(state):
             "bear_analysis": _safe(bear_result, "analysis"),
             # Summaries
             "analyst_summary": analyst_text[:2000] if analyst_text else "N/A",
-            "credit_summary": credit_text[:1000] if credit_text else "N/A",
-        })
+            "credit_summary": credit_text[:1000] if credit_text else "N/A"
+    })
         print(f"    Final report: {len(final_report)} chars")
     except Exception as e:
         print(f"    Error generating combined report: {e}")
@@ -2802,5 +2784,5 @@ def scenario_generate_report(state):
         "messages": [AIMessage(content=final_report)],
         "scenario_report": final_report,
         "Intermediate_message": final_report,
-        "web_searched": True,
+        "web_searched": True
     }
