@@ -61,9 +61,9 @@ async def lifespan(app: FastAPI):
     if saver_cm is not None:
         try:
             await saver_cm.__aexit__(None, None, None)
-            print("✅ Memory saver cleaned up successfully")
+            print(" Memory saver cleaned up successfully")
         except Exception as e:
-            print(f"⚠️ Error cleaning up memory saver: {e}")
+            print(f" Error cleaning up memory saver: {e}")
 
 # FastAPI app
 app = FastAPI(
@@ -91,41 +91,41 @@ async def initialize_agents():
         return
 
     try:
-        print("🚀 Initializing Stock Analysis Supervisor Agent...")
+        print(" Initializing Stock Analysis Supervisor Agent...")
         
         # Initialize memory saver
-        print("💾 Initializing SQLite memory...")
+        print(" Initializing SQLite memory...")
         db_path = os.getenv("SQLITE_DB_PATH", "sqlite:///checkpoints.db")
-        print(f"📍 Using database path: {db_path}")
+        print(f" Using database path: {db_path}")
         
         try:
             saver_cm = AsyncSqliteSaver.from_conn_string(db_path)
-            print("🔗 Created AsyncSqliteSaver context manager")
+            print(" Created AsyncSqliteSaver context manager")
             saver = await saver_cm.__aenter__()
-            print("✅ Entered saver context manager")
+            print(" Entered saver context manager")
             await saver.setup()  # Creates tables if needed
-            print("✅ Memory initialized successfully")
+            print(" Memory initialized successfully")
         except Exception as saver_error:
-            print(f"❌ Failed to initialize saver: {str(saver_error)}")
-            print(f"❌ Database path: {db_path}")
+            print(f" Failed to initialize saver: {str(saver_error)}")
+            print(f" Database path: {db_path}")
             import traceback
             traceback.print_exc()
             raise
 
         # Wait for MCP servers to be ready
-        print("⏳ Waiting for MCP servers...")
+        print(" Waiting for MCP servers...")
         await wait_for_server("http://localhost:8565/mcp")  # Stock Information
         await wait_for_server("http://localhost:8566/mcp")  # Technical Analysis
         await wait_for_server("http://localhost:8567/mcp")  # Research
 
         # Create sub-agents
-        print("🔧 Creating sub-agents...")
+        print(" Creating sub-agents...")
         stock_info_agent = await create_stock_information_agent(checkpointer=saver)
         technical_agent = await create_technical_analysis_agent(checkpointer=saver)
         ticker_finder = await create_ticker_finder_agent(checkpointer=saver)
         research_agent = await create_research_agent(checkpointer=saver)
 
-        print("✅ Sub-agents created successfully")
+        print(" Sub-agents created successfully")
 
         # Create supervisor
         supervisor_prompt = """You are a stock analysis supervisor managing 4 agents:
@@ -163,10 +163,10 @@ CRITICAL:
         supervisor.recursion_limit = 50
 
         agents_initialized = True
-        print("✅ Supervisor agent initialized successfully")
+        print(" Supervisor agent initialized successfully")
 
     except Exception as e:
-        print(f"❌ Failed to initialize agents: {str(e)}")
+        print(f" Failed to initialize agents: {str(e)}")
         import traceback
         traceback.print_exc()
         raise
@@ -210,7 +210,7 @@ async def health_check():
             sock.close()
             return result == 0
         except Exception as e:
-            print(f"❌ Server check failed for {url}: {str(e)}")
+            print(f" Server check failed for {url}: {str(e)}")
             return False
 
     # Check all MCP servers
@@ -253,7 +253,7 @@ async def chat_with_agent(request: ChatRequest, background_tasks: BackgroundTask
         # Generate session ID if not provided
         session_id = request.session_id or f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        print(f"🧠 Processing request for session {session_id}: {request.message[:100]}...")
+        print(f" Processing request for session {session_id}: {request.message[:100]}...")
 
         # Get the current state to know how many messages exist
         current_state = await supervisor.aget_state(config={"configurable": {"thread_id": session_id}})
@@ -293,7 +293,7 @@ async def chat_with_agent(request: ChatRequest, background_tasks: BackgroundTask
         )
 
     except Exception as e:
-        print(f"❌ Error processing request: {str(e)}")
+        print(f" Error processing request: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
@@ -326,9 +326,9 @@ def save_response_to_file(response, session_id):
         filepath = os.path.join(responses_dir, filename)
         with open(filepath, "w") as f:
             json.dump(serialize_response(response), f, indent=4)
-        print(f"📁 API response saved to {filepath}")
+        print(f" API response saved to {filepath}")
     except Exception as e:
-        print(f"❌ Failed to save response: {str(e)}")
+        print(f" Failed to save response: {str(e)}")
 
 
 @app.get("/capabilities", tags=["Info"])
@@ -404,9 +404,9 @@ async def get_session_history(session_id: str):
 
 
 if __name__ == "__main__":
-    print("🚀 Starting Stock Analysis Supervisor API Server...")
-    print("📍 API will be available at: http://localhost:8567")
-    print("📖 API documentation at: http://localhost:8567/docs")
+    print(" Starting Stock Analysis Supervisor API Server...")
+    print(" API will be available at: http://localhost:8567")
+    print(" API documentation at: http://localhost:8567/docs")
 
     uvicorn.run(
         "api_server:app",

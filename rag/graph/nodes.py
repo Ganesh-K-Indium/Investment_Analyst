@@ -68,7 +68,7 @@ def extract_financial_metrics_from_documents(documents, metrics_list):
         'inventory': [r'inventory[:\s]+\$?([\d,]+(?:\.\d+)?)', r'inventories[:\s]+\$?([\d,]+(?:\.\d+)?)'],
         'shareholders equity': [r'shareholders[\']? equity[:\s]+\$?([\d,]+(?:\.\d+)?)', r'total equity[:\s]+\$?([\d,]+(?:\.\d+)?)'],
         'net income': [r'net income[:\s]+\$?([\d,]+(?:\.\d+)?)'],
-        'revenue': [r'total revenue[:\s]+\$?([\d,]+(?:\.\d+)?)', r'revenue[:\s]+\$?([\d,]+(?:\.\d+)?)'],
+        'revenue': [r'total revenue[:\s]+\$?([\d,]+(?:\.\d+)?)', r'revenue[:\s]+\$?([\d,]+(?:\.\d+)?)']
     }
     
     for doc in documents:
@@ -105,185 +105,6 @@ def extract_financial_metrics_from_documents(documents, metrics_list):
     return extracted_data
 
 
-# CACHE for extracted documents to avoid re-processing
-_extraction_cache = {}
-
-def smart_extract_financial_data(documents, max_chars=80000):
-    """
-    SMART FINANCIAL DATA EXTRACTION with LLM + Better Fallback + Caching.
-    
-    STRATEGY:
-    1. Use LLM to extract structured financial data from web docs
-    2. Better fallback: Keep MORE content (not just 1K) when extraction fails
-    3. Vectorstore docs: Keep as-is (already clean)
-    4. Distribute budget wisely to use full character limit
-    5. Cache results to avoid re-processing
-    
-    OPTIMIZATIONS:
-    - Caching: Avoids re-processing same documents
-    - LLM extraction: Structures financial data properly
-    - Smart fallback: Keeps 3-5K chars (not 1K) for better context
-    - Budget distribution: Uses full 80K budget efficiently
-    
-    Returns:
-        documents with extracted financial data + rich content
-    """
-    if not documents:
-        return []
-    
-    # Generate cache key based on document content hashes and max_chars
-    try:
-        cache_key = f"{hash(tuple(hash(d.page_content[:100]) for d in documents))}_{max_chars}_{len(documents)}"
-    except:
-        cache_key = f"{id(documents[0])}_{max_chars}_{len(documents)}"
-    
-    # Check cache first (MAJOR optimization - avoids re-processing)
-    if cache_key in _extraction_cache:
-        print(f"[CACHE HIT]  Reusing previously processed {len(documents)} documents")
-        return _extraction_cache[cache_key]
-    
-    total_chars = sum(len(doc.page_content) for doc in documents)
-    
-    # If small enough, return as-is
-    if total_chars <= max_chars:
-        print(f"[DOC SIZE] {total_chars:,} chars (within {max_chars:,} limit) - keeping all content")
-        _extraction_cache[cache_key] = documents
-        return documents
-    
-    print(f"[EXTRACT] {total_chars:,} chars → {max_chars:,} chars target")
-    
-    # Separate web docs from vectorstore docs
-    web_docs = []
-    vectorstore_docs = []
-    
-    for doc in documents:
-        source = doc.metadata.get("source", "") if hasattr(doc, 'metadata') else ""
-        is_web_doc = source in ["web_search", "integrate_web_search"]
-        
-        if is_web_doc:
-            web_docs.append(doc)
-        else:
-            vectorstore_docs.append(doc)
-    
-    print(f"[EXTRACT] Web: {len(web_docs)} docs, Vectorstore: {len(vectorstore_docs)} docs")
-    
-    # Extract web docs with LLM + smart fallback
-    extracted_docs = []
-    
-    if web_docs:
-        # Separate small docs (< 10K) from large docs (>= 10K)
-        small_docs = [d for d in web_docs if len(d.page_content) < 15000]
-        large_docs = [d for d in web_docs if len(d.page_content) >= 15000]
-        
-        print(f"[EXTRACT] Web docs: {len(small_docs)} small (< 15K chars), {len(large_docs)} large (>= 15K chars)")
-        
-        # Small docs: Add directly (no LLM processing needed)
-        if small_docs:
-            print(f"[EXTRACT]  Adding {len(small_docs)} small docs directly (no LLM needed)")
-            extracted_docs.extend(small_docs)
-        
-        # Large docs: Process with LLM
-        if large_docs:
-            print(f"[EXTRACT] Processing {len(large_docs)} large documents with LLM...")
-            
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-            extractor_chain = get_financial_data_extractor_chain(llm)
-            
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            
-            # Calculate budget per large doc
-            web_budget = int(max_chars * 0.7)
-            budget_per_web_doc = max(3000, web_budget // len(large_docs)) if large_docs else 5000
-            
-            def extract_from_doc(doc):
-                """Extract financial data with LLM or use smart fallback."""
-                try:
-                    # Try LLM extraction first
-                    content = doc.page_content[:8000]  # Use more content for extraction
-                    structured_data = extractor_chain.invoke({"document_content": content})
-                    
-                    # Build structured summary
-                    summary_parts = []
-                    summary_parts.append(f"Company: {structured_data.company} | Year: {structured_data.year}")
-                    
-                    # Add all extracted metrics
-                    if structured_data.revenue:
-                        summary_parts.append(f"Revenue: {structured_data.revenue}")
-                    if structured_data.net_income:
-                        summary_parts.append(f"Net Income: {structured_data.net_income}")
-                    if structured_data.operating_income:
-                        summary_parts.append(f"Operating Income: {structured_data.operating_income}")
-                    if structured_data.gross_profit:
-                        summary_parts.append(f"Gross Profit: {structured_data.gross_profit}")
-                    if structured_data.earnings_per_share:
-                        summary_parts.append(f"EPS: {structured_data.earnings_per_share}")
-                    
-                    # If extraction worked, add original content for context
-                    if len(summary_parts) > 1:
-                        structured_summary = "\n".join(summary_parts)
-                        # Add more original content for better context
-                        additional_content = doc.page_content[:budget_per_web_doc - len(structured_summary)]
-                        final_content = f"{structured_summary}\n\n---FULL CONTENT---\n{additional_content}"
-                        print(f"    {structured_data.company} {structured_data.year}: Extracted + {len(final_content):,} chars content")
-                    else:
-                        # Extraction didn't find much, use more original content
-                        final_content = doc.page_content[:budget_per_web_doc]
-                        print(f"     Limited extraction, using {len(final_content):,} chars original content")
-                    
-                    return Document(
-                        page_content=final_content,
-                        metadata=doc.metadata
-                    )
-                    
-                except Exception as e:
-                    # SMART FALLBACK: Keep MORE content (3-5K, not 1K!)
-                    fallback_content = doc.page_content[:budget_per_web_doc]
-                    print(f"     Extraction failed, keeping {len(fallback_content):,} chars original content")
-                    return Document(
-                        page_content=fallback_content,
-                        metadata=doc.metadata
-                    )
-        
-            # Process large docs in parallel
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = {executor.submit(extract_from_doc, doc): doc for doc in large_docs}
-                for future in as_completed(futures):
-                    extracted_docs.append(future.result())
-    
-    # Add vectorstore docs (keep as-is, truncate if needed)
-    web_chars = sum(len(d.page_content) for d in extracted_docs)
-    remaining_budget = max_chars - web_chars
-    
-    if vectorstore_docs and remaining_budget > 0:
-        vs_total = sum(len(d.page_content) for d in vectorstore_docs)
-        if vs_total <= remaining_budget:
-            extracted_docs.extend(vectorstore_docs)
-            print(f"[EXTRACT] All vectorstore docs fit ({vs_total:,} chars)")
-        else:
-            # Truncate vectorstore docs proportionally
-            budget_per_vs = remaining_budget // len(vectorstore_docs)
-            for doc in vectorstore_docs:
-                if len(doc.page_content) <= budget_per_vs:
-                    extracted_docs.append(doc)
-                else:
-                    extracted_docs.append(Document(
-                        page_content=doc.page_content[:budget_per_vs],
-                        metadata=doc.metadata
-                    ))
-            print(f"[EXTRACT] Vectorstore docs truncated to fit budget")
-    
-    # Calculate final stats
-    final_chars = sum(len(d.page_content) for d in extracted_docs)
-    reduction_pct = ((total_chars - final_chars) / total_chars * 100) if total_chars > 0 else 0
-    
-    print(f"[EXTRACT COMPLETE]")
-    print(f"  Original: {total_chars:,} → Final: {final_chars:,} chars ({reduction_pct:.1f}% reduction)")
-    print(f"  {len(extracted_docs)} documents with rich financial + contextual data")
-    
-    # Cache result
-    _extraction_cache[cache_key] = extracted_docs
-    
-    return extracted_docs
 
 
 def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
@@ -547,7 +368,7 @@ def preprocess_and_analyze_query(state):
     is_comparison_mode = state.get("is_comparison_mode", False)
 
     if is_comparison_mode:
-        print("📊 COMPARISON MODE DETECTED - Using pre-optimized 10-K queries")
+        print(" COMPARISON MODE DETECTED - Using pre-optimized 10-K queries")
 
         # Extract companies from state
         comparison_companies = []
@@ -558,16 +379,15 @@ def preprocess_and_analyze_query(state):
         if state.get("comparison_company3"):
             comparison_companies.append(state["comparison_company3"])
 
-        print(f"📊 Companies: {', '.join(comparison_companies)}")
+        print(f" Companies: {', '.join(comparison_companies)}")
 
         # Generate fixed sub-queries using the year from state (fallback to current year)
         comparison_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
-        print(f"📊 Comparison year: {comparison_year}")
+        print(f" Comparison year: {comparison_year}")
         sub_query_analysis = generate_comparison_subqueries(comparison_companies, year=comparison_year)
 
         return {
             "companies_detected": comparison_companies,
-            "context_strategy": "documents",
             "sub_query_analysis": sub_query_analysis,
             "requested_years": sub_query_analysis["requested_years"],
             "sub_query_results": {}
@@ -591,15 +411,14 @@ def preprocess_and_analyze_query(state):
 
         if companies:
             if seg_geo_type == "segment":
-                print(f"📊 SEGMENT QUERY DETECTED - Using pre-optimized segment templates for {companies}")
+                print(f" SEGMENT QUERY DETECTED - Using pre-optimized segment templates for {companies}")
                 sub_query_analysis = generate_segment_subqueries(companies, question=question)
             else:
-                print(f"🌍 GEOGRAPHIC QUERY DETECTED - Using pre-optimized geographic templates for {companies}")
+                print(f" GEOGRAPHIC QUERY DETECTED - Using pre-optimized geographic templates for {companies}")
                 sub_query_analysis = generate_geographic_subqueries(companies, question=question)
 
             return {
                 "companies_detected": companies,
-                "context_strategy": "documents",
                 "sub_query_analysis": sub_query_analysis,
                 "requested_years": sub_query_analysis["requested_years"],
                 "sub_query_results": {}
@@ -808,11 +627,11 @@ def retrieve(state, config):
     seen_doc_ids = set()
     
     if needs_sub_queries and sub_queries:
-        print(f"\n🎯 SUB-QUERY MODE: {len(sub_queries)} data points")
+        print(f"\n SUB-QUERY MODE: {len(sub_queries)} data points")
         print("-" * 80)
         
         for i, sq in enumerate(sub_queries, 1):
-            print(f"\n📍 {i}/{len(sub_queries)}: {sq}")
+            print(f"\n {i}/{len(sub_queries)}: {sq}")
 
             # Intelligently detect which tickers are mentioned in THIS sub-query
             sq_tickers_for_step = detect_tickers_in_query(sq, target_tickers)
@@ -820,13 +639,13 @@ def retrieve(state, config):
             # If no specific ticker detected, query ALL allowed tickers
             # (This handles cases where the sub-query doesn't explicitly mention a company)
             if not sq_tickers_for_step:
-                print(f"   ⚠️  No specific company detected, querying all: {list(target_tickers)}")
+                print(f"     No specific company detected, querying all: {list(target_tickers)}")
                 sq_tickers_for_step = target_tickers
             else:
-                print(f"   🎯 Detected companies: {list(sq_tickers_for_step)}")
+                print(f"    Detected companies: {list(sq_tickers_for_step)}")
             
             if not sq_tickers_for_step:
-                print(f"   ❌ No allowed tickers found. Skipping vector search.")
+                print(f"    No allowed tickers found. Skipping vector search.")
                 sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
                 continue
             
@@ -835,7 +654,7 @@ def retrieve(state, config):
             for t_ticker in sq_tickers_for_step:
                 try:
                     company_name = map_ticker_to_company(t_ticker.lower())
-                    print(f"   🔍 Querying ticker_{t_ticker.lower()} ({company_name})...")
+                    print(f"    Querying ticker_{t_ticker.lower()} ({company_name})...")
 
                     # Get instance for this ticker (DO NOT CREATE if missing)
                     db_instance = vectordb_mgr.get_instance(t_ticker, create_if_missing=False)
@@ -864,13 +683,13 @@ def retrieve(state, config):
                                 docs_from_ticker += 1
 
                     if docs_from_ticker > 0:
-                        print(f"      ✅ Found {docs_from_ticker} chunks")
+                        print(f"       Found {docs_from_ticker} chunks")
                     else:
-                        print(f"      ⚠️  No chunks found")
+                        print(f"        No chunks found")
 
                 except Exception as e:
                      # Likely collection not found (safe to ignore in retrieval)
-                     print(f"      ❌ Collection not found or error: {e}")
+                     print(f"       Collection not found or error: {e}")
 
             # Deduplicate and Collect results for this sub-query
             companies_found = set()
@@ -897,9 +716,9 @@ def retrieve(state, config):
             }
 
             if len(step_docs) > 0:
-                print(f"   ✅ Total: {len(step_docs)} chunks from {len(companies_found)} companies")
+                print(f"    Total: {len(step_docs)} chunks from {len(companies_found)} companies")
             else:
-                print(f"   ❌ No chunks found for this sub-query")
+                print(f"    No chunks found for this sub-query")
 
     else:
         # ============================================================================
@@ -972,17 +791,9 @@ def retrieve(state, config):
     print(f" FINAL: {len(all_documents)} chunks ready")
     print(f"{'='*80}\n")
     
-    tool_call_entry = {
-        "tool": "ticker_hybrid_retriever",
-        "sub_queries_used": len(sub_queries) > 0,
-        "hybrid_search": True,
-        "primary_ticker": primary_ticker
-    }
-    
     return {
         "documents": all_documents,
         "vectorstore_searched": True,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry],
         "sub_query_results": sub_query_results,
         "ticker": primary_ticker  # Store resolved ticker in state
     }
@@ -1009,121 +820,8 @@ def generate(state):
     else:
         print(" WARNING: No chunks available for generation!")
     
-    # ============================================================================
-    # MESSAGE-BASED GENERATION: For "summarize" queries, use conversation messages
-    # ============================================================================
-    context_strategy = state.get("context_strategy", "documents")
-    if context_strategy == "messages":
-        print("\\n🧠 MESSAGE-BASED GENERATION MODE")
-        print("-" * 80)
-        
-        conversation_messages = state.get("conversation_messages", [])
-        if not conversation_messages:
-            print("⚠️ No conversation messages found, falling back to document-based generation")
-        else:
-            print(f"📜 Using {len(conversation_messages)} previous AI responses")
-            
-            # Combine conversation messages
-            context = "\\n\\n---\\n\\n".join(conversation_messages)
-            
-            # Create summarization prompt
-            prompt = f"""Based on our previous conversation, please provide a concise summary.
-
-Previous AI responses:
-{context}
-
-User's request: {question}
-
-Please provide a clear, well-structured summary."""
-            
-            # Generate using Groq (fast and efficient for summarization)
-            from langchain_groq import ChatGroq
-            llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
-            
-            print(f" Generating summary with Groq...")
-            response = llm.invoke(prompt)
-            generation = response.content
-            
-            print(f" Summary generated ({len(generation)} chars)")
-            print(f"{'='*80}\\n")
-            
-            return {"messages": [generation]}
-    
     # Context-free mode - no conversation memory
     enriched_question = question
-    conversation_history = ""
-    
-    # NEW: Check if this is a financial calculation query
-    financial_calculation = state.get("financial_calculation", {})
-    needs_calculation = financial_calculation.get("needs_calculation", False)
-    
-    if needs_calculation:
-        print("---FINANCIAL CALCULATION MODE ENABLED---")
-        metrics_needed = financial_calculation.get("metrics_needed", [])
-        sub_queries = financial_calculation.get("sub_queries", [])
-        sub_query_results = state.get("sub_query_results", {})
-        
-        print(f" Metrics to calculate: {metrics_needed}")
-        print(f" Sub-queries: {len(sub_queries)} total, {len(sub_query_results)} with data")
-        
-        # Add financial formulas to the generation context
-        FINANCIAL_FORMULAS = """
-**FINANCIAL METRIC FORMULAS FOR CALCULATIONS:**
-
-1. **ROE (Return on Equity)** = Net Income (annual) / Shareholders' Equity
-2. **Revenue Growth (3 Years)** = ((Revenue at end of Year 3 - Revenue at beginning of Year 1) / Revenue at beginning of Year 1) × 100%
-3. **Debt-to-Equity Ratio** = Total Debt / Total Equity
-4. **Dividend Yield** = (Dividends per Share / Price per Share) × 100%
-5. **P/E Ratio** = Price per Share / Earnings per Share
-6. **Current Ratio** = Current Assets / Current Liabilities
-7. **Quick Ratio** = (Current Assets - Inventory) / Current Liabilities
-8. **Gross Margin** = (Revenue - Cost of Goods Sold) / Revenue
-9. **Operating Margin** = Operating Income / Revenue
-10. **Cash Ratio** = Cash and Cash Equivalents / Current Liabilities
-11. **Interest Coverage Ratio** = Operating Income / Interest Expense
-12. **Inventory Turnover** = Cost of Goods Sold / Average Inventory
-13. **Payables Turnover** = Cost of Goods Sold / Average Accounts Payable
-14. **Revenue Growth (YoY)** = [(Current Year Revenue - Prior Year Revenue) / Prior Year Revenue] × 100%
-15. **Net CapEx** = Ending PP&E - Beginning PP&E + Depreciation Expense
-16. **Cash Burn Rate** = (Net Cash Used in Operating Activities) / Cash & Cash Equivalents at beginning of period
-17. **Return on Assets (ROA)** = Net Income / Total Assets
-
-**DEFINITIONS:**
-- **Current Assets**: Cash & Cash Equivalents, Short-term Investments, Accounts Receivable, Inventory (from Balance Sheet)
-- **Current Liabilities**: Accounts Payable, Short-term Debt, Accrued Liabilities (from Balance Sheet)
-- **PP&E**: Property, Plant & Equipment
-- **Depreciation Expense**: From Income Statement
-
-**INSTRUCTIONS:**
-1. Extract the required data points from the provided documents
-2. Apply the appropriate formula
-3. Show your calculation step-by-step
-4. If any required data is missing, clearly state what's missing and explain you cannot complete the calculation
-5. Always cite the source documents for the numbers used
-"""
-        
-        # Build sub-query results summary
-        sub_query_summary = ""
-        if sub_query_results:
-            sub_query_summary = "\n\n**DATA GATHERED FOR SUB-QUERIES:**\n"
-            for sq, results in sub_query_results.items():
-                sub_query_summary += f"\n- {sq}:\n"
-                for r in results[:2]:  # Show first 2 results per sub-query
-                    sub_query_summary += f"  • {r[:200]}...\n"
-        
-        # NEW: Add extracted financial metrics to context
-        extracted_metrics = state.get("extracted_financial_metrics", {})
-        metrics_summary = ""
-        if extracted_metrics:
-            metrics_summary = "\n\n**EXTRACTED FINANCIAL DATA (Use these values for calculations):**\n"
-            for metric, data in extracted_metrics.items():
-                metrics_summary += f"- {metric.title()}: ${data['raw']} (Source: {data['source']})\n"
-            print(f" Adding {len(extracted_metrics)} extracted metrics to generation context")
-        
-        print(" Adding financial formulas and calculation instructions to generation context")
-    else:
-        FINANCIAL_FORMULAS = ""
-        sub_query_summary = ""
     
     print("---USING STANDARD GENERATION---")
     
@@ -1132,16 +830,45 @@ Please provide a clear, well-structured summary."""
     total_chars = sum(len(doc.page_content) for doc in documents)
     MAX_TOTAL_CHARS = 150000  # Safe limit for generation
     
-    # Check if financial query to prioritize financial data
-    sub_query_analysis = state.get("sub_query_analysis", {})
-    is_financial_query = sub_query_analysis.get("query_type") in ["financial_calculation", "multi_company"]
-    
-    # NEW: Structured financial data extraction (replaces lossy truncation)
     if total_chars > MAX_TOTAL_CHARS:
-        documents = smart_extract_financial_data(documents, MAX_TOTAL_CHARS)
+        print(f"[DOC SIZE] {total_chars:,} chars exceeds limit ({MAX_TOTAL_CHARS:,}). Truncating ONLY web search documents.")
+        
+        # separate docs by source
+        vector_docs = []
+        web_docs = []
+        for doc in documents:
+            source = doc.metadata.get("source", "")
+            if source in ["web_search", "integrate_web_search"]:
+                web_docs.append(doc)
+            else:
+                vector_docs.append(doc)
+                
+        vector_chars = sum(len(d.page_content) for d in vector_docs)
+        remaining_budget = MAX_TOTAL_CHARS - vector_chars
+        
+        if remaining_budget <= 0:
+            # If vector docs alone exceed budget (very rare), we have to proportionally truncate everything
+            print(f"[DOC SIZE] WARNING: Vectorstore docs exceed total budget ({vector_chars:,} chars). Absolute truncation required.")
+            budget_per_doc = MAX_TOTAL_CHARS // max(len(vector_docs), 1)
+            documents = [Document(page_content=d.page_content[:budget_per_doc], metadata=d.metadata) for d in vector_docs]
+        elif web_docs:
+            print(f"[DOC SIZE] Vectorstore docs take {vector_chars:,} chars. Truncating {len(web_docs)} web chunks into remaining {remaining_budget:,} chars.")
+            budget_per_web_doc = remaining_budget // len(web_docs)
+            truncated_web = []
+            for doc in web_docs:
+                if len(doc.page_content) <= budget_per_web_doc:
+                    truncated_web.append(doc)
+                else:
+                    truncated_web.append(Document(
+                        page_content=doc.page_content[:budget_per_web_doc] + "...[TRUNCATED]",
+                        metadata=doc.metadata
+                    ))
+            documents = vector_docs + truncated_web
+            
+        total_chars = sum(len(doc.page_content) for doc in documents)
+        print(f"[DOC SIZE] After truncation: {total_chars:,} chars")
     else:
         print(f"[DOC SIZE] {total_chars:,} chars (limit: {MAX_TOTAL_CHARS:,})")
-    
     
     llm = ChatOpenAI(
         model="gpt-4o",
@@ -1150,31 +877,23 @@ Please provide a clear, well-structured summary."""
         request_timeout=30,
         max_retries=2
     )
-    #llm=ChatGroq(model="llama-3.3-70b-versatile")
     rag_chain = get_rag_chain(llm)
     
-    # Pass documents (truncated if necessary)
     generation_input = {
         "documents": documents,
         "question": enriched_question,
-        "financial_formulas": FINANCIAL_FORMULAS if needs_calculation else "",
-        "sub_query_summary": sub_query_summary if needs_calculation else "",
-        "extracted_metrics": metrics_summary if needs_calculation else ""
+        "financial_formulas": "",
+        "sub_query_summary": "",
+        "extracted_metrics": ""
     }
     
     Intermediate_message = rag_chain.invoke(generation_input)
 
     retry_count = state.get("retry_count", 0)
 
-    tool_call_entry = {
-        "tool": "rag_chain",
-        "financial_calculation_mode": needs_calculation
-    }
-
     return {
         "Intermediate_message": Intermediate_message,
-        "retry_count": retry_count + 1,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
+        "retry_count": retry_count + 1
     }
 
 
@@ -1227,12 +946,9 @@ def grade_documents(state):
                 "overall_grade": "insufficient",
                 "can_answer": False,
                 "missing_data_summary": "No chunks found in vector database",
-                "company_coverage": []
-            },
-            "tool_calls": state.get("tool_calls", []) + [{
-                "tool": "financial_analyst_grader",
-                "result": "no_documents"
-            }]
+                "company_coverage": [],
+                "documents_graded_count": 0
+            }
         }
     
     # Initialize financial analyst grader with gpt-4o
@@ -1300,20 +1016,13 @@ def grade_documents(state):
             "documents_graded_count": len(doc_previews)
         }
 
-        tool_call_entry = {
-            "tool": "financial_analyst_grader",
-            "grade": overall_grade,
-            "can_answer": grade.is_sufficient
-        }
-
         print(f"\n GRADING COMPLETE: {len(documents)} chunks evaluated")
         print(f"   Next: Decision node will use this grading to determine if web search needed")
 
         return {
             "documents": documents,
-            "financial_grading": grading_result,
-            "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
-        }
+            "financial_grading": grading_result
+    }
 
     except Exception as e:
         print(f" Financial analyst grading failed: {e}")
@@ -1322,9 +1031,8 @@ def grade_documents(state):
         # Fallback: keep all chunks
         return {
             "documents": documents,
-            "financial_grading": {"overall_grade": "partial", "can_answer": False, "error": str(e)},
-            "tool_calls": state.get("tool_calls", []) + [{"tool": "financial_analyst_grader", "error": str(e)}]
-        }
+            "financial_grading": {"overall_grade": "partial", "can_answer": False, "error": str(e)}
+    }
 
 
 def web_search(state):
@@ -1473,15 +1181,9 @@ def web_search(state):
         found_count = sum(1 for sq_data in sub_query_results.values() if isinstance(sq_data, dict) and sq_data.get("found", False))
         print(f" Updated sub-query results: {found_count}/{len(sub_queries)} have data")
 
-    tool_call_entry = {
-        "tool": "web_search",
-        "sub_queries_used": len(sub_queries) > 0
-    }
-
     return {
         "documents": documents,
         "web_searched": True,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry],
         "sub_query_results": sub_query_results
     }
 
@@ -1588,29 +1290,48 @@ def integrate_web_search(state):
     companies_detected = state.get("sub_query_analysis", {}).get("companies_detected", []) or state.get("companies_detected", [])
     ticker = state.get("ticker", "")
 
+    company = ""
     if company_filter:
         company = company_filter[0] if isinstance(company_filter, list) else company_filter
     elif companies_detected:
         company = companies_detected[0]
-    else:
-        company = ""
 
     # Build a single combined query using ticker, company name, and missing data summary
     financial_grading = state.get("financial_grading", {})
     missing_summary = financial_grading.get("missing_data_summary", "")
 
     query_parts = []
-    if ticker:
-        query_parts.append(ticker)
-    if company:
+    # Avoid duplicate terms (like repeating company name multiple times)
+    if company and company.lower() not in [q.lower() for q in query_parts]:
         query_parts.append(company)
+    
+    if ticker and ticker.lower() not in [q.lower() for q in query_parts] and ticker.lower() != company.lower():
+        query_parts.append(ticker)
+
+    missing_summary_str = ""
     if missing_summary:
-        query_parts.append(missing_summary)
+        missing_summary_str = str(missing_summary).strip()
+        
+    print(f"  [DEBUG] grading missing_summary: {repr(missing_summary)}")
+    
+    # Is there a valid missing data summary? (Not None, not empty, and not specifically 'no chunks found in vector database')
+    has_valid_missing_target = (
+        bool(missing_summary_str) and 
+        missing_summary_str.lower() != "none" and 
+        "no chunks found" not in missing_summary_str.lower()
+    )
+
+    if has_valid_missing_target:
+        # Missing data summary is the target - use it directly
+        print("  [DEBUG] Using missing data summary for web search target.")
+        query_parts.append(missing_summary_str)
     else:
+        # Fallback to the original question only if there is no explicit missing data summary
+        print("  [DEBUG] Using original question for web search fallback.")
         query_parts.append(question)
 
     search_query = " ".join(query_parts)
-    print(f"  Search query: {search_query[:150]}")
+    print(f"  Search query: {search_query}")
 
     web_search_tool = TavilySearch(
         max_results=5,
@@ -1642,8 +1363,8 @@ def integrate_web_search(state):
                     "source": "integrate_web_search",
                     "title": source["title"],
                     "url": source["url"],
-                    "search_query": search_query,
-                }
+                    "search_query": search_query
+    }
             ))
             total_chars += len(source["content"])
     except Exception as e:
@@ -1654,12 +1375,7 @@ def integrate_web_search(state):
 
     return {
         "documents": combined_documents,
-        "web_searched": True,
-        "tool_calls": state.get("tool_calls", []) + [{
-            "tool": "integrate_web_search",
-            "query": search_query,
-            "web_docs_retrieved": len(web_documents)
-        }],
+        "web_searched": True
     }
 
 
@@ -1667,14 +1383,9 @@ def show_result(state):
     print("---SHOW RESULT---")
     Final_answer = AIMessage(content=state["Intermediate_message"])
 
-    tool_call_entry = {
-        "tool": "final_output"
-    }
-
     print(f'SHOWING THE RESULTS: {Final_answer}')
     return {
-        "messages": Final_answer,
-        "tool_calls": state.get("tool_calls", []) + [tool_call_entry]
+        "messages": Final_answer
     }
 
 
@@ -2746,8 +2457,8 @@ def detect_scenario_query(state):
             "scenario_mode": True,
             "ticker": ticker,
             "scenario_data": {},
-            "scenario_report": "",
-        }
+            "scenario_report": ""
+    }
     else:
         print(" Normal query (not a Scenario request)")
         print("=" * 80 + "\n")
@@ -2785,7 +2496,7 @@ def scenario_data_retrieve(state):
         "catalyst_data": [],
         "risk_data": [],
         "credit_data": [],
-        "macro_data": [],
+        "macro_data": []
     }
 
     # -------------------------------------------------------------------------
@@ -2807,8 +2518,8 @@ def scenario_data_retrieve(state):
                 scenario_data["analyst_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['analyst_data'])} analyst sources collected")
@@ -2829,8 +2540,8 @@ def scenario_data_retrieve(state):
                 scenario_data["valuation_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['valuation_data'])} valuation sources collected")
@@ -2852,8 +2563,8 @@ def scenario_data_retrieve(state):
                 scenario_data["catalyst_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['catalyst_data'])} catalyst sources collected")
@@ -2875,8 +2586,8 @@ def scenario_data_retrieve(state):
                 scenario_data["risk_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['risk_data'])} risk sources collected")
@@ -2897,8 +2608,8 @@ def scenario_data_retrieve(state):
                 scenario_data["credit_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['credit_data'])} credit sources collected")
@@ -2919,8 +2630,8 @@ def scenario_data_retrieve(state):
                 scenario_data["macro_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500],
-                })
+                    "content": s["content"][:1500]
+    })
         except Exception as e:
             print(f"    Warning: {e}")
     print(f"    {len(scenario_data['macro_data'])} macro sources collected")
@@ -2988,8 +2699,8 @@ def scenario_generate_report(state):
             "ticker": ticker,
             "analyst_data": analyst_text,
             "valuation_data": valuation_text,
-            "catalyst_data": catalyst_text,
-        })
+            "catalyst_data": catalyst_text
+    })
         print(f"    Bull target: {bull_result.price_target}  upside: {bull_result.upside_downside}")
     except Exception as e:
         print(f"    Error: {e}")
@@ -3003,8 +2714,8 @@ def scenario_generate_report(state):
             "ticker": ticker,
             "analyst_data": analyst_text,
             "risk_data": risk_text,
-            "credit_data": credit_text,
-        })
+            "credit_data": credit_text
+    })
         print(f"    Bear target: {bear_result.price_target}  downside: {bear_result.upside_downside}")
     except Exception as e:
         print(f"    Error: {e}")
@@ -3018,8 +2729,8 @@ def scenario_generate_report(state):
             "ticker": ticker,
             "analyst_data": analyst_text,
             "valuation_data": valuation_text,
-            "macro_data": macro_text,
-        })
+            "macro_data": macro_text
+    })
         print(f"    Base target: {base_result.price_target}  return: {base_result.upside_downside}")
     except Exception as e:
         print(f"    Error: {e}")
@@ -3065,8 +2776,8 @@ def scenario_generate_report(state):
             "bear_analysis": _safe(bear_result, "analysis"),
             # Summaries
             "analyst_summary": analyst_text[:2000] if analyst_text else "N/A",
-            "credit_summary": credit_text[:1000] if credit_text else "N/A",
-        })
+            "credit_summary": credit_text[:1000] if credit_text else "N/A"
+    })
         print(f"    Final report: {len(final_report)} chars")
     except Exception as e:
         print(f"    Error generating combined report: {e}")
@@ -3089,5 +2800,5 @@ def scenario_generate_report(state):
         "messages": [AIMessage(content=final_report)],
         "scenario_report": final_report,
         "Intermediate_message": final_report,
-        "web_searched": True,
+        "web_searched": True
     }

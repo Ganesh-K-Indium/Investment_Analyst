@@ -40,7 +40,6 @@ class GraphState(TypedDict):
     Intermediate_message: str
     documents: List[str]
     retry_count: int
-    tool_calls: List[Dict[str, Any]]
     vectorstore_searched: bool
     web_searched: bool
     vectorstore_quality: str  # "good", "poor", "none"
@@ -49,7 +48,6 @@ class GraphState(TypedDict):
     citation_info: List[Dict[str, Any]]
     summary_strategy: str
     companies_detected: List[str]  # Cached company extraction (extracted once, reused)
-    company_name: str  # User-provided company name for filtering (DEPRECATED - use company_filter)
     sub_query_analysis: Dict[str, Any]  # Universal sub-query analysis (replaces financial_calculation)
     sub_query_results: Dict[str, Any]  # Results from individual sub-query retrievals
     is_comparison_mode: bool  # Whether this is a company comparison request
@@ -60,13 +58,7 @@ class GraphState(TypedDict):
     year_end: Optional[int]    # End year for comparison (e.g. 2024)
     chart_url: str  # Cloudinary URL of generated comparison chart
     chart_filename: str  # Filename of generated chart
-    context_strategy: str  # Strategy for context selection: "messages" | "documents" | "incremental"
-    conversation_messages: List[str]  # Extracted AI messages for summarization
-    clarification_needed: bool  # Whether to interrupt for clarification
-    clarification_request: str  # Question to ask user
-    user_clarification: str  # User's response to clarification
-    clarified_intent: Dict[str, Any]  # LLM-parsed intent from clarification
-    retrieval_constraints: Dict[str, Any]  # Specific filters/constraints from user
+    financial_grading: Dict[str, Any]  # Store grading output, overall_grade, and missing_data_summary
     #vectordb_instance: Any  # REMOVED: Managed via VectorDBManager singleton
     company_filter: List[str]  # List of companies this DB instance is filtered for
     ticker: Optional[str]  # Ticker symbol for collection selection

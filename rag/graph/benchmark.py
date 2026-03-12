@@ -61,7 +61,7 @@ def time_node(node_name: str):
                 node_timer.end_node_timer(node_name)
                 return result
             except Exception as e:
-                print(f"❌ Error in node {node_name}: {str(e)}")
+                print(f" Error in node {node_name}: {str(e)}")
                 node_timer.end_node_timer(node_name)
                 raise
         return wrapper

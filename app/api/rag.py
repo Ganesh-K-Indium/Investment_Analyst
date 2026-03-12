@@ -137,7 +137,6 @@ async def ask_agent(
             "vectorstore_quality": "none",
             "needs_web_fallback": False,
             "retry_count": 0,
-            "tool_calls": [],
             "document_sources": {},
             "citation_info": [],
             "summary_strategy": "single_source",
@@ -179,7 +178,6 @@ async def ask_agent(
                 ],
                 "sub_query_analysis": result.get("sub_query_analysis", {}),
                 "sub_query_results": result.get("sub_query_results", {}),
-                "tool_calls": result.get("tool_calls", []),
                 "intermediate_message": result.get("Intermediate_message", ""),
                 "ticker": result.get("ticker")
             }
@@ -218,7 +216,6 @@ async def ask_agent(
             "vectorstore_quality": result.get("vectorstore_quality", "none"),
             "needs_web_fallback": result.get("needs_web_fallback", False),
             "retry_count": result.get("retry_count", 0),
-            "tool_calls": result.get("tool_calls", []),
             "document_sources": result.get("document_sources", {}),
             "citation_info": result.get("citation_info", []),
             "summary_strategy": result.get("summary_strategy", "single_source"),
@@ -339,9 +336,9 @@ Compare {comparison_str} {year_str}:
             content=f"Compare {comparison_str}"
         )
 
-        # NOTE: create_temporary might be redundant if we use existing ticker collections.
+        # Create_temporary might be redundant if we use existing ticker collections.
         # But for now we kept existing logic in vectordb_manager.
-        # We will bypass using the returned company_filter and use our mapped tickers.
+        # Bypass using the returned company_filter and use our mapped tickers.
         vectordb_mgr = get_vectordb_manager()
         # db_instance, _ = vectordb_mgr.create_temporary(thread_id, companies) 
         # Commenting out create_temporary as we want to use existing collections
@@ -361,7 +358,6 @@ Compare {comparison_str} {year_str}:
             "vectorstore_quality": "none",
             "needs_web_fallback": False,
             "retry_count": 0,
-            "tool_calls": [],
             "document_sources": {},
             "citation_info": [],
             "summary_strategy": "single_source",
@@ -419,7 +415,6 @@ Compare {comparison_str} {year_str}:
                 ],
                 "sub_query_analysis": result.get("sub_query_analysis", {}),
                 "sub_query_results": result.get("sub_query_results", {}),
-                "tool_calls": result.get("tool_calls", []),
                 "intermediate_message": result.get("Intermediate_message", "")
             }
         )
@@ -460,7 +455,6 @@ Compare {comparison_str} {year_str}:
             "vectorstore_quality": result.get("vectorstore_quality", "none"),
             "needs_web_fallback": result.get("needs_web_fallback", False),
             "retry_count": result.get("retry_count", 0),
-            "tool_calls": result.get("tool_calls", []),
             "document_sources": result.get("document_sources", {}),
             "citation_info": result.get("citation_info", []),
             "summary_strategy": result.get("summary_strategy", "single_source"),

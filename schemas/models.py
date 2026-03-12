@@ -137,8 +137,9 @@ class SimpleDocumentGrade(BaseModel):
     is_sufficient: bool = Field(
         description="True if the retrieved documents contain the necessary data to answer the user's explicit question, False otherwise."
     )
-    missing_data_summary: str = Field(
-        description="If is_sufficient is False, briefly state what critical data is missing. If True, leave empty."
+    missing_data_summary: str | None = Field(
+        default=None,
+        description="If is_sufficient is False, provide a concise, keyword-rich search query to find the missing data. Do NOT write a conversational summary. If True, leave empty or None."
     )
 
 class GapAnalysisResult(BaseModel):

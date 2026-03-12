@@ -401,7 +401,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
 
         if not text_already_exists:
             documents = []
-            print(f"\n📄 Extracting text from {len(pdf_document)} pages...")
+            print(f"\n Extracting text from {len(pdf_document)} pages...")
             for page_num, page in enumerate(tqdm(pdf_document, desc="Extracting text", unit="page")):
                 text = page.get_text("text")
                 if text.strip():
@@ -419,7 +419,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
 
             if documents:
                 yield f"Extracted {len(documents)} text segments from PDF."
-                print(f"\n✂️  Splitting text into chunks...")
+                print(f"\n  Splitting text into chunks...")
                 text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
                     chunk_size=1024, chunk_overlap=300
                 )
@@ -461,7 +461,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
 
         if not image_already_exists:
             if image_info:
-                yield f"🤖 Analyzing {len(image_info)} images with GPT-4o..."
+                yield f" Analyzing {len(image_info)} images with GPT-4o..."
                 image_descriptions = img_processor.get_image_description(image_info)
                 
                 metadata_path = f"metadata_{source_file_name}.json"

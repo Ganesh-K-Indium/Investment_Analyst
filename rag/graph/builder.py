@@ -187,7 +187,7 @@ async def main():
             "vectorstore_quality": "none",
             "needs_web_fallback": False,
             "retry_count": 0,
-            "tool_calls": [],
+            "retry_count": 0,
             "document_sources": {},
             "citation_info": [],
             "summary_strategy": "single_source",
