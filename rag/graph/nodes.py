@@ -105,185 +105,6 @@ def extract_financial_metrics_from_documents(documents, metrics_list):
     return extracted_data
 
 
-# CACHE for extracted documents to avoid re-processing
-_extraction_cache = {}
-
-def smart_extract_financial_data(documents, max_chars=80000):
-    """
-    SMART FINANCIAL DATA EXTRACTION with LLM + Better Fallback + Caching.
-    
-    STRATEGY:
-    1. Use LLM to extract structured financial data from web docs
-    2. Better fallback: Keep MORE content (not just 1K) when extraction fails
-    3. Vectorstore docs: Keep as-is (already clean)
-    4. Distribute budget wisely to use full character limit
-    5. Cache results to avoid re-processing
-    
-    OPTIMIZATIONS:
-    - Caching: Avoids re-processing same documents
-    - LLM extraction: Structures financial data properly
-    - Smart fallback: Keeps 3-5K chars (not 1K) for better context
-    - Budget distribution: Uses full 80K budget efficiently
-    
-    Returns:
-        documents with extracted financial data + rich content
-    """
-    if not documents:
-        return []
-    
-    # Generate cache key based on document content hashes and max_chars
-    try:
-        cache_key = f"{hash(tuple(hash(d.page_content[:100]) for d in documents))}_{max_chars}_{len(documents)}"
-    except:
-        cache_key = f"{id(documents[0])}_{max_chars}_{len(documents)}"
-    
-    # Check cache first (MAJOR optimization - avoids re-processing)
-    if cache_key in _extraction_cache:
-        print(f"[CACHE HIT]  Reusing previously processed {len(documents)} documents")
-        return _extraction_cache[cache_key]
-    
-    total_chars = sum(len(doc.page_content) for doc in documents)
-    
-    # If small enough, return as-is
-    if total_chars <= max_chars:
-        print(f"[DOC SIZE] {total_chars:,} chars (within {max_chars:,} limit) - keeping all content")
-        _extraction_cache[cache_key] = documents
-        return documents
-    
-    print(f"[EXTRACT] {total_chars:,} chars → {max_chars:,} chars target")
-    
-    # Separate web docs from vectorstore docs
-    web_docs = []
-    vectorstore_docs = []
-    
-    for doc in documents:
-        source = doc.metadata.get("source", "") if hasattr(doc, 'metadata') else ""
-        is_web_doc = source in ["web_search", "integrate_web_search"]
-        
-        if is_web_doc:
-            web_docs.append(doc)
-        else:
-            vectorstore_docs.append(doc)
-    
-    print(f"[EXTRACT] Web: {len(web_docs)} docs, Vectorstore: {len(vectorstore_docs)} docs")
-    
-    # Extract web docs with LLM + smart fallback
-    extracted_docs = []
-    
-    if web_docs:
-        # Separate small docs (< 10K) from large docs (>= 10K)
-        small_docs = [d for d in web_docs if len(d.page_content) < 15000]
-        large_docs = [d for d in web_docs if len(d.page_content) >= 15000]
-        
-        print(f"[EXTRACT] Web docs: {len(small_docs)} small (< 15K chars), {len(large_docs)} large (>= 15K chars)")
-        
-        # Small docs: Add directly (no LLM processing needed)
-        if small_docs:
-            print(f"[EXTRACT]  Adding {len(small_docs)} small docs directly (no LLM needed)")
-            extracted_docs.extend(small_docs)
-        
-        # Large docs: Process with LLM
-        if large_docs:
-            print(f"[EXTRACT] Processing {len(large_docs)} large documents with LLM...")
-            
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-            extractor_chain = get_financial_data_extractor_chain(llm)
-            
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            
-            # Calculate budget per large doc
-            web_budget = int(max_chars * 0.7)
-            budget_per_web_doc = max(3000, web_budget // len(large_docs)) if large_docs else 5000
-            
-            def extract_from_doc(doc):
-                """Extract financial data with LLM or use smart fallback."""
-                try:
-                    # Try LLM extraction first
-                    content = doc.page_content[:8000]  # Use more content for extraction
-                    structured_data = extractor_chain.invoke({"document_content": content})
-                    
-                    # Build structured summary
-                    summary_parts = []
-                    summary_parts.append(f"Company: {structured_data.company} | Year: {structured_data.year}")
-                    
-                    # Add all extracted metrics
-                    if structured_data.revenue:
-                        summary_parts.append(f"Revenue: {structured_data.revenue}")
-                    if structured_data.net_income:
-                        summary_parts.append(f"Net Income: {structured_data.net_income}")
-                    if structured_data.operating_income:
-                        summary_parts.append(f"Operating Income: {structured_data.operating_income}")
-                    if structured_data.gross_profit:
-                        summary_parts.append(f"Gross Profit: {structured_data.gross_profit}")
-                    if structured_data.earnings_per_share:
-                        summary_parts.append(f"EPS: {structured_data.earnings_per_share}")
-                    
-                    # If extraction worked, add original content for context
-                    if len(summary_parts) > 1:
-                        structured_summary = "\n".join(summary_parts)
-                        # Add more original content for better context
-                        additional_content = doc.page_content[:budget_per_web_doc - len(structured_summary)]
-                        final_content = f"{structured_summary}\n\n---FULL CONTENT---\n{additional_content}"
-                        print(f"    {structured_data.company} {structured_data.year}: Extracted + {len(final_content):,} chars content")
-                    else:
-                        # Extraction didn't find much, use more original content
-                        final_content = doc.page_content[:budget_per_web_doc]
-                        print(f"     Limited extraction, using {len(final_content):,} chars original content")
-                    
-                    return Document(
-                        page_content=final_content,
-                        metadata=doc.metadata
-                    )
-                    
-                except Exception as e:
-                    # SMART FALLBACK: Keep MORE content (3-5K, not 1K!)
-                    fallback_content = doc.page_content[:budget_per_web_doc]
-                    print(f"     Extraction failed, keeping {len(fallback_content):,} chars original content")
-                    return Document(
-                        page_content=fallback_content,
-                        metadata=doc.metadata
-                    )
-        
-            # Process large docs in parallel
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = {executor.submit(extract_from_doc, doc): doc for doc in large_docs}
-                for future in as_completed(futures):
-                    extracted_docs.append(future.result())
-    
-    # Add vectorstore docs (keep as-is, truncate if needed)
-    web_chars = sum(len(d.page_content) for d in extracted_docs)
-    remaining_budget = max_chars - web_chars
-    
-    if vectorstore_docs and remaining_budget > 0:
-        vs_total = sum(len(d.page_content) for d in vectorstore_docs)
-        if vs_total <= remaining_budget:
-            extracted_docs.extend(vectorstore_docs)
-            print(f"[EXTRACT] All vectorstore docs fit ({vs_total:,} chars)")
-        else:
-            # Truncate vectorstore docs proportionally
-            budget_per_vs = remaining_budget // len(vectorstore_docs)
-            for doc in vectorstore_docs:
-                if len(doc.page_content) <= budget_per_vs:
-                    extracted_docs.append(doc)
-                else:
-                    extracted_docs.append(Document(
-                        page_content=doc.page_content[:budget_per_vs],
-                        metadata=doc.metadata
-                    ))
-            print(f"[EXTRACT] Vectorstore docs truncated to fit budget")
-    
-    # Calculate final stats
-    final_chars = sum(len(d.page_content) for d in extracted_docs)
-    reduction_pct = ((total_chars - final_chars) / total_chars * 100) if total_chars > 0 else 0
-    
-    print(f"[EXTRACT COMPLETE]")
-    print(f"  Original: {total_chars:,} → Final: {final_chars:,} chars ({reduction_pct:.1f}% reduction)")
-    print(f"  {len(extracted_docs)} documents with rich financial + contextual data")
-    
-    # Cache result
-    _extraction_cache[cache_key] = extracted_docs
-    
-    return extracted_docs
 
 
 def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
@@ -1009,121 +830,8 @@ def generate(state):
     else:
         print(" WARNING: No chunks available for generation!")
     
-    # ============================================================================
-    # MESSAGE-BASED GENERATION: For "summarize" queries, use conversation messages
-    # ============================================================================
-    context_strategy = state.get("context_strategy", "documents")
-    if context_strategy == "messages":
-        print("\\n🧠 MESSAGE-BASED GENERATION MODE")
-        print("-" * 80)
-        
-        conversation_messages = state.get("conversation_messages", [])
-        if not conversation_messages:
-            print("⚠️ No conversation messages found, falling back to document-based generation")
-        else:
-            print(f"📜 Using {len(conversation_messages)} previous AI responses")
-            
-            # Combine conversation messages
-            context = "\\n\\n---\\n\\n".join(conversation_messages)
-            
-            # Create summarization prompt
-            prompt = f"""Based on our previous conversation, please provide a concise summary.
-
-Previous AI responses:
-{context}
-
-User's request: {question}
-
-Please provide a clear, well-structured summary."""
-            
-            # Generate using Groq (fast and efficient for summarization)
-            from langchain_groq import ChatGroq
-            llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
-            
-            print(f" Generating summary with Groq...")
-            response = llm.invoke(prompt)
-            generation = response.content
-            
-            print(f" Summary generated ({len(generation)} chars)")
-            print(f"{'='*80}\\n")
-            
-            return {"messages": [generation]}
-    
     # Context-free mode - no conversation memory
     enriched_question = question
-    conversation_history = ""
-    
-    # NEW: Check if this is a financial calculation query
-    financial_calculation = state.get("financial_calculation", {})
-    needs_calculation = financial_calculation.get("needs_calculation", False)
-    
-    if needs_calculation:
-        print("---FINANCIAL CALCULATION MODE ENABLED---")
-        metrics_needed = financial_calculation.get("metrics_needed", [])
-        sub_queries = financial_calculation.get("sub_queries", [])
-        sub_query_results = state.get("sub_query_results", {})
-        
-        print(f" Metrics to calculate: {metrics_needed}")
-        print(f" Sub-queries: {len(sub_queries)} total, {len(sub_query_results)} with data")
-        
-        # Add financial formulas to the generation context
-        FINANCIAL_FORMULAS = """
-**FINANCIAL METRIC FORMULAS FOR CALCULATIONS:**
-
-1. **ROE (Return on Equity)** = Net Income (annual) / Shareholders' Equity
-2. **Revenue Growth (3 Years)** = ((Revenue at end of Year 3 - Revenue at beginning of Year 1) / Revenue at beginning of Year 1) × 100%
-3. **Debt-to-Equity Ratio** = Total Debt / Total Equity
-4. **Dividend Yield** = (Dividends per Share / Price per Share) × 100%
-5. **P/E Ratio** = Price per Share / Earnings per Share
-6. **Current Ratio** = Current Assets / Current Liabilities
-7. **Quick Ratio** = (Current Assets - Inventory) / Current Liabilities
-8. **Gross Margin** = (Revenue - Cost of Goods Sold) / Revenue
-9. **Operating Margin** = Operating Income / Revenue
-10. **Cash Ratio** = Cash and Cash Equivalents / Current Liabilities
-11. **Interest Coverage Ratio** = Operating Income / Interest Expense
-12. **Inventory Turnover** = Cost of Goods Sold / Average Inventory
-13. **Payables Turnover** = Cost of Goods Sold / Average Accounts Payable
-14. **Revenue Growth (YoY)** = [(Current Year Revenue - Prior Year Revenue) / Prior Year Revenue] × 100%
-15. **Net CapEx** = Ending PP&E - Beginning PP&E + Depreciation Expense
-16. **Cash Burn Rate** = (Net Cash Used in Operating Activities) / Cash & Cash Equivalents at beginning of period
-17. **Return on Assets (ROA)** = Net Income / Total Assets
-
-**DEFINITIONS:**
-- **Current Assets**: Cash & Cash Equivalents, Short-term Investments, Accounts Receivable, Inventory (from Balance Sheet)
-- **Current Liabilities**: Accounts Payable, Short-term Debt, Accrued Liabilities (from Balance Sheet)
-- **PP&E**: Property, Plant & Equipment
-- **Depreciation Expense**: From Income Statement
-
-**INSTRUCTIONS:**
-1. Extract the required data points from the provided documents
-2. Apply the appropriate formula
-3. Show your calculation step-by-step
-4. If any required data is missing, clearly state what's missing and explain you cannot complete the calculation
-5. Always cite the source documents for the numbers used
-"""
-        
-        # Build sub-query results summary
-        sub_query_summary = ""
-        if sub_query_results:
-            sub_query_summary = "\n\n**DATA GATHERED FOR SUB-QUERIES:**\n"
-            for sq, results in sub_query_results.items():
-                sub_query_summary += f"\n- {sq}:\n"
-                for r in results[:2]:  # Show first 2 results per sub-query
-                    sub_query_summary += f"  • {r[:200]}...\n"
-        
-        # NEW: Add extracted financial metrics to context
-        extracted_metrics = state.get("extracted_financial_metrics", {})
-        metrics_summary = ""
-        if extracted_metrics:
-            metrics_summary = "\n\n**EXTRACTED FINANCIAL DATA (Use these values for calculations):**\n"
-            for metric, data in extracted_metrics.items():
-                metrics_summary += f"- {metric.title()}: ${data['raw']} (Source: {data['source']})\n"
-            print(f" Adding {len(extracted_metrics)} extracted metrics to generation context")
-        
-        print(" Adding financial formulas and calculation instructions to generation context")
-    else:
-        FINANCIAL_FORMULAS = ""
-        sub_query_summary = ""
     
     print("---USING STANDARD GENERATION---")
     
@@ -1132,16 +840,23 @@ Please provide a clear, well-structured summary."""
     total_chars = sum(len(doc.page_content) for doc in documents)
     MAX_TOTAL_CHARS = 150000  # Safe limit for generation
     
-    # Check if financial query to prioritize financial data
-    sub_query_analysis = state.get("sub_query_analysis", {})
-    is_financial_query = sub_query_analysis.get("query_type") in ["financial_calculation", "multi_company"]
-    
-    # NEW: Structured financial data extraction (replaces lossy truncation)
     if total_chars > MAX_TOTAL_CHARS:
-        documents = smart_extract_financial_data(documents, MAX_TOTAL_CHARS)
+        print(f"[DOC SIZE] {total_chars:,} chars exceeds limit ({MAX_TOTAL_CHARS:,}). Truncating proportionally.")
+        budget_per_doc = MAX_TOTAL_CHARS // max(len(documents), 1)
+        truncated_docs = []
+        for doc in documents:
+            if len(doc.page_content) <= budget_per_doc:
+                truncated_docs.append(doc)
+            else:
+                truncated_docs.append(Document(
+                    page_content=doc.page_content[:budget_per_doc],
+                    metadata=doc.metadata
+                ))
+        documents = truncated_docs
+        total_chars = sum(len(doc.page_content) for doc in documents)
+        print(f"[DOC SIZE] After truncation: {total_chars:,} chars")
     else:
         print(f"[DOC SIZE] {total_chars:,} chars (limit: {MAX_TOTAL_CHARS:,})")
-    
     
     llm = ChatOpenAI(
         model="gpt-4o",
@@ -1150,16 +865,14 @@ Please provide a clear, well-structured summary."""
         request_timeout=30,
         max_retries=2
     )
-    #llm=ChatGroq(model="llama-3.3-70b-versatile")
     rag_chain = get_rag_chain(llm)
     
-    # Pass documents (truncated if necessary)
     generation_input = {
         "documents": documents,
         "question": enriched_question,
-        "financial_formulas": FINANCIAL_FORMULAS if needs_calculation else "",
-        "sub_query_summary": sub_query_summary if needs_calculation else "",
-        "extracted_metrics": metrics_summary if needs_calculation else ""
+        "financial_formulas": "",
+        "sub_query_summary": "",
+        "extracted_metrics": ""
     }
     
     Intermediate_message = rag_chain.invoke(generation_input)
