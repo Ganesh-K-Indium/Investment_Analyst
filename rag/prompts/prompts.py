@@ -761,7 +761,7 @@ def get_financial_analyst_grader_chain(llm):
 1. Only evaluate data that the question EXPLICITLY asks for.
 2. If the question asks for a CALCULATED metric (like Operating Margin, ROE, Current Ratio, etc.) and ALL the raw components for the formula exist in the documents, it is SUFFICIENT. You do not need the exact ratio stated in the text if you can calculate it.
 3. If the documents contain enough information to answer the question, set `is_sufficient` to True, and `missing_data_summary` to empty.
-4. If critical raw component inputs are missing, set `is_sufficient` to False, and concisely state what exact data is missing in `missing_data_summary`."""
+4. If critical raw component inputs are missing, set `is_sufficient` to False. For `missing_data_summary`, you MUST output a CONCISE, KEYWORD-RICH SEARCH QUERY that can be directly used in a search engine to find the missing data. Do NOT write a conversational sentence (e.g., do NOT say "The documents lack..."). ONLY output the exact search query (e.g., "Amazon competitive landscape market share e-commerce 2025")."""
 
     grader_prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
