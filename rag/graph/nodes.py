@@ -1783,8 +1783,20 @@ def detect_alpha_query(state):
         "a 360 degree analysis"
     ]
     
+    insider_patterns = [
+        "insider trading",
+        "open-market buying",
+        "open market buying",
+        "promoters",
+        "key management",
+        "form 4",
+        "form4"
+    ]
+    
+    is_insider_query = any(pattern in question for pattern in insider_patterns)
+    
     # Check if query matches ALPHA pattern
-    is_alpha_query =any(pattern in question for pattern in alpha_patterns)
+    is_alpha_query = any(pattern in question for pattern in alpha_patterns) or is_insider_query
     
     if is_alpha_query:
         print(" ALPHA MODE ACTIVATED")
@@ -1823,6 +1835,7 @@ def detect_alpha_query(state):
         
         return {
             "alpha_mode": True,
+            "alpha_pillar": "insider_trading" if is_insider_query else None,
             "ticker": target_ticker,
             "alpha_dimensions": {},
             "alpha_report": ""
@@ -1857,6 +1870,43 @@ def alpha_dimension_retrieve(state):
         ticker = company_filter[0].upper()
     
     print(f" Target: {ticker}\n")
+
+    alpha_pillar = state.get("alpha_pillar")
+
+    if alpha_pillar == "insider_trading":
+        print(" [SINGLE PILLAR] Insider Trading (Form 4)")
+        try:
+            from rag.utils.Insights_Form4.advisory_hub import get_advisory_report
+            form4_report = get_advisory_report(ticker)
+            lines = [f"INSIDER TRADING ANALYSIS (SEC Form 4) — {ticker}\n"]
+            if form4_report and "status" not in form4_report and "error" not in form4_report:
+                for issuer_name, detail in form4_report.items():
+                    if issuer_name in ("error", "status", "message", "ticker"):
+                        continue
+                    lines.append(f"\nIssuer: {issuer_name}")
+                    lines.append(f"Recommendation: {detail.get('Recommendation', 'N/A')}")
+                    lines.append(f"Net Insider Flow: ${detail.get('Net_Inside_Flow', 0):,.2f}")
+                    lines.append(f"Total Bought: ${detail.get('Total_Bought', 0):,.2f} ({int(detail.get('Total_Bought_Shares', 0)):,} shares)")
+                    lines.append(f"Total Sold:   ${detail.get('Total_Sold', 0):,.2f} ({int(detail.get('Total_Sold_Shares', 0)):,} shares)")
+                    lines.append(f"Transaction Count: {detail.get('Transaction_Count', 0)}")
+                    lines.append(f"Analyst Insight:\n{detail.get('Reason', 'No analysis available')}\n")
+                
+                from langchain_core.documents import Document
+                insider_doc = Document(
+                    page_content="\n".join(lines),
+                    metadata={"source": "form4_insider_trading", "company": ticker, "content_type": "insider_trading"}
+                )
+                print("    Form4 data retrieved successfully.")
+                return {
+                    "documents": [insider_doc],
+                    "alpha_dimensions": {"insider_trading": {"documents": [insider_doc]}}
+                }
+            else:
+                print("    No Form4 data found.")
+                return {"documents": [], "alpha_dimensions": {}}
+        except Exception as e:
+            print(f"    Error: {e}")
+            return {"documents": [], "alpha_dimensions": {}}
     
     from app.services.vectordb_manager import get_vectordb_manager
     from langchain_tavily import TavilySearch

@@ -16,7 +16,8 @@ from rag.graph.nodes import (web_search, retrieve,
 from rag.graph.edges import (route_question, decide_to_generate,
                          decide_chart_generation,
                          route_alpha_workflow,
-                         route_after_retrieve)
+                         route_after_retrieve,
+                         route_after_alpha_retrieve)
 from rag.graph.benchmark import time_node, node_timer
 load_dotenv()
 os.environ["GROQ_API_KEY"]=os.getenv("GROQ_API_KEY")
@@ -85,8 +86,15 @@ class BuildingGraph:
             },
         )
 
-        # ALPHA workflow: alpha_retrieve -> alpha_generate -> show_result -> END
-        workflow.add_edge("alpha_retrieve", "alpha_generate")
+        # ALPHA workflow: alpha_retrieve -> conditional -> alpha_generate / generate
+        workflow.add_conditional_edges(
+            "alpha_retrieve",
+            route_after_alpha_retrieve,
+            {
+                "alpha_generate": "alpha_generate",
+                "generate": "generate",
+            }
+        )
         workflow.add_edge("alpha_generate", "show_result")
 
         # Scenario workflow: scenario_retrieve -> scenario_generate -> show_result -> END

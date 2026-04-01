@@ -30,6 +30,16 @@ def route_alpha_workflow(state):
         return "normal"
 
 
+def route_after_alpha_retrieve(state):
+    """
+    Route after alpha retrieve.
+    If it's a single-pillar query, we skip the alpha-specific generation 
+    and just use the standard generate node.
+    """
+    if state.get("alpha_pillar"):
+        print("---SINGLE PILLAR ROUTING: DIRECT TO GENERATE---")
+        return "generate"
+    return "alpha_generate"
 
 def route_question(state):
     """

@@ -65,6 +65,7 @@ class GraphState(TypedDict):
     requested_years: List[int]  # Years explicitly requested in the user query (extracted from question)
     # ALPHA Framework fields
     alpha_mode: bool  # Whether this is an ALPHA Framework query (buy timing analysis)
+    alpha_pillar: Optional[str]  # Sub-category or single pillar for alpha analysis
     alpha_dimensions: Dict[str, Any]  # Retrieved data for each ALPHA dimension
     alpha_report: str  # Final ALPHA report combining all dimensions
     # Scenario Framework fields (Bull / Bear / Base)
