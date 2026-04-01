@@ -239,7 +239,7 @@ def detect_segment_or_geographic_query(question: str) -> str:
 def _extract_years_from_question(question: str) -> list:
     """Extract explicitly mentioned 4-digit years (2000-2029) from the user question."""
     years = sorted(set(int(y) for y in re.findall(r'\b(20[0-2][0-9])\b', question)))
-    return years if years else [datetime.now().year]
+    return years if years else [2025]
 
 
 def generate_segment_subqueries(companies: list, question: str = "") -> dict:
@@ -599,8 +599,13 @@ def retrieve(state, config):
     if company_filter:
         for c in company_filter:
             if c and isinstance(c, str) and c.strip():
-                # We assume these are already valid tickers from the API layer
-                target_tickers.add(c.strip())
+                # Try to map to ticker first (in case full name was provided)
+                found_ticker = get_ticker(c.strip())
+                if found_ticker:
+                    target_tickers.add(found_ticker)
+                else:
+                    # Fallback: assume it might be a ticker already
+                    target_tickers.add(c.strip().lower())
     
     # 2. From API Override (primary_ticker)
     # If provided, does it restrict the search or add to it?
@@ -612,6 +617,21 @@ def retrieve(state, config):
          # they probably want that specific one. 
          # But to be safe and support "portfolio + specific question", let's just make sure it's included.
          target_tickers.add(primary_ticker)
+
+    # 3. From LLM Analysis (companies_detected)
+    companies_detected = state.get("companies_detected", [])
+    if companies_detected:
+        for company_name in companies_detected:
+            if company_name and isinstance(company_name, str):
+                # Try to map name to ticker
+                found_ticker = get_ticker(company_name)
+                if found_ticker:
+                    target_tickers.add(found_ticker)
+                else:
+                    # If it's already a ticker-like string and from a trusted source, we can try using it directly 
+                    # but only if it's 2-5 chars and all uppercase
+                    if 2 <= len(company_name) <= 5 and company_name.isupper():
+                        target_tickers.add(company_name.lower())
 
     print(f" Identified Target Tickers: {list(target_tickers) or 'None'}")
     
@@ -1199,6 +1219,15 @@ def _parse_tavily_response(docs, query):
     
     # Debug: Log raw response type
     print(f"Tavily response type: {type(docs)}")
+
+    # ── Error detection ────────────────────────────────────────────────────────
+    # TavilySearch wraps API / network errors as {'error': <Exception>} instead
+    # of raising.  Detect this early so callers' except-blocks log a clean
+    # message instead of the misleading "Could not parse" warning.
+    if isinstance(docs, dict) and 'error' in docs and len(docs) == 1:
+        err = docs['error']
+        err_msg = str(err) if not isinstance(err, str) else err
+        raise RuntimeError(f"Tavily API error: {err_msg}")
     
     if isinstance(docs, str):
         # Already a string, return as single source
@@ -1749,7 +1778,9 @@ def detect_alpha_query(state):
         "time to invest",
         "good buy",
         "worth buying",
-        "alpha analysis of"
+        "ialpha analysis of",
+        "alpha analysis of",
+        "a 360 degree analysis"
     ]
     
     # Check if query matches ALPHA pattern

@@ -925,7 +925,7 @@ def get_alpha_alignment_chain(llm):
     from schemas.models import AlphaAlignmentOutput
     structured_llm = llm.with_structured_output(AlphaAlignmentOutput)
 
-    SYSTEM_PROMPT = """You are a senior equity analyst writing the Alignment section of an ALPHA Framework report.
+    SYSTEM_PROMPT = """You are a senior equity analyst writing the Alignment section of an Indium's ALPHA Framework report.
 
 Your output must be exactly two flowing analyst paragraphs — no bullet points, no headers, no raw data dumps.
 
@@ -983,7 +983,7 @@ def get_alpha_liquidity_chain(llm):
 
     SYSTEM_PROMPT = f"""You are a senior macro/industry analyst specializing in assessing the operating environment for public companies.
 
-**Your Task**: Analyze the Liquidity (Macro/Micro Environment) dimension of the ALPHA Framework — this assesses whether the external environment is a tailwind or headwind for the stock.
+**Your Task**: Analyze the Liquidity (Macro/Micro Environment) dimension of the Indium's ALPHA Framework — this assesses whether the external environment is a tailwind or headwind for the stock.
 
 **Focus Areas** (use the most recent data available, current year context: {cur_year}):
 1. **Sector Headwinds/Tailwinds**: Industry growth trends, regulatory tailwinds/headwinds, sector rotation dynamics
@@ -1024,7 +1024,7 @@ def get_alpha_performance_chain(llm):
 
     SYSTEM_PROMPT = f"""You are a senior fundamental analyst specializing in earnings quality and financial statement analysis.
 
-**Your Task**: Analyze the Performance (Earnings & Fundamentals) dimension of the ALPHA Framework.
+**Your Task**: Analyze the Performance (Earnings & Fundamentals) dimension of the Indium's ALPHA Framework.
 
 **Focus Areas** (always use the MOST RECENT fiscal year available — current year context: {cur_year}):
 1. **Recent Financials**: Lead with the latest fiscal year revenue, net income, operating income, and free cash flow. Do NOT anchor to data older than 2-3 years if more recent data exists.
@@ -1066,7 +1066,7 @@ def get_alpha_horizon_chain(llm):
 
     SYSTEM_PROMPT = """You are a senior equity analyst specializing in competitive strategy and economic moat assessment.
 
-**Your Task**: Analyze the Horizon (Structural Opportunity & Moat) dimension of the ALPHA Framework — this assesses the long-term investment durability of the business.
+**Your Task**: Analyze the Horizon (Structural Opportunity & Moat) dimension of the Indium's ALPHA Framework — this assesses the long-term investment durability of the business.
 
 **Focus Areas**:
 1. **Operating Margins vs. Industry**: Are margins above or below sector peers? Signals pricing power and competitive moat strength.
@@ -1104,7 +1104,7 @@ def get_alpha_action_chain(llm):
     from schemas.models import AlphaDimensionOutput
     structured_llm = llm.with_structured_output(AlphaDimensionOutput)
 
-    SYSTEM_PROMPT = """You are a financial analyst writing the Action section of an ALPHA Framework report.
+    SYSTEM_PROMPT = """You are a financial analyst writing the Action section of an Indium's ALPHA Framework report.
 
 All data comes from web-sourced documents below. Extract the exact numeric values and write exactly 4 sentences with proper flow in professional analyst tone. Always use UPPERCASE for the ticker symbol.
 
@@ -1145,13 +1145,13 @@ def get_alpha_report_combiner_chain(llm):
     Renders each pillar with its Recommendation label and closes with ALPHA Summary.
     """
     cur_year = _current_year()
-    SYSTEM_PROMPT = f"""You are a senior investment analyst at a top-tier equity research firm, producing an ALPHA Framework investment report.
+    SYSTEM_PROMPT = f"""You are a senior investment analyst at a top-tier equity research firm, producing an Indium's ALPHA Framework investment report.
 
-**Your Task**: Render the 5 ALPHA dimensions exactly as supplied, then write a consolidated ALPHA Summary with an overall investment stance.
+**Your Task**: Render the 5 Indium's ALPHA dimensions exactly as supplied, then write a consolidated Indium's ALPHA Summary with an overall investment stance.
 
 **Report Structure** (follow this markdown precisely):
 
-# ALPHA Framework Analysis: {{company}} ({{ticker}})
+# Indium's ALPHA Framework Analysis: {{company}} ({{ticker}})
 
 ## A — Alignment (Stakeholder & Insider Signals)
 {{alignment}}
@@ -1169,7 +1169,7 @@ def get_alpha_report_combiner_chain(llm):
 {{action}}
 
 ---
-## ALPHA Summary — Overall Investment Stance
+## Indium's ALPHA Summary — Overall Investment Stance
 [Write 4-5 sentences synthesising all five dimension signals into a clear investment thesis. Reference each dimension's Recommendation signal explicitly. Conclude with an overall stance: **Bullish**, **Cautiously Bullish**, **Neutral**, **Cautiously Bearish**, or **Bearish** — with a one-sentence rationale. Use {cur_year} context for recency framing.]
 
 ---
@@ -1196,7 +1196,7 @@ Horizon Analysis (includes Recommendation):
 Action Analysis (includes Recommendation):
 {action}
 
-Render the full ALPHA Framework report now.""")
+Render the full Indium's ALPHA Framework report now.""")
     ])
 
     return prompt | llm | StrOutputParser()
