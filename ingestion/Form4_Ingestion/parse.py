@@ -20,7 +20,10 @@ class Form4Parser:
             issuer_symbol = self._get_text(issuer, 'issuerTradingSymbol')
             issuer_name = self._get_text(issuer, 'issuerName')
             
-            # Period of Report (filing date)
+            # Document type: "4" = original, "4/A" = amendment
+            document_type = self._get_text(root, 'documentType') or '4'
+
+            # Period of Report (the date the transactions relate to)
             period_of_report = self._get_text(root, 'periodOfReport')
             
             # 2. Reporting Owner Info (Can be multiple)
@@ -59,6 +62,7 @@ class Form4Parser:
             return {
                 'issuer_symbol': issuer_symbol,
                 'issuer_name': issuer_name,
+                'document_type': document_type,
                 'period_of_report': period_of_report,
                 'rpt_owner_name': rpt_owner_name,
                 'rpt_owner_title': officer_title,

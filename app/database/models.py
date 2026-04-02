@@ -149,6 +149,8 @@ class Form4Transaction(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     accession_number = Column(String, index=True, nullable=False)  # Unique SEC filing ID
+    document_type = Column(String, nullable=True)          # "4" = original, "4/A" = amendment
+    period_of_report = Column(String, nullable=True)       # Date the transactions relate to
     issuer_symbol = Column(String, index=True, nullable=False)
     issuer_name = Column(String, nullable=True)
     rpt_owner_name = Column(String, index=True, nullable=False)

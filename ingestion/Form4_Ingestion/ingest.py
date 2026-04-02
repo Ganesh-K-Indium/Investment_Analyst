@@ -24,7 +24,7 @@ logger.addHandler(console_handler)
 
 try:
     from settings import LOG_LEVEL
-    from sqlalchemy import select
+    from sqlalchemy import select, delete
     from rag.utils.Insights_Form4.database import reset_db, get_db, Form4Transaction
     from fetch import SecEdgarFetcher
     from parse import Form4Parser
@@ -181,6 +181,7 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
 
                 # Fetch Content
                 content = fetcher.fetch_xml_content(url)
+
                 if not content:
                     logger.warning(f"  -> Failed to fetch XML content. Skipping.")
                     fail_count += 1
@@ -210,13 +211,32 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
                 # Enrich and Save
                 rpt_owner = data['rpt_owner_name']
                 title = data['rpt_owner_title']
+                doc_type = data.get('document_type', '4')
+                period = data.get('period_of_report')
+
+                # ── Amendment handling ─────────────────────────────────────
+                # If this is a 4/A, delete the original filing's rows for the
+                # same reporter + period so the amendment becomes the sole truth.
+                if doc_type == '4/A' and period and rpt_owner:
+                    deleted = db.execute(
+                        delete(Form4Transaction).where(
+                            Form4Transaction.issuer_symbol == data['issuer_symbol'],
+                            Form4Transaction.rpt_owner_name == rpt_owner,
+                            Form4Transaction.period_of_report == period,
+                        )
+                    )
+                    if deleted.rowcount:
+                        logger.info(
+                            f"  -> Amendment detected (4/A). Replaced {deleted.rowcount} "
+                            f"original row(s) for {rpt_owner} / period {period}."
+                        )
 
                 tx_count = 0
                 for tx in data['transactions']:
                     # Filter: Only process common stock (comprehensive validation)
                     if not is_common_stock(tx.get('security_title'), tx.get('is_derivative', False)):
                         continue
-                    
+
                     # Calculate Value
                     val = 0.0
                     if tx['shares'] and tx['price']:
@@ -225,6 +245,8 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
                     # Create DB Record
                     record = Form4Transaction(
                         accession_number=accession_number,
+                        document_type=doc_type,
+                        period_of_report=period,
                         issuer_symbol=data['issuer_symbol'],
                         issuer_name=data.get('issuer_name'),
                         security_title=tx.get('security_title'),

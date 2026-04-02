@@ -36,7 +36,7 @@ _this_dir = os.path.dirname(os.path.abspath(__file__))
 if _this_dir not in sys.path:
     sys.path.insert(0, _this_dir)
 
-from sqlalchemy import select
+from sqlalchemy import text
 from database import get_db, Form4Transaction
 from advisory_analyst import analyze_transactions
 from datetime import date, timedelta
@@ -57,80 +57,111 @@ def build_relationship_list(record: Form4Transaction) -> list:
         roles.append("Other")
     return roles
 
+def _normalize_name(name: str) -> str:
+    """Normalise insider names so 'HENNESSY JOHN L' and 'Hennessy John L.' merge."""
+    if not name:
+        return ""
+    return name.upper().strip().rstrip('.').replace('  ', ' ')
+
 def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date = None) -> list:
     """
-    Fetches all transactions for a ticker from the DB and formats them.
-    Returns a list of dictionaries suitable for analysis.
+    Fetches deduplicated transactions for a ticker using SQL GROUP BY — identical
+    logic to check_form4.py so the numbers always agree with the verification script.
+
+    Deduplication: SQL groups by (rpt_owner_name, date, code, ad_code, shares, price).
+    Name merging : after SQL dedup, rows are grouped in Python by normalised name so
+                   variant spellings (HENNESSY JOHN L / Hennessy John L.) merge into
+                   one insider entry.
     """
     ticker = ticker.upper()
-    all_data = []
+
+    params: dict = {"ticker": ticker}
+    date_filter = ""
+    if start_date:
+        date_filter += " AND transaction_date >= :start_date"
+        params["start_date"] = str(start_date)
+    if end_date:
+        date_filter += " AND transaction_date <= :end_date"
+        params["end_date"] = str(end_date)
+
+    sql = text(f"""
+        SELECT
+            rpt_owner_name,
+            issuer_name,
+            issuer_symbol,
+            rpt_owner_title,
+            is_director,
+            is_officer,
+            is_ten_percent_owner,
+            transaction_date,
+            transaction_code,
+            transaction_acquired_disposed_code AS ad_code,
+            transaction_shares,
+            transaction_price_per_share       AS price
+        FROM form4_transactions
+        WHERE UPPER(issuer_symbol) = UPPER(:ticker)
+        {date_filter}
+        GROUP BY
+            rpt_owner_name,
+            transaction_date,
+            transaction_code,
+            transaction_acquired_disposed_code,
+            transaction_shares,
+            transaction_price_per_share
+        ORDER BY transaction_date ASC, rpt_owner_name
+    """)
 
     with get_db() as db:
-        query = select(Form4Transaction).where(Form4Transaction.issuer_symbol == ticker)
-        
-        if start_date:
-            query = query.where(Form4Transaction.transaction_date >= start_date)
-        if end_date:
-            query = query.where(Form4Transaction.transaction_date <= end_date)
-            
-        rows = db.execute(query.order_by(Form4Transaction.transaction_date.asc())).scalars().all()
+        rows = db.execute(sql, params).fetchall()
 
-        if not rows:
-            logger.warning(f"No transactions found in DB for ticker '{ticker}'.")
-            return []
+    if not rows:
+        logger.warning(f"No transactions found in DB for ticker '{ticker}'.")
+        return []
 
-        # Group transactions by (issuer_name, rpt_owner_name)
-        grouped = defaultdict(lambda: {
-            "issuer_name": None,
-            "ticker": ticker,
-            "reporting_person_name": None,
-            "relationship": [],
-            "transactions": []
-        })
+    # Group by (issuer_name, normalised_owner_name) so variant spellings merge
+    grouped = defaultdict(lambda: {
+        "issuer_name": None,
+        "ticker": ticker,
+        "reporting_person_name": None,
+        "relationship": [],
+        "transactions": []
+    })
 
-        # Track seen (person, date, code, shares, price) to deduplicate
-        # amendments can produce same transaction under a different accession number
-        seen_txns: set = set()
+    for row in rows:
+        norm_name = _normalize_name(row.rpt_owner_name)
+        key = (row.issuer_name or ticker, norm_name)
+        entry = grouped[key]
+        entry["issuer_name"] = row.issuer_name or ticker
 
-        for row in rows:
-            key = (row.issuer_name or ticker, row.rpt_owner_name)
-            entry = grouped[key]
-            entry["issuer_name"] = row.issuer_name or ticker
+        # Prefer the longest/most readable name variant
+        current = entry.get("reporting_person_name") or ""
+        if len(row.rpt_owner_name or "") > len(current):
             entry["reporting_person_name"] = row.rpt_owner_name
-            entry["relationship"] = build_relationship_list(row)
 
-            if row.transaction_date and row.transaction_code and row.transaction_shares is not None:
-                price = row.transaction_price_per_share or 0.0
+        # Build relationship from flags
+        roles = []
+        if row.is_officer:   roles.append("Officer")
+        if row.is_director:  roles.append("Director")
+        if row.is_ten_percent_owner: roles.append("10% Owner")
+        if not roles:        roles.append("Other")
+        entry["relationship"] = roles
 
-                # Dedup key: (person, date, code, shares, price) — ignores accession_number
-                dedup_key = (
-                    row.rpt_owner_name,
-                    str(row.transaction_date),
-                    row.transaction_code,
-                    int(row.transaction_shares),
-                    round(float(price), 4),
-                    row.transaction_acquired_disposed_code,
-                )
-                if dedup_key in seen_txns:
-                    continue
-                seen_txns.add(dedup_key)
+        if row.transaction_date and row.transaction_code and row.transaction_shares is not None:
+            price = row.price or 0.0
+            price_str = (
+                f"${price:,.2f}"
+                if price and float(price) > 0
+                else "N/A (grant/vest/exercise)"
+            )
+            entry["transactions"].append({
+                "date": str(row.transaction_date),
+                "code": row.transaction_code or "",
+                "amount": str(int(row.transaction_shares)),
+                "price": price_str,
+                "acquired_disposed": row.ad_code or "A"
+            })
 
-                price_str = (
-                    f"${price:,.2f}"
-                    if price and float(price) > 0
-                    else "N/A (grant/vest/exercise)"
-                )
-                entry["transactions"].append({
-                    "date": str(row.transaction_date),
-                    "code": row.transaction_code or "",
-                    "amount": str(int(row.transaction_shares)),
-                    "price": price_str,
-                    "acquired_disposed": row.transaction_acquired_disposed_code or "A"
-                })
-
-        all_data = list(grouped.values())
-    
-    return all_data
+    return list(grouped.values())
 
 def get_advisory_report(ticker: str, start_date: date = None, end_date: date = None) -> dict:
     """
@@ -150,8 +181,6 @@ def get_advisory_report(ticker: str, start_date: date = None, end_date: date = N
     
     ticker = ticker.upper().strip()
     
-    if not start_date:
-        start_date = date(2025, 1, 1) # Default cutoff from before
     if not end_date:
         end_date = date.today()
 
