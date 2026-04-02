@@ -88,6 +88,10 @@ def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date =
             "transactions": []
         })
 
+        # Track seen (person, date, code, shares, price) to deduplicate
+        # amendments can produce same transaction under a different accession number
+        seen_txns: set = set()
+
         for row in rows:
             key = (row.issuer_name or ticker, row.rpt_owner_name)
             entry = grouped[key]
@@ -96,7 +100,21 @@ def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date =
             entry["relationship"] = build_relationship_list(row)
 
             if row.transaction_date and row.transaction_code and row.transaction_shares is not None:
-                price = row.transaction_price_per_share
+                price = row.transaction_price_per_share or 0.0
+
+                # Dedup key: (person, date, code, shares, price) — ignores accession_number
+                dedup_key = (
+                    row.rpt_owner_name,
+                    str(row.transaction_date),
+                    row.transaction_code,
+                    int(row.transaction_shares),
+                    round(float(price), 4),
+                    row.transaction_acquired_disposed_code,
+                )
+                if dedup_key in seen_txns:
+                    continue
+                seen_txns.add(dedup_key)
+
                 price_str = (
                     f"${price:,.2f}"
                     if price and float(price) > 0

@@ -33,11 +33,16 @@ def route_alpha_workflow(state):
 def route_after_alpha_retrieve(state):
     """
     Route after alpha retrieve.
-    If it's a single-pillar query, we skip the alpha-specific generation 
-    and just use the standard generate node.
+    - insider_trading: response pre-built in Intermediate_message → show_result directly
+    - other single pillars: standard generate node
+    - full ALPHA (no pillar): alpha_generate
     """
-    if state.get("alpha_pillar"):
-        print("---SINGLE PILLAR ROUTING: DIRECT TO GENERATE---")
+    pillar = state.get("alpha_pillar")
+    if pillar == "insider_trading":
+        print("---INSIDER TRADING: BYPASSING GENERATE → SHOW RESULT---")
+        return "show_result"
+    if pillar:
+        print(f"---SINGLE PILLAR ({pillar}): DIRECT TO GENERATE---")
         return "generate"
     return "alpha_generate"
 

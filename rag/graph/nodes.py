@@ -897,11 +897,15 @@ def generate(state):
         request_timeout=30,
         max_retries=2
     )
-    # Extract query type to format prompt appropriately
+    # Extract query type and alpha pillar to format prompt appropriately
     sub_query_analysis = state.get("sub_query_analysis", {})
     query_type = sub_query_analysis.get("query_type", "general")
-    
-    rag_chain = get_rag_chain(llm, query_type=query_type)
+    alpha_pillar = state.get("alpha_pillar")  # e.g. "insider_trading", "alignment", etc.
+
+    if alpha_pillar:
+        print(f" [GENERATE] Alpha pillar mode: {alpha_pillar}")
+
+    rag_chain = get_rag_chain(llm, query_type=query_type, alpha_pillar=alpha_pillar)
     
     generation_input = {
         "documents": documents,
@@ -1878,35 +1882,57 @@ def alpha_dimension_retrieve(state):
         try:
             from rag.utils.Insights_Form4.advisory_hub import get_advisory_report
             form4_report = get_advisory_report(ticker)
-            lines = [f"INSIDER TRADING ANALYSIS (SEC Form 4) — {ticker}\n"]
+            sections = []
             if form4_report and "status" not in form4_report and "error" not in form4_report:
                 for issuer_name, detail in form4_report.items():
                     if issuer_name in ("error", "status", "message", "ticker"):
                         continue
-                    lines.append(f"\nIssuer: {issuer_name}")
-                    lines.append(f"Recommendation: {detail.get('Recommendation', 'N/A')}")
-                    lines.append(f"Net Insider Flow: ${detail.get('Net_Inside_Flow', 0):,.2f}")
-                    lines.append(f"Total Bought: ${detail.get('Total_Bought', 0):,.2f} ({int(detail.get('Total_Bought_Shares', 0)):,} shares)")
-                    lines.append(f"Total Sold:   ${detail.get('Total_Sold', 0):,.2f} ({int(detail.get('Total_Sold_Shares', 0)):,} shares)")
-                    lines.append(f"Transaction Count: {detail.get('Transaction_Count', 0)}")
-                    lines.append(f"Analyst Insight:\n{detail.get('Reason', 'No analysis available')}\n")
-                
-                from langchain_core.documents import Document
-                insider_doc = Document(
-                    page_content="\n".join(lines),
-                    metadata={"source": "form4_insider_trading", "company": ticker, "content_type": "insider_trading"}
-                )
-                print("    Form4 data retrieved successfully.")
-                return {
-                    "documents": [insider_doc],
-                    "alpha_dimensions": {"insider_trading": {"documents": [insider_doc]}}
-                }
-            else:
-                print("    No Form4 data found.")
-                return {"documents": [], "alpha_dimensions": {}}
+
+                    cur_price = detail.get("Current_Price")
+                    price_str = f"${cur_price:,.2f}" if isinstance(cur_price, float) else "N/A"
+                    p_total   = detail.get("P_Total", 0.0)
+                    s_total   = detail.get("S_Total", 0.0)
+                    f_total   = detail.get("F_Total", 0.0)
+                    net_signal = p_total - s_total
+
+                    # ── Build the final response directly ──────────────────
+                    acq_count  = int(detail.get("Acquired_Txn_Count", 0))
+                    disp_count = int(detail.get("Disposed_Txn_Count", 0))
+                    acq_shares = int(detail.get("Total_Acquired_Shares", 0))
+                    disp_shares = int(detail.get("Total_Disposed_Shares", 0))
+                    recommendation = detail.get("Recommendation", "N/A")
+
+                    section = []
+                    section.append(f"## Insider Trading Analysis — {issuer_name} ({ticker})")
+                    section.append(f"*Source: SEC Form 4 filings | Current Market Price: {price_str}*\n")
+
+                    section.append(
+                        f"**Acquisitions:** {acq_count} transaction(s) — {acq_shares:,} shares   |   "
+                        f"**Dispositions:** {disp_count} transaction(s) — {disp_shares:,} shares\n"
+                    )
+
+                    section.append("### Summary")
+                    section.append(detail.get("Reason", "No analysis available"))
+                    section.append("")
+                    section.append(f"**Recommendation: {recommendation}**")
+
+                    sections.append("\n".join(section))
+
+            final_response = "\n\n---\n\n".join(sections) if sections else f"No Form 4 data found for {ticker}."
+            print("    Form4 data retrieved and formatted successfully.")
+            return {
+                "Intermediate_message": final_response,
+                "alpha_dimensions": {"insider_trading": {}},
+                "documents": [],
+            }
         except Exception as e:
             print(f"    Error: {e}")
-            return {"documents": [], "alpha_dimensions": {}}
+            import traceback; traceback.print_exc()
+            return {
+                "Intermediate_message": f"Error retrieving insider trading data for {ticker}: {e}",
+                "documents": [],
+                "alpha_dimensions": {},
+            }
     
     from app.services.vectordb_manager import get_vectordb_manager
     from langchain_tavily import TavilySearch

@@ -35,7 +35,8 @@ def analyze_transactions(all_data):
         for txn in entry.get("transactions", []):
             try:
                 amount = float(txn["amount"].replace(',', ''))
-                price = float(txn["price"].replace('$', '').replace(',', ''))
+                raw_price = txn["price"].replace('$', '').replace(',', '')
+                price = float(raw_price) if raw_price.replace('.', '').lstrip('-').isdigit() else 0.0
                 code = txn["code"]
                 ad = txn["acquired_disposed"]
                 
@@ -130,28 +131,13 @@ def analyze_transactions(all_data):
         avg_acquired_price = buy_volume / total_priced_acquired if total_priced_acquired > 0 else 0
         avg_disposed_price = sell_volume / total_priced_disposed if total_priced_disposed > 0 else 0
         
-        # Prepare transaction list string
-        txn_list_str = ""
-        # Sort by date for narrative flow
-        sorted_group = group.sort_values("Date")
-        
-        for _, row in sorted_group.iterrows():
-            txn_list_str += f"- {row['Date']}: {row['Person']} ({row['Role']}) {row['Type']} {row['Amount']} shares at ${row['Price']} (Code: {row['Code']})\n"
-            
         # Fetch Market Data
-        # We assume one ticker per issuer group (usually true)
         current_price = "N/A"
         ticker = group["Ticker"].iloc[0]
-        
         market_context = ""
-        
         if ticker:
             try:
-                # remove brackets if still there or just take the code
-                clean_ticker = ticker.strip()
-                stock = yf.Ticker(clean_ticker)
-                
-                # fast way to get current price
+                stock = yf.Ticker(ticker.strip())
                 hist = stock.history(period="1d")
                 if not hist.empty:
                     current_price = hist["Close"].iloc[-1]
@@ -159,110 +145,173 @@ def analyze_transactions(all_data):
             except Exception as e:
                 market_context = f"- Market Data Error: {e}"
 
-        # Prepare transaction list string with behavioral context
-        txn_list_str = ""
-        # Sort by date for narrative flow
         sorted_group = group.sort_values("Date")
-        
+
+        # ------------------------------------------------------------------
+        # PRE-COMPUTE per-insider breakdown by transaction code
+        # (S = open-market sale, F = tax withholding, P = open-market buy)
+        # Injecting pre-computed values prevents LLM hallucination.
+        # ------------------------------------------------------------------
+        from collections import defaultdict
+        insider_stats = defaultdict(lambda: {
+            "role": "", "S_val": 0.0, "S_shares": 0,
+            "F_val": 0.0, "F_shares": 0,
+            "P_val": 0.0, "P_shares": 0,
+        })
+        for _, row in sorted_group.iterrows():
+            p = row["Person"]
+            insider_stats[p]["role"] = row["Role"]
+            code = str(row["Code"]).upper()
+            amt  = int(row["Amount"])
+            val  = row["ActualBought"] + row["ActualSold"]
+            if code == "S":
+                insider_stats[p]["S_val"]    += row["ActualSold"]
+                insider_stats[p]["S_shares"] += amt
+            elif code == "F":
+                insider_stats[p]["F_val"]    += row["ActualSold"]
+                insider_stats[p]["F_shares"] += amt
+            elif code == "P":
+                insider_stats[p]["P_val"]    += row["ActualBought"]
+                insider_stats[p]["P_shares"] += amt
+
+        # Build pre-computed table string (only include insiders with any priced activity)
+        insider_table_lines = [
+            "| Name | Role | Open-Market Sold S ($) | Tax Withheld F ($) | Open-Market Bought P ($) | Net Economic Flow ($) |",
+            "|------|------|------------------------|-------------------|--------------------------|----------------------|",
+        ]
+        for person, d in sorted(insider_stats.items()):
+            net = d["P_val"] - d["S_val"] - d["F_val"]
+            if d["S_val"] == 0 and d["F_val"] == 0 and d["P_val"] == 0:
+                continue  # skip insiders with only zero-dollar transactions
+            insider_table_lines.append(
+                f"| {person} | {d['role'] or 'N/A'} "
+                f"| ${d['S_val']:>14,.2f} ({d['S_shares']:,} sh) "
+                f"| ${d['F_val']:>14,.2f} ({d['F_shares']:,} sh) "
+                f"| ${d['P_val']:>14,.2f} ({d['P_shares']:,} sh) "
+                f"| ${net:>14,.2f} |"
+            )
+        insider_table_str = "\n".join(insider_table_lines)
+
+        # Build transaction log with behavioral context
+        txn_list_str = ""
         for _, row in sorted_group.iterrows():
             behavior_note = ""
-            if isinstance(current_price, (int, float)) and row['Price'] > 0:
-                diff_pct = ((current_price - row['Price']) / row['Price']) * 100
-                if row['Code'] in ['S', 'D']: # Sold
-                    # If sold and price is now lower -> Good timing (Saved loss/locked profit)
-                    # If sold and price is now higher -> Missed gains
-                    if current_price < row['Price']:
-                        behavior_note = f"(Smart Exit: Stock dropped {abs(diff_pct):.1f}% since)"
-                    else:
-                        behavior_note = f"(Missed Gains: Stock rose {diff_pct:.1f}% since)"
-                elif row['Code'] in ['P', 'A']: # Bought
-                    # If bought and price is now higher -> Good entry
-                    if current_price > row['Price']:
-                        behavior_note = f"(Profitable Entry: Up {diff_pct:.1f}%)"
-                    else:
-                        behavior_note = f"(Unrealized Loss: Down {abs(diff_pct):.1f}%)"
-                        
-            txn_list_str += f"- {row['Date']}: {row['Person']} ({row['Role']}) {row['Type']} {row['Amount']} shares at ${row['Price']} (Code: {row['Code']}) {behavior_note}\n"
-            
-        # Construct Prompt
-        system_prompt = "You are an expert financial analyst. You must output your report EXACTLY in the specified format, with no additional conversational text or greetings."
+            if isinstance(current_price, (int, float)) and row["Price"] > 0:
+                diff_pct = ((current_price - row["Price"]) / row["Price"]) * 100
+                if row["Code"] in ["S", "F"]:
+                    behavior_note = (
+                        f"(Smart Exit: -{abs(diff_pct):.1f}% since)"
+                        if current_price < row["Price"]
+                        else f"(Missed Gains: +{diff_pct:.1f}% since)"
+                    )
+                elif row["Code"] == "P":
+                    behavior_note = (
+                        f"(Profitable Entry: +{diff_pct:.1f}%)"
+                        if current_price > row["Price"]
+                        else f"(Unrealized Loss: -{abs(diff_pct):.1f}%)"
+                    )
+            txn_list_str += (
+                f"- {row['Date']}: {row['Person']} ({row['Role']}) "
+                f"{row['Type']} {row['Amount']} shares at ${row['Price']:.2f} "
+                f"(Code: {row['Code']}) {behavior_note}\n"
+            )
+
+        # ── Python-derived recommendation (single source of truth) ────────
+        # Based on open-market P vs S only. F/A/C/G are excluded from signal.
+        s_sold  = group[group["Code"] == "S"]["ActualSold"].sum()
+        p_bought = group[group["Code"] == "P"]["ActualBought"].sum()
+        net_open_market = p_bought - s_sold
+        if p_bought > 0 and net_open_market > 0:
+            recommendation = "BUY"
+        elif p_bought > 0 and net_open_market < 0 and p_bought / max(s_sold, 1) > 0.3:
+            recommendation = "HOLD/MIXED"   # some buying offsets heavy selling
+        elif p_bought == 0 and s_sold == 0:
+            recommendation = "NEUTRAL"
+        else:
+            recommendation = "HOLD/MIXED"   # selling present but routine for large-caps
+
+        # ── LLM: analyst narrative only (no tables — Python owns those) ───
+        system_prompt = (
+            "You are a senior equity analyst writing a concise insider-trading "
+            "commentary for an investment report. Write in a professional, "
+            "first-person plural voice ('We note...', 'Our analysis shows...'). "
+            "Do NOT reproduce any data tables — the client already has the full "
+            "breakdown. Stick to interpretation and investment implication only."
+        )
         user_prompt = f"""
-        Analyze the following insider trading activity for {issuer} ({ticker if ticker else 'Unknown Ticker'}).
-        
-        Overview:
-        - Transaction Count: {txn_count}
-        
-        Acquired Metrics:
-        - Total Acquired (Shares): {total_acquired:,.0f}
-        - Total Acquired (Dollars): ${buy_volume:,.2f}
-        - Transactions (Acquired): {acquired_txn_count}
-        - Average Acquired Price: ${avg_acquired_price:,.2f}
-        
-        Disposed Metrics:
-        - Total Disposed (Shares): {total_disposed:,.0f}
-        - Total Disposed (Dollars): ${sell_volume:,.2f}
-        - Transactions (Disposed): {disposed_txn_count}
-        - Average Disposed Price: ${avg_disposed_price:,.2f}
-        
-        {market_context}
-        
-        Detailed Transactions:
-        {txn_list_str}
-        
-        You must reply STRICTLY using the exact following format, including the blank lines for spacing:
-        
-        Summary
-        
-        - <Provide a bullet point briefly summarizing the total sales/buys, and average prices compared to market>
-        
-        - <Another bullet point with relevant transaction metrics>
-        
-        - <Another bullet point indicating whether it's mostly sales or buys>
-        
-        Recommendation
-        
-        - <BUY, SELL, or HOLD/MIXED>.
-        
-          - Rationale: <1-2 sentences explaining why based on the behavior (e.g., routine liquidity, panic selling, contrarian buying)>
-          
-          - For prospective buyers: <1 sentence with actionable advice for buyers>
-        """
-        
-        narrative = "AI Analysis Unsupported (No API Key)"
-        recommendation = "UNKNOWN"
-        
+Insider trading data for {issuer} ({ticker or 'Unknown Ticker'}):
+
+Open-Market Bought (P): ${p_bought:,.2f} ({int(group[group['Code']=='P']['Amount'].sum()):,} shares)
+Open-Market Sold   (S): ${s_sold:,.2f}   ({int(group[group['Code']=='S']['Amount'].sum()):,} shares)
+Tax Withheld       (F): ${group[group['Code']=='F']['ActualSold'].sum():,.2f} (mandatory — exclude from signal)
+Net Signal (P - S)    : ${net_open_market:,.2f}
+{market_context}
+Avg disposal price    : ${avg_disposed_price:,.2f}
+Python Recommendation : {recommendation}
+
+Notable insiders selling (S-code only):
+{txn_list_str[-3000:]}
+
+Write a 2–3 paragraph professional commentary:
+1. Characterise the overall insider sentiment from P and S trades only (ignore F/A/C/G).
+2. Call out the most significant individual trades (names, amounts, dates) and what they signal.
+3. One closing sentence stating the investment stance and why — use the Python Recommendation above, do not contradict it.
+
+Be concise. No bullet lists. No headers. No tables. Maximum 200 words.
+"""
+
+        narrative = "Analysis unavailable (no API key configured)."
         if client:
             try:
                 response = client.chat.completions.create(
-                    model="gpt-5-mini", # Requesting user's preferred model
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
+                        {"role": "user",   "content": user_prompt},
                     ],
-                    # Fallback model in case gpt-5-mini isn't valid yet, usually handled by API error but here we assume it works or user has access.
-                    # In a real scenario, we might catch the error and retry with gpt-4o-mini.
+                    max_tokens=400,
+                    temperature=0.3,
                 )
-                narrative = response.choices[0].message.content
-                
-                # Extract recommendation from narrative if possible, or just leave it embedded
-                if "BUY" in narrative.upper() and "SELL" not in narrative.upper(): recommendation = "BUY"
-                elif "SELL" in narrative.upper() and "BUY" not in narrative.upper(): recommendation = "SELL"
-                else: recommendation = "HOLD/MIXED" # Simple heuristic extraction
-                
+                narrative = response.choices[0].message.content.strip()
             except Exception as e:
                 narrative = f"Error generating analysis: {e}"
-        else:
-            # Fallback to heuristic if no key
-            if total_signal > 100000: recommendation = "BUY"
-            elif total_signal < -100000: recommendation = "SELL"
-            else: recommendation = "HOLD"
-            narrative = f"Automatic analysis (No API Key): Net flow is ${total_signal:,.2f}. Recommendation based on threshold."
+
+        # Pre-computed per-code totals (Python truth — not from LLM)
+        s_grp = group[group["Code"] == "S"]
+        f_grp = group[group["Code"] == "F"]
+        p_grp = group[group["Code"] == "P"]
+        s_total = s_grp["ActualSold"].sum()
+        f_total = f_grp["ActualSold"].sum()
+        p_total = p_grp["ActualBought"].sum()
+        s_shares = int(s_grp["Amount"].sum())
+        f_shares = int(f_grp["Amount"].sum())
+        p_shares = int(p_grp["Amount"].sum())
+
+        # Key open-market trade dates (S and P only — the signal transactions)
+        signal_dates = (
+            group[group["Code"].isin(["S", "P"])]
+            .groupby("Date")["Amount"]
+            .sum()
+            .sort_index(ascending=False)
+        )
+        top_dates = signal_dates.head(10)
+        dates_str = "\n".join(
+            f"  {date}: {int(shares):,} shares (open-market S/P)"
+            for date, shares in top_dates.items()
+        )
 
         report[issuer] = {
             "Recommendation": recommendation,
-            "Reason": narrative, # Now holds the full AI narrative
+            "Reason": narrative,
+            # Python-computed fields (guaranteed correct)
             "Net_Inside_Flow": actual_net_flow,
             "Net_Cash_Flow": net_cash_flow,
+            "S_Total": s_total,           # open-market sale dollars
+            "F_Total": f_total,           # tax-withholding dollars
+            "P_Total": p_total,           # open-market purchase dollars
+            "S_Shares": s_shares,
+            "F_Shares": f_shares,
+            "P_Shares": p_shares,
             "Total_Bought": buy_volume,
             "Total_Sold": sell_volume,
             "Transaction_Count": len(group),
@@ -272,6 +321,9 @@ def analyze_transactions(all_data):
             "Disposed_Txn_Count": disposed_txn_count,
             "Avg_Acquired_Price": avg_acquired_price,
             "Avg_Disposed_Price": avg_disposed_price,
+            "Insider_Table": insider_table_str,   # pre-computed per-insider breakdown
+            "Key_Trade_Dates": dates_str,          # top 10 S/P dates
+            "Current_Price": current_price if isinstance(current_price, float) else None,
             "Details": group[["Date", "Person", "Role", "Code", "Amount", "Price", "Type"]].to_dict('records')
         }
         

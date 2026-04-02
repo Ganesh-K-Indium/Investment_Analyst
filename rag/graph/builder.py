@@ -93,6 +93,7 @@ class BuildingGraph:
             {
                 "alpha_generate": "alpha_generate",
                 "generate": "generate",
+                "show_result": "show_result",   # insider_trading bypasses generate
             }
         )
         workflow.add_edge("alpha_generate", "show_result")

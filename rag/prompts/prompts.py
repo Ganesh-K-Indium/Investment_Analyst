@@ -11,7 +11,7 @@ from schemas.models import (GradeHallucinations, GradeAnswer,
                                         StructuredFinancialData)
 
 
-def get_rag_chain(llm_generate, query_type: str = "general"):
+def get_rag_chain(llm_generate, query_type: str = "general", alpha_pillar: str = None):
     cur_year = _current_year()
     
     # Base system prompt used for all queries
@@ -109,6 +109,87 @@ For balance sheets, income statements, cash flow, or any financial data:
 - Extract specific risk factors with their potential financial impact
 - Highlight any language shifts (more cautious vs. confident vs. prior year)
 - Connect qualitative disclosures to quantitative financial trends"""
+
+    # ------------------------------------------------------------------
+    # ALPHA PILLAR OVERRIDES — applied when generate is called from alpha
+    # ------------------------------------------------------------------
+    alpha_pillar_rules = ""
+
+    if alpha_pillar == "insider_trading":
+        alpha_pillar_rules = """
+**INSIDER TRADING ANALYSIS RULES (SEC Form 4):**
+
+TRANSACTION CODE MEANINGS — you MUST distinguish these in your answer:
+- **P** = Open-market Purchase (voluntary, out-of-pocket cash) → STRONG BULLISH signal
+- **S** = Open-market Sale (voluntary, deliberate exit) → MODERATE BEARISH signal
+- **F** = Tax Withholding (shares surrendered to cover tax on vest) → NOT a sell signal; it is a legal, mechanical obligation — do NOT treat as negative sentiment
+- **A** = Grant / Award / RSU vest → NOT a purchase; compensation, no cash outlay
+- **C** = Conversion of derivative (option to share) → non-discretionary, neutral
+- **G** = Gift → no economic intent, ignore for signal purposes
+- **M** = Option exercise → shares acquired at exercise price, often paired with S sale
+
+DOLLAR vs SHARE FIELDS — be precise:
+- "Net Insider Flow (dollars)" = cash bought minus cash sold → this is the economic signal
+- "Net Insider Flow (shares)" = shares acquired minus shares disposed → includes non-cash events (grants, vests) so is a larger number; do NOT prefix with $
+- "Total Bought" / "Total Sold" = dollar values of P and S+F transactions
+- NEVER confuse shares with dollars or prefix a share count with $
+
+INTERPRETATION RULES:
+1. F transactions inflate "Total Sold" in dollars — always call out that F is mandatory withholding, not discretionary selling
+2. If there are ZERO P-code (open-market purchases) and many S-code sales → that is a net SELL signal
+3. If all sales are F-code only → signal is NEUTRAL (routine tax obligation)
+4. 10b5-1 plans = pre-scheduled, legally insulated; mention when evident from large planned blocks
+5. Large concentrated sales by a CEO/Chairman on a single date = higher signal weight than routine small disposals
+6. For the recommendation: base it on S-code (open-market) dollar flow, NOT total disposed shares
+
+OUTPUT FORMAT FOR INSIDER TRADING:
+1. **Summary Table** — one row per insider: Name | Role | Open-Market Sold ($) | Tax Withheld ($) | Net Economic Flow ($)
+2. **Transaction Code Breakdown** — paragraph explaining what each code means in this dataset
+3. **Signal Assessment** — separate paragraph: what do the P/S transactions alone signal (excluding F/A/C/G)?
+4. **Recommendation** — BUY / SELL / HOLD/MIXED with 2-sentence rationale grounded in dollar flow, NOT share count"""
+
+    elif alpha_pillar == "alignment":
+        alpha_pillar_rules = """
+**ALIGNMENT PILLAR RULES (Stakeholder Interests):**
+1. Focus on: insider ownership %, executive compensation structure, shareholder-friendly policies
+2. Extract: any stock repurchase programs, dividend policy, executive equity stakes
+3. Flag: excessive dilution, pay-for-performance misalignment, related-party transactions
+4. Conclude: Are management incentives aligned with long-term shareholder value?"""
+
+    elif alpha_pillar == "liquidity":
+        alpha_pillar_rules = """
+**LIQUIDITY PILLAR RULES:**
+1. Extract: Current Ratio, Quick Ratio, Cash & Equivalents, Free Cash Flow, Debt/EBITDA
+2. Note: Credit facility availability, upcoming debt maturities, covenant headroom
+3. Flag: Any liquidity stress indicators — negative FCF, rising short-term debt, cash burn rate
+4. Conclude: Can the company fund operations and growth without dilutive financing?"""
+
+    elif alpha_pillar == "performance":
+        alpha_pillar_rules = """
+**PERFORMANCE PILLAR RULES (Earnings & Fundamentals):**
+1. Extract: Revenue, Net Income, Operating Margin, EPS (last 2-3 years minimum)
+2. Calculate: YoY growth rates for each metric
+3. Highlight: margin expansion/compression trend, earnings quality (cash vs accrual)
+4. Conclude: Is the financial performance trajectory improving or deteriorating?"""
+
+    elif alpha_pillar == "horizon":
+        alpha_pillar_rules = """
+**HORIZON PILLAR RULES (Analyst Trends & Outlook):**
+1. Extract: analyst consensus (buy/hold/sell counts), price targets (low/mean/high)
+2. Note: recent rating changes, estimate revision direction (up vs down)
+3. Identify: catalyst events — earnings dates, product launches, regulatory decisions
+4. Conclude: What does the analyst community expect over the next 12 months?"""
+
+    elif alpha_pillar == "action":
+        alpha_pillar_rules = """
+**ACTION PILLAR RULES (Entry Timing & Valuation):**
+1. Extract: P/E, P/S, EV/EBITDA vs. historical average and sector peers
+2. Identify: technical levels — 52-week high/low, support/resistance if mentioned
+3. Note: recent price momentum, short interest, options flow if available
+4. Conclude: Is the current price a good entry point relative to intrinsic value?"""
+
+    if alpha_pillar_rules:
+        dynamic_rules = alpha_pillar_rules  # pillar rules replace generic rules
 
     closing_prompt = f"""
 **RESPONSE GUIDELINES:**
