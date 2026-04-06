@@ -148,18 +148,22 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
         logger.warning("No filings found. Exiting.")
         return {
             "ticker": ticker,
-            "total_fetched": 0,
-            "saved": 0,
-            "skipped_duplicate": 0,
+            "total_url_fetched": 0,
+            "forms_with_common_stock": 0,
+            "forms_with_0_common_stock": 0,
+            "transactions_saved_total": 0,
+            "skipped_already_in_db": 0,
             "failed": 0,
             "date_range": {"start": str(start_date), "end": str(end_date)},
             "message": f"No Form 4 filings found for {ticker} between {start_date} and {end_date}.",
         }
 
-    # Initialize counters
-    success_count = 0
+    # Initialize counters (in-memory only — not saved to DB)
+    forms_with_common_stock = 0
+    forms_with_0_common_stock = 0
+    transactions_saved_total = 0
+    skipped_already_in_db = 0
     fail_count = 0
-    skip_count = 0
 
     with get_db() as db:
         for i, url in enumerate(xml_urls):
@@ -176,7 +180,7 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
                 
                 if existing:
                     logger.info(f"  -> Skipping (Already in DB)")
-                    skip_count += 1
+                    skipped_already_in_db += 1
                     continue
 
                 # Fetch Content
@@ -261,28 +265,59 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
                         transaction_price_per_share=tx['price'],
                         transaction_acquired_disposed_code=tx['acq_disp'],
                         transaction_value=val,
+                        has_common_stock=True,
                     )
                     db.add(record)
                     tx_count += 1
-                    
+
+                # ── Dummy row for filings with 0 common stock ─────────────
+                # This prevents re-processing on future runs.
+                if tx_count == 0:
+                    dummy = Form4Transaction(
+                        accession_number=accession_number,
+                        document_type=doc_type,
+                        period_of_report=period,
+                        issuer_symbol=data['issuer_symbol'],
+                        issuer_name=data.get('issuer_name'),
+                        rpt_owner_name=rpt_owner,
+                        rpt_owner_title=title,
+                        is_director=data.get('is_director', False),
+                        is_officer=data.get('is_officer', False),
+                        is_ten_percent_owner=data.get('is_ten_percent_owner', False),
+                        has_common_stock=False,
+                    )
+                    db.add(dummy)
+                    forms_with_0_common_stock += 1
+                    logger.info(f"  -> No common stock. Dummy row inserted to prevent reprocessing.")
+                else:
+                    forms_with_common_stock += 1
+                    transactions_saved_total += tx_count
+                    logger.info(f"  -> Success. Saved {tx_count} transactions.")
+
                 db.commit()
-                logger.info(f"  -> Success. Saved {tx_count} transactions.")
-                success_count += 1
                 
             except Exception as e:
                 logger.error(f"  -> Critical Error processing {url}: {e}")
                 db.rollback()
                 fail_count += 1
 
-    logger.info("="*30)
+    logger.info("="*50)
     logger.info("INGESTION SUMMARY")
-    logger.info("="*30)
-    logger.info(f"Total Fetched: {len(xml_urls)}")
-    logger.info(f"Successfully Saved: {success_count}")
-    logger.info(f"Skipped (Duplicate): {skip_count}")
-    logger.info(f"Failed: {fail_count}")
+    logger.info("="*50)
+    logger.info(f"Total URLs Fetched:          {len(xml_urls)}")
+    logger.info(f"Forms with Common Stock:     {forms_with_common_stock}")
+    logger.info(f"Forms with 0 Common Stock:   {forms_with_0_common_stock}")
+    logger.info(f"Transactions Saved (Total):  {transactions_saved_total}")
+    logger.info(f"Skipped (Already in DB):     {skipped_already_in_db}")
+    logger.info(f"Failed:                      {fail_count}")
+    # Sanity check: all counters should add up to total_url_fetched
+    sanity = forms_with_common_stock + forms_with_0_common_stock + skipped_already_in_db + fail_count
+    if sanity != len(xml_urls):
+        logger.warning(f"SANITY CHECK FAILED: {sanity} != {len(xml_urls)} (total_url_fetched)")
+    else:
+        logger.info(f"Sanity Check PASSED:         {sanity} == {len(xml_urls)}")
     logger.info(f"Logs saved to: {os.path.abspath(log_file)}")
-    logger.info("="*30)
+    logger.info("="*50)
     
     # Calculate and display transaction analytics
     try:
@@ -294,9 +329,11 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
 
     return {
         "ticker": ticker,
-        "total_fetched": len(xml_urls),
-        "saved": success_count,
-        "skipped_duplicate": skip_count,
+        "total_url_fetched": len(xml_urls),
+        "forms_with_common_stock": forms_with_common_stock,
+        "forms_with_0_common_stock": forms_with_0_common_stock,
+        "transactions_saved_total": transactions_saved_total,
+        "skipped_already_in_db": skipped_already_in_db,
         "failed": fail_count,
         "date_range": {"start": str(start_date), "end": str(end_date)},
     }

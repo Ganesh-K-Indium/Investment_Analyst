@@ -37,10 +37,12 @@ class Form4IngestRequest(BaseModel):
 
 class Form4IngestResponse(BaseModel):
     ticker: str
-    total_fetched: int = Field(..., description="Total filing URLs retrieved from SEC EDGAR.")
-    saved: int = Field(..., description="Filings that contained ≥1 new transaction saved to DB.")
-    skipped_duplicate: int = Field(..., description="Filings already present in the database.")
-    failed: int = Field(..., description="Filings that could not be fetched or parsed.")
+    total_url_fetched: int = Field(..., description="Total filing URLs retrieved from SEC EDGAR.")
+    forms_with_common_stock: int = Field(..., description="Forms that contained ≥1 common stock transaction saved to DB.")
+    forms_with_0_common_stock: int = Field(..., description="Forms with only derivatives (dummy row inserted to prevent reprocessing).")
+    transactions_saved_total: int = Field(..., description="Total individual stock movement records added to the DB in this run.")
+    skipped_already_in_db: int = Field(..., description="Filings already present in the database (skipped).")
+    failed: int = Field(..., description="Filings that could not be fetched or parsed due to errors.")
     date_range: dict = Field(..., description="Effective start/end dates used for ingestion.")
     message: Optional[str] = Field(None, description="Optional status message.")
 

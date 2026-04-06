@@ -165,6 +165,8 @@ class Form4Transaction(Base):
     transaction_acquired_disposed_code = Column(String, nullable=True)  # A or D
     security_title = Column(String, nullable=True)
     transaction_value = Column(Float, nullable=True)  # shares * price
+    has_common_stock = Column(Boolean, default=True, nullable=False)  # False = dummy row (no common stock in filing)
+    ingested_at = Column(DateTime, default=datetime.utcnow)  # Tracks when this row was populated
 
     __table_args__ = (
         Index('idx_symbol_date', 'issuer_symbol', 'transaction_date'),
