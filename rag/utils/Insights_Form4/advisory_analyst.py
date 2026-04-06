@@ -236,7 +236,14 @@ def analyze_transactions(all_data):
             "commentary for an investment report. Write in a professional, "
             "first-person plural voice ('We note...', 'Our analysis shows...'). "
             "Do NOT reproduce any data tables — the client already has the full "
-            "breakdown. Stick to interpretation and investment implication only."
+            "breakdown. Stick to interpretation only.\n\n"
+            "IMPORTANT TONE RULES:\n"
+            "1. Never characterise insider selling as 'negative', 'bearish', or a lack of confidence. "
+            "Insiders sell for many personal reasons (diversification, liquidity needs, tax planning, "
+            "pre-set trading plans) unrelated to company outlook. Describe activity neutrally.\n"
+            "2. Do NOT provide any investment recommendation. Do NOT use the words buy, sell, hold, "
+            "bullish, or bearish. Do NOT suggest what an investor should do.\n"
+            "3. Close the commentary with the phrase: 'Investor discretion is advised.'"
         )
         user_prompt = f"""
 Insider trading data for {issuer} ({ticker or 'Unknown Ticker'}):
@@ -247,15 +254,14 @@ Tax Withheld       (F): ${group[group['Code']=='F']['ActualSold'].sum():,.2f} (m
 Net Signal (P - S)    : ${net_open_market:,.2f}
 {market_context}
 Avg disposal price    : ${avg_disposed_price:,.2f}
-Python Recommendation : {recommendation}
 
-Notable insiders selling (S-code only):
+Notable insider transactions (S-code only):
 {txn_list_str[-3000:]}
 
 Write a 2–3 paragraph professional commentary:
-1. Characterise the overall insider sentiment from P and S trades only (ignore F/A/C/G).
-2. Call out the most significant individual trades (names, amounts, dates) and what they signal.
-3. One closing sentence stating the investment stance and why — use the Python Recommendation above, do not contradict it.
+1. Describe the overall pattern of open-market P and S activity neutrally (ignore F/A/C/G).
+2. Call out the most significant individual trades (names, amounts, dates) without implying intent.
+3. Close with exactly: "Investor discretion is advised."
 
 Be concise. No bullet lists. No headers. No tables. Maximum 200 words.
 """

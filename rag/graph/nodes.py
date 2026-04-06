@@ -1914,7 +1914,7 @@ def alpha_dimension_retrieve(state):
                     section.append("### Summary")
                     section.append(detail.get("Reason", "No analysis available"))
                     section.append("")
-                    section.append(f"**Recommendation: {recommendation}**")
+                    #section.append(f"**Recommendation: {recommendation}**")
 
                     sections.append("\n".join(section))
 
@@ -2411,25 +2411,16 @@ def alpha_generate_report(state):
     # Combine into final report
     print("\n Combining dimensions into final report...")
 
-    def _dim_with_recommendation(dim_key):
-        """Return analysis text with Recommendation appended, ready for the combiner."""
-        dim = dimension_outputs.get(dim_key, {})
-        analysis = dim.get('analysis', 'N/A')
-        rec = dim.get('recommendation', '')
-        if rec:
-            return f"{analysis}\n\n**Recommendation:** {rec}"
-        return analysis
-
     try:
         combiner_chain = get_alpha_report_combiner_chain(llm)
         final_report = combiner_chain.invoke({
             "company": ticker,
             "ticker": ticker,
-            "alignment": _dim_with_recommendation('alignment'),
-            "liquidity": _dim_with_recommendation('liquidity'),
-            "performance": _dim_with_recommendation('performance'),
-            "horizon": _dim_with_recommendation('horizon'),
-            "action": _dim_with_recommendation('action')
+            "alignment": dimension_outputs.get('alignment', {}).get('analysis', 'N/A'),
+            "liquidity": dimension_outputs.get('liquidity', {}).get('analysis', 'N/A'),
+            "performance": dimension_outputs.get('performance', {}).get('analysis', 'N/A'),
+            "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
+            "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
         })
         print(f"    ✓ Final report: {len(final_report)} chars")
 

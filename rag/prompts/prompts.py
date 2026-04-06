@@ -1031,8 +1031,6 @@ Concise assessment of MD&A tone (confident vs. defensive, forward-looking langua
 disclosures) and any governance concerns (board independence, compensation, related-party
 transactions) from the retrieved documents. If documents are sparse, note that briefly.
 
-Recommendation:
-End with a one-line Recommendation field summarising the alignment signal from insider activity and governance (e.g. "Positive — net insider buying signals management conviction" or "Negative — heavy insider selling warrants caution").
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1076,7 +1074,6 @@ def get_alpha_liquidity_chain(llm):
 - Maximum 100 words — be precise and quantitative where possible
 - Lead with the most significant macro factor affecting the investment case
 - Tone: Analytical, decisive — state whether macro is a net positive or negative for this stock
-- End with a one-line **Recommendation** (e.g., "Positive — favourable macro backdrop and rate tailwinds", "Neutral — mixed signals with offsetting factors", "Negative — significant sector headwinds and margin pressure")
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1120,7 +1117,6 @@ def get_alpha_performance_chain(llm):
 - Maximum 100 words — lead with the most important fundamental signal
 - Include at least 2 specific numerical metrics from the documents
 - Tone: Quantitative, investment-grade precision
-- End with a one-line **Recommendation** (e.g., "Positive — strong and improving fundamentals with high FCF conversion", "Neutral — stable but slowing growth with margin pressure", "Negative — deteriorating margins and earnings quality concerns")
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1160,7 +1156,6 @@ def get_alpha_horizon_chain(llm):
 - Maximum 100 words — be specific and analytical
 - Reference at least one specific competitive advantage or risk factor from the documents
 - Tone: Strategic, forward-looking, investment-grade
-- End with a one-line **Recommendation** (e.g., "Positive — durable wide moat with expanding TAM", "Neutral — moderate moat, monitor competitive pressures", "Negative — moat erosion risk from disruption or commoditisation")
 """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -1205,7 +1200,7 @@ Sentence 4 — EBITDA: Extract and state the exact EBITDA figure from the EBITDA
   Example: "GOOGL's EBITDA is $180.7B."  If not found: "GOOGL's EBITDA is N/A."
 
 NEVER replace a number with a qualitative phrase — always state the actual value.
-Recommendation: one line combining RSI signal and SMA position as an overall timing stance."""
+"""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
@@ -1262,19 +1257,19 @@ def get_alpha_report_combiner_chain(llm):
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Alignment Analysis (includes Recommendation):
+Alignment Analysis:
 {alignment}
 
-Liquidity Analysis (includes Recommendation):
+Liquidity Analysis:
 {liquidity}
 
-Performance Analysis (includes Recommendation):
+Performance Analysis:
 {performance}
 
-Horizon Analysis (includes Recommendation):
+Horizon Analysis:
 {horizon}
 
-Action Analysis (includes Recommendation):
+Action Analysis:
 {action}
 
 Render the full Indium's ALPHA Framework report now.""")
