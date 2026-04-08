@@ -57,3 +57,18 @@ image.png
 # Scripts (only needed locally, not inside the container)
 scripts/
 START_SERVER.sh
+check_form4.py
+debug_form4.py
+visualize_graph.py
+
+# Large data/ingestion directories (Prevents massive build context loading)
+10k_7_companies/
+pdf_filings/
+xml_filings/
+tsm/
+
+# Local cache & agent logs
+.cache/
+.claude/
+*.log
+*.png

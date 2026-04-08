@@ -55,7 +55,7 @@ tavily-python>=0.3.0
 
 # Stock Market Data & Analysis
 yfinance>=0.2.40
-pandas-ta  # Alternative technical analysis library
+# pandas-ta  # Disabled: Causes matching distribution errors on python 3.11-slim
 ta>=0.11.0  # Technical Analysis library
 
 # Natural Language Processing
@@ -71,7 +71,7 @@ scipy>=1.11.0
 scikit-learn  # For advanced analytics
 
 # Google AI (for chart analysis)
-google-generativeai>=0.3.0
+google-genai>=0.5.0
 
 # Parsing & Document Processing
 llama_parse
@@ -99,7 +99,7 @@ google-api-python-client>=2.116.0
 google-auth>=2.27.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
-google-generativeai
+google-genai
 # SharePoint / Microsoft Graph Integration
 msal>=1.26.0  # Microsoft Authentication Library
 

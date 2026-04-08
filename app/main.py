@@ -57,8 +57,9 @@ async def startup_event():
     init_db()
     
     # Initialize LangGraph checkpointer (shared for RAG and stock agents)
-    print("Initializing checkpointer...")
-    checkpointer_context = AsyncSqliteSaver.from_conn_string("checkpoints.sqlite")
+    print("Initializing RAG checkpointer...")
+    rag_db_path = os.getenv("RAG_SQLITE_DB_PATH", "checkpoints.sqlite")
+    checkpointer_context = AsyncSqliteSaver.from_conn_string(rag_db_path)
     checkpointer = await checkpointer_context.__aenter__()
     
     # Initialize RAG graph

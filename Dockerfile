@@ -45,6 +45,7 @@ COPY schemas/    ./schemas/
 COPY alembic/    ./alembic/
 COPY alembic.ini .
 COPY static/     ./static/
+COPY settings.py .
 
 # Copy entrypoint script and make it executable
 COPY docker-entrypoint.sh .

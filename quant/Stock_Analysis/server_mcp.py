@@ -17,7 +17,7 @@ import base64
 import sys
 import os
 import base64
-import google.generativeai as genai
+from google import genai
 import datetime
 from cloud_storage import upload_chart_to_cloudinary
 from dotenv import load_dotenv
