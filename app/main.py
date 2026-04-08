@@ -3,6 +3,8 @@ Investment Analyst API - Production-grade FastAPI backend
 Unified platform for portfolio management, document analysis, and stock market analysis
 """
 import os
+from dotenv import load_dotenv
+load_dotenv(override=True)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver

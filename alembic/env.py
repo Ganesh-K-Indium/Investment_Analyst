@@ -1,5 +1,6 @@
-"""Alembic environment configuration for Investment Analyst API"""
 from logging.config import fileConfig
+from dotenv import load_dotenv
+load_dotenv(override=True)
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
