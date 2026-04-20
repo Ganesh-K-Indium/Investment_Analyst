@@ -82,7 +82,13 @@ For 3-company comparisons, add a third company column.
     elif query_type == "financial_calculation":
         dynamic_rules = """
 **FINANCIAL RATIO / CALCULATION QUERIES:**
-1. **SHOW** the formula explicitly: e.g., ROE = Net Income / Shareholders' Equity
+1. **SHOW** the formula explicitly using EXACT notation below — do NOT paraphrase or merge terms:
+   - Cash Ratio = (Cash + Cash Equivalents) / Total Current Liabilities
+   - Current Ratio = Current Assets / Current Liabilities
+   - Quick Ratio = (Current Assets - Inventory) / Current Liabilities
+   - ROE = Net Income / Shareholders' Equity
+   - ROA = Net Income / Total Assets
+   - Debt-to-Equity = Total Debt / Total Equity
 2. **INSERT** exact values from documents with their source period
 3. **CALCULATE** step-by-step with 2 decimal precision
 4. **INTERPRET** the result: is this ratio healthy, concerning, or improving vs. prior year?
@@ -553,7 +559,7 @@ Even if a question appears simple (e.g. "What is Google's gross margin?"), if it
 | ROA (Return on Assets) | net income + total assets |
 | Current Ratio | current assets + current liabilities |
 | Quick Ratio | current assets + inventory + current liabilities |
-| Cash Ratio | cash & equivalents + current liabilities |
+| Cash Ratio | cash + cash equivalents + current liabilities |
 | Debt-to-Equity Ratio | total debt (long-term + short-term) + total equity |
 | Interest Coverage | operating income + interest expense |
 | Inventory Turnover | COGS + average inventory (begin + end period) |
@@ -626,6 +632,11 @@ Even if a question appears simple (e.g. "What is Google's gross margin?"), if it
    Sub-queries:
    - "[Company] total debt long-term debt short-term debt borrowings [Year]"
    - "[Company] total equity shareholders equity stockholders equity [Year]"
+
+   - Cash Ratio = (Cash + Cash Equivalents) / Current Liabilities
+   Sub-queries:
+   - "[Company] cash cash equivalents balance sheet [Year]"
+   - "[Company] current liabilities short-term liabilities [Year]"
 
 3. **FOR MULTI-COMPANY COMPARISONS** (Each company gets multiple varied searches):
    Example: "Compare Amazon and Google segments"
