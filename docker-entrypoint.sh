@@ -27,6 +27,9 @@ echo "[entrypoint] Research MCP server starting on port 8567 (PID: $!)"
 # Give MCP servers a moment to initialize before the API tries to connect
 sleep 3
 
-echo "[entrypoint] Starting Investment Analyst API on port 8000..."
+echo "[entrypoint] Running database migrations..."
 cd /app
+alembic upgrade head
+
+echo "[entrypoint] Starting Investment Analyst API on port 8000..."
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000
