@@ -649,7 +649,7 @@ Even if a question appears simple (e.g. "What is Google's gross margin?"), if it
 4. **EXTRACTING REQUESTED YEARS**:
    - Identify specific years mentioned in the user's question (e.g. "What was Apple's revenue in 2023?" -> [2023]).
    - Output them as an array of integers in the `requested_years` field.
-   - Only include explicitly requested years. If no year is specified, return an empty array `[]`.
+   - If no year is specified, default to 2025 and return `[2025]`.
 
 5. **FOR NOTES-SPECIFIC DATA** (Use "notes", "footnotes", specific note numbers):
    - Revenue details: "revenue recognition notes", "disaggregated revenue footnotes"
