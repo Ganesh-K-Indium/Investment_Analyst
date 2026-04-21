@@ -574,7 +574,7 @@ def retrieve(state, config):
     
     # Extract requested years from state (set by preprocess_and_analyze_query for all paths)
     # Fall back to sub_query_analysis for backward compatibility
-    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [datetime.now().year]
+    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [2025]
 
     # SEGMENT / GEOGRAPHIC OPTIMISATION:
     # A 10-K covers the filing year + 2 prior years (3-year comparative).
