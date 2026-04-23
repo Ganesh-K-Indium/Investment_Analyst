@@ -17,6 +17,8 @@ from app.api.integrations import router as integrations_router
 from app.api.quant import router as quant_router
 from app.api.chats import router as chats_router
 from app.api.form4 import router as form4_router
+from app.api.auth import router as auth_router
+from app.api.reports import router as reports_router
 import app.api.rag as rag_router_module
 import app.api.quant as quant_router_module
 from app.services.stock_agent import initialize_stock_agents, cleanup_stock_agents
@@ -134,6 +136,8 @@ async def shutdown_event():
 
 
 # Include routers FIRST before defining other routes
+app.include_router(auth_router)
+app.include_router(reports_router)
 app.include_router(portfolio_router)
 app.include_router(rag_router)
 app.include_router(integrations_router)

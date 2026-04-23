@@ -11,6 +11,21 @@ import enum
 Base = declarative_base()
 
 
+class User(Base):
+    """Analyst / Fund Manager user account"""
+    __tablename__ = "users"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    email           = Column(String, unique=True, nullable=False, index=True)
+    username        = Column(String, unique=True, nullable=False, index=True)
+    full_name       = Column(String, nullable=True)
+    role            = Column(String, default="analyst", nullable=False)  # analyst | fund_manager | admin
+    hashed_password = Column(String, nullable=False)
+    is_active       = Column(Boolean, default=True)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class AgentType(str, enum.Enum):
     """Enum for different agent types"""
     RAG = "rag"
@@ -118,6 +133,56 @@ class ConsolidatedSummary(Base):
     sessions_included = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class RecommendationType(str, enum.Enum):
+    BUY  = "buy"
+    SELL = "sell"
+    HOLD = "hold"
+
+
+class ReportStatus(str, enum.Enum):
+    DRAFT     = "draft"
+    PUBLISHED = "published"
+
+
+class AnalystReport(Base):
+    """Saved analyst report — the permanent record after assembly"""
+    __tablename__ = "analyst_reports"
+
+    id                 = Column(Integer, primary_key=True, index=True)
+    user_id            = Column(String, nullable=False, index=True)          # author
+    title              = Column(String, nullable=False)
+    company_name       = Column(String, nullable=False, index=True)
+    ticker             = Column(String, nullable=True, index=True)
+    description        = Column(Text, nullable=True)                         # analyst's one-liner
+    recommendation     = Column(SQLEnum(RecommendationType), nullable=True, index=True)
+    content_markdown   = Column(Text, nullable=True)                         # full report body
+    image_urls         = Column(JSON, default=list)                          # Cloudinary URLs
+    source_session_ids = Column(JSON, default=list)                          # chat sessions used
+    portfolio_id       = Column(Integer, ForeignKey("portfolios.id"), nullable=True)
+    status             = Column(SQLEnum(ReportStatus), default="draft", index=True)
+    tags               = Column(JSON, default=list)
+    created_at         = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at         = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    portfolio = relationship("Portfolio", foreign_keys=[portfolio_id])
+
+
+class ReportDraftItem(Base):
+    """Staging clipboard — replaces localStorage for report creation"""
+    __tablename__ = "report_draft_items"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(String, nullable=False, index=True)
+    item_type  = Column(String, nullable=False)   # "text" | "image" | "summary"
+    content    = Column(Text, nullable=True)       # markdown text or summary
+    image_url  = Column(String, nullable=True)     # Cloudinary URL for charts
+    source     = Column(String, nullable=True)     # "rag" | "quant" | "summary"
+    session_id = Column(String, nullable=True)     # originating chat session
+    label      = Column(String, nullable=True)     # user-editable label
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Integration(Base):
