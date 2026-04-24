@@ -569,29 +569,169 @@ def export_report_pdf(report_id: int, db: Session = Depends(get_db_session)):
     pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + w, pdf.get_y())
     pdf.ln(4)
 
-    # --- Body: markdown rendered as plain paragraphs ---
+    # --- Body: markdown rendered with formatting ---
     if report.content_markdown:
-        pdf.set_font("Helvetica", "", 11)
-        for line in report.content_markdown.splitlines():
+        import re
+
+        def render_inline(text: str) -> str:
+            """Strip inline markdown markers for safe() — bold/italic handled via font switching."""
+            text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+            text = re.sub(r'__(.+?)__', r'\1', text)
+            text = re.sub(r'\*(.+?)\*', r'\1', text)
+            text = re.sub(r'_(.+?)_', r'\1', text)
+            text = re.sub(r'`(.+?)`', r'\1', text)
+            return text
+
+        def has_bold(text: str) -> bool:
+            return bool(re.search(r'\*\*(.+?)\*\*|__(.+?)__', text))
+
+        def has_italic(text: str) -> bool:
+            return bool(re.search(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)', text))
+
+        lines = report.content_markdown.splitlines()
+        i = 0
+        list_counter = 0  # for ordered lists
+
+        while i < len(lines):
+            line = lines[i]
             stripped = line.strip()
-            if stripped.startswith("### "):
+
+            # ── Headings ──────────────────────────────────────────────────
+            if stripped.startswith("#### "):
+                pdf.set_font("Helvetica", "B", 11)
+                pdf.multi_cell(w, 7, _safe(render_inline(stripped[5:])))
+                pdf.set_font("Helvetica", "", 11)
+            elif stripped.startswith("### "):
                 pdf.set_font("Helvetica", "B", 12)
-                pdf.multi_cell(w, 7, _safe(stripped[4:]))
+                pdf.multi_cell(w, 7, _safe(render_inline(stripped[4:])))
                 pdf.set_font("Helvetica", "", 11)
             elif stripped.startswith("## "):
-                pdf.set_font("Helvetica", "B", 13)
-                pdf.multi_cell(w, 8, _safe(stripped[3:]))
+                pdf.ln(2)
+                pdf.set_font("Helvetica", "B", 14)
+                pdf.multi_cell(w, 9, _safe(render_inline(stripped[3:])))
                 pdf.set_font("Helvetica", "", 11)
+                pdf.ln(1)
             elif stripped.startswith("# "):
-                pdf.set_font("Helvetica", "B", 15)
-                pdf.multi_cell(w, 9, _safe(stripped[2:]))
+                pdf.ln(2)
+                pdf.set_font("Helvetica", "B", 16)
+                pdf.multi_cell(w, 10, _safe(render_inline(stripped[2:])))
                 pdf.set_font("Helvetica", "", 11)
-            elif stripped.startswith("- ") or stripped.startswith("* "):
-                pdf.multi_cell(w, 6, _safe(f"  * {stripped[2:]}"))
+                pdf.ln(1)
+
+            # ── Horizontal rule ───────────────────────────────────────────
+            elif stripped in ("---", "***", "___"):
+                pdf.set_draw_color(180, 180, 180)
+                pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + w, pdf.get_y())
+                pdf.ln(4)
+
+            # ── Ordered list ──────────────────────────────────────────────
+            elif re.match(r'^\d+\.\s', stripped):
+                m = re.match(r'^(\d+)\.\s+(.*)', stripped)
+                if m:
+                    num, text = m.group(1), m.group(2)
+                    indent = "    "
+                    font = "B" if has_bold(text) else ""
+                    pdf.set_font("Helvetica", font, 11)
+                    pdf.multi_cell(w, 6, _safe(f"{indent}{num}. {render_inline(text)}"))
+                    pdf.set_font("Helvetica", "", 11)
+
+            # ── Unordered list ────────────────────────────────────────────
+            elif re.match(r'^[-*+]\s', stripped):
+                text = re.sub(r'^[-*+]\s+', '', stripped)
+                indent = "    "
+                # Detect nesting from raw indentation
+                raw_indent = len(line) - len(line.lstrip())
+                if raw_indent >= 4:
+                    indent = "        "
+                font = "B" if has_bold(text) else ""
+                pdf.set_font("Helvetica", font, 11)
+                pdf.multi_cell(w, 6, _safe(f"{indent}* {render_inline(text)}"))
+                pdf.set_font("Helvetica", "", 11)
+
+            # ── Blockquote ────────────────────────────────────────────────
+            elif stripped.startswith("> "):
+                pdf.set_font("Helvetica", "I", 10)
+                pdf.set_text_color(100, 100, 100)
+                pdf.multi_cell(w - 8, 6, _safe(render_inline(stripped[2:])), new_x="LMARGIN", new_y="NEXT")
+                pdf.set_text_color(0, 0, 0)
+                pdf.set_font("Helvetica", "", 11)
+
+            # ── Code block (``` ... ```) ───────────────────────────────────
+            elif stripped.startswith("```"):
+                code_lines = []
+                i += 1
+                while i < len(lines) and not lines[i].strip().startswith("```"):
+                    code_lines.append(lines[i])
+                    i += 1
+                if code_lines:
+                    pdf.set_font("Courier", "", 9)
+                    pdf.set_fill_color(245, 245, 245)
+                    code_text = "\n".join(code_lines)
+                    pdf.multi_cell(w, 5, _safe(code_text), fill=True)
+                    pdf.set_fill_color(255, 255, 255)
+                    pdf.set_font("Helvetica", "", 11)
+                    pdf.ln(2)
+
+            # ── Markdown table ────────────────────────────────────────────
+            elif stripped.startswith("|") and "|" in stripped[1:]:
+                # Collect all table rows
+                table_rows = []
+                while i < len(lines) and lines[i].strip().startswith("|"):
+                    row = lines[i].strip()
+                    # Skip separator rows (|---|---|)
+                    if not re.match(r'^\|[\s\-:|]+\|$', row):
+                        cells = [c.strip() for c in row.strip("|").split("|")]
+                        table_rows.append(cells)
+                    i += 1
+                i -= 1  # outer loop will increment
+
+                if table_rows:
+                    col_count = max(len(r) for r in table_rows)
+                    col_w = w / col_count
+                    is_header = True
+                    pdf.set_fill_color(240, 240, 240)
+                    for row in table_rows:
+                        pdf.set_font("Helvetica", "B" if is_header else "", 10)
+                        x_start = pdf.get_x()
+                        y_start = pdf.get_y()
+                        max_h = 6
+                        for ci, cell in enumerate(row[:col_count]):
+                            pdf.set_xy(x_start + ci * col_w, y_start)
+                            pdf.multi_cell(col_w, max_h, _safe(render_inline(cell)),
+                                           border=1, fill=is_header, new_x="RIGHT", new_y="TOP")
+                        pdf.set_xy(x_start, y_start + max_h)
+                        is_header = False
+                    pdf.set_fill_color(255, 255, 255)
+                    pdf.set_font("Helvetica", "", 11)
+                    pdf.ln(3)
+
+            # ── HTML table (kept by turndown) ─────────────────────────────
+            elif stripped.lower().startswith("<table"):
+                # Collect raw HTML table lines and skip them (can't render HTML natively)
+                while i < len(lines) and not lines[i].strip().lower().startswith("</table"):
+                    i += 1
+                pdf.set_font("Helvetica", "I", 9)
+                pdf.set_text_color(130, 130, 130)
+                pdf.multi_cell(w, 5, "[Table — see report in browser for full view]")
+                pdf.set_text_color(0, 0, 0)
+                pdf.set_font("Helvetica", "", 11)
+
+            # ── Blank line ────────────────────────────────────────────────
             elif stripped == "":
                 pdf.ln(3)
+
+            # ── Regular paragraph (with inline bold/italic detection) ─────
             else:
-                pdf.multi_cell(w, 6, _safe(stripped))
+                if has_bold(stripped):
+                    pdf.set_font("Helvetica", "B", 11)
+                elif has_italic(stripped):
+                    pdf.set_font("Helvetica", "I", 11)
+                else:
+                    pdf.set_font("Helvetica", "", 11)
+                pdf.multi_cell(w, 6, _safe(render_inline(stripped)))
+                pdf.set_font("Helvetica", "", 11)
+
+            i += 1
 
     # --- Images ---
     if report.image_urls:
