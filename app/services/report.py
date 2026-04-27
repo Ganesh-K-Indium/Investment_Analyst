@@ -1,11 +1,11 @@
 """
 Report service — draft clipboard CRUD + analyst report CRUD + search
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
-from app.database.models import ReportDraftItem, AnalystReport, ReportStatus, RecommendationType
+from app.database.models import ReportDraftItem, AnalystReport, ReportStatus
 
 _VALID_ITEM_TYPES = {"text", "image", "summary"}
 _VALID_SOURCES = {"rag", "quant", "summary", None}
@@ -100,14 +100,10 @@ def clear_draft_items(db: Session, user_id: str) -> int:
 def create_report_from_draft(
     db: Session,
     user_id: str,
-    title: str,
     company_name: str,
     ticker: Optional[str] = None,
-    description: Optional[str] = None,
-    recommendation: Optional[str] = None,
     source_session_ids: Optional[List[str]] = None,
     portfolio_id: Optional[int] = None,
-    tags: Optional[List[str]] = None,
     clear_draft: bool = True,
 ) -> AnalystReport:
     """
@@ -119,7 +115,6 @@ def create_report_from_draft(
     if not items:
         raise ValueError("No draft items found — clipboard is empty")
 
-    # Build markdown from text + summary items in display order
     md_sections: List[str] = []
     image_urls: List[str] = []
 
@@ -133,23 +128,18 @@ def create_report_from_draft(
 
     content_markdown = "\n\n---\n\n".join(md_sections) if md_sections else None
 
-    # Collect session IDs referenced by draft items
     draft_session_ids = list({i.session_id for i in items if i.session_id})
     merged_session_ids = list(set((source_session_ids or []) + draft_session_ids))
 
     report = create_report(
         db=db,
         user_id=user_id,
-        title=title,
         company_name=company_name,
         ticker=ticker,
-        description=description,
-        recommendation=recommendation,
         content_markdown=content_markdown,
         image_urls=image_urls,
         source_session_ids=merged_session_ids,
         portfolio_id=portfolio_id,
-        tags=tags,
     )
 
     if clear_draft:
@@ -180,30 +170,22 @@ def reorder_draft_items(db: Session, user_id: str, ordered_ids: List[int]) -> Li
 def create_report(
     db: Session,
     user_id: str,
-    title: str,
     company_name: str,
     ticker: Optional[str] = None,
-    description: Optional[str] = None,
-    recommendation: Optional[str] = None,
     content_markdown: Optional[str] = None,
     image_urls: Optional[List[str]] = None,
     source_session_ids: Optional[List[str]] = None,
     portfolio_id: Optional[int] = None,
-    tags: Optional[List[str]] = None,
 ) -> AnalystReport:
     report = AnalystReport(
         user_id=user_id,
-        title=title,
         company_name=company_name,
         ticker=ticker,
-        description=description,
-        recommendation=RecommendationType(recommendation) if recommendation else None,
         content_markdown=content_markdown,
         image_urls=image_urls or [],
         source_session_ids=source_session_ids or [],
         portfolio_id=portfolio_id,
         status=ReportStatus.DRAFT,
-        tags=tags or [],
     )
     db.add(report)
     db.commit()
@@ -233,18 +215,11 @@ def update_report(
     if not report:
         return None
 
-    allowed = {
-        "title", "company_name", "ticker", "description",
-        "recommendation", "content_markdown", "image_urls",
-        "source_session_ids", "portfolio_id", "tags",
-    }
+    allowed = {"company_name", "ticker", "content_markdown", "image_urls", "source_session_ids", "portfolio_id"}
     for field, value in patch.items():
         if field not in allowed or value is None:
             continue
-        if field == "recommendation":
-            setattr(report, field, RecommendationType(value))
-        else:
-            setattr(report, field, value)
+        setattr(report, field, value)
 
     report.updated_at = datetime.utcnow()
     db.commit()
@@ -289,7 +264,6 @@ def list_reports(
     status: Optional[str] = None,
     company: Optional[str] = None,
     ticker: Optional[str] = None,
-    recommendation: Optional[str] = None,
     portfolio_id: Optional[int] = None,
     from_date: Optional[datetime] = None,
     to_date: Optional[datetime] = None,
@@ -305,8 +279,6 @@ def list_reports(
         q = q.filter(AnalystReport.company_name.ilike(f"%{company}%"))
     if ticker:
         q = q.filter(AnalystReport.ticker.ilike(f"%{ticker}%"))
-    if recommendation:
-        q = q.filter(AnalystReport.recommendation == RecommendationType(recommendation))
     if portfolio_id:
         q = q.filter(AnalystReport.portfolio_id == portfolio_id)
     if from_date:
@@ -331,7 +303,6 @@ def search_reports(
     user_id: Optional[str] = None,
     company: Optional[str] = None,
     ticker: Optional[str] = None,
-    recommendation: Optional[str] = None,
     from_date: Optional[datetime] = None,
     to_date: Optional[datetime] = None,
     page: int = 1,
@@ -356,8 +327,6 @@ def search_reports(
         query = query.filter(AnalystReport.company_name.ilike(f"%{company}%"))
     if ticker:
         query = query.filter(AnalystReport.ticker.ilike(f"%{ticker}%"))
-    if recommendation:
-        query = query.filter(AnalystReport.recommendation == RecommendationType(recommendation))
     if from_date:
         query = query.filter(AnalystReport.created_at >= from_date)
     if to_date:
@@ -379,16 +348,6 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
 
     total = base.count()
 
-    # Breakdown by recommendation
-    by_rec = {
-        row[0].value if row[0] else "unrated": row[1]
-        for row in db.query(AnalystReport.recommendation, func.count())
-            .filter(AnalystReport.status == ReportStatus.PUBLISHED)
-            .group_by(AnalystReport.recommendation)
-            .all()
-    }
-
-    # Top 10 companies by report count
     top_companies = [
         {"company": row[0], "count": row[1]}
         for row in db.query(AnalystReport.company_name, func.count())
@@ -399,7 +358,6 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
             .all()
     ]
 
-    # Top 10 analysts by report count
     top_analysts = [
         {"analyst": row[0], "count": row[1]}
         for row in db.query(AnalystReport.user_id, func.count())
@@ -410,24 +368,27 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
             .all()
     ]
 
-    # 5 most recent published reports (summary cards)
-    recent = base.order_by(AnalystReport.created_at.desc()).limit(5).all()
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    recent = (
+        base
+        .filter(AnalystReport.updated_at >= cutoff)
+        .order_by(AnalystReport.updated_at.desc())
+        .limit(10)
+        .all()
+    )
 
     return {
         "total_published": total,
-        "by_recommendation": by_rec,
         "top_companies": top_companies,
         "top_analysts": top_analysts,
         "recent_reports": [
             {
                 "id": r.id,
-                "title": r.title,
                 "company_name": r.company_name,
                 "ticker": r.ticker,
-                "recommendation": r.recommendation.value if r.recommendation else None,
                 "author": r.user_id,
-                "description": r.description,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }
             for r in recent
         ],

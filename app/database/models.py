@@ -135,12 +135,6 @@ class ConsolidatedSummary(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class RecommendationType(str, enum.Enum):
-    BUY  = "buy"
-    SELL = "sell"
-    HOLD = "hold"
-
-
 class ReportStatus(str, enum.Enum):
     DRAFT     = "draft"
     PUBLISHED = "published"
@@ -151,18 +145,14 @@ class AnalystReport(Base):
     __tablename__ = "analyst_reports"
 
     id                 = Column(Integer, primary_key=True, index=True)
-    user_id            = Column(String, nullable=False, index=True)          # author
-    title              = Column(String, nullable=False)
+    user_id            = Column(String, nullable=False, index=True)
     company_name       = Column(String, nullable=False, index=True)
     ticker             = Column(String, nullable=True, index=True)
-    description        = Column(Text, nullable=True)                         # analyst's one-liner
-    recommendation     = Column(SQLEnum(RecommendationType), nullable=True, index=True)
-    content_markdown   = Column(Text, nullable=True)                         # full report body
-    image_urls         = Column(JSON, default=list)                          # Cloudinary URLs
-    source_session_ids = Column(JSON, default=list)                          # chat sessions used
+    content_markdown   = Column(Text, nullable=True)
+    image_urls         = Column(JSON, default=list)
+    source_session_ids = Column(JSON, default=list)
     portfolio_id       = Column(Integer, ForeignKey("portfolios.id"), nullable=True)
     status             = Column(SQLEnum(ReportStatus), default="draft", index=True)
-    tags               = Column(JSON, default=list)
     created_at         = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at         = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -186,45 +186,33 @@ def clear_draft_items(user_id: str, db: Session = Depends(get_db_session)):
 
 class ReportCreate(BaseModel):
     user_id: str = Field(..., description="Author user ID")
-    title: str
     company_name: str
     ticker: Optional[str] = None
-    description: Optional[str] = None
-    recommendation: Optional[str] = Field(None, description="buy | sell | hold")
     content_markdown: Optional[str] = None
     image_urls: Optional[List[str]] = Field(default_factory=list)
     source_session_ids: Optional[List[str]] = Field(default_factory=list)
     portfolio_id: Optional[int] = None
-    tags: Optional[List[str]] = Field(default_factory=list)
 
 
 class ReportUpdate(BaseModel):
-    title: Optional[str] = None
     company_name: Optional[str] = None
     ticker: Optional[str] = None
-    description: Optional[str] = None
-    recommendation: Optional[str] = None
     content_markdown: Optional[str] = None
     image_urls: Optional[List[str]] = None
     source_session_ids: Optional[List[str]] = None
     portfolio_id: Optional[int] = None
-    tags: Optional[List[str]] = None
 
 
 class ReportResponse(BaseModel):
     id: int
     user_id: str
-    title: str
     company_name: str
     ticker: Optional[str]
-    description: Optional[str]
-    recommendation: Optional[str]
     content_markdown: Optional[str]
     image_urls: List[str]
     source_session_ids: List[str]
     portfolio_id: Optional[int]
     status: str
-    tags: List[str]
     created_at: str
     updated_at: str
 
@@ -233,17 +221,13 @@ class ReportResponse(BaseModel):
         return cls(
             id=r.id,
             user_id=r.user_id,
-            title=r.title,
             company_name=r.company_name,
             ticker=r.ticker,
-            description=r.description,
-            recommendation=r.recommendation.value if r.recommendation else None,
             content_markdown=r.content_markdown,
             image_urls=r.image_urls or [],
             source_session_ids=r.source_session_ids or [],
             portfolio_id=r.portfolio_id,
             status=r.status.value if r.status else "draft",
-            tags=r.tags or [],
             created_at=r.created_at.isoformat() if r.created_at else "",
             updated_at=r.updated_at.isoformat() if r.updated_at else "",
         )
@@ -260,18 +244,11 @@ class ReportListResponse(BaseModel):
 # Phase B — Analyst Report CRUD endpoints
 # ---------------------------------------------------------------------------
 
-_VALID_RECOMMENDATIONS = {"buy", "sell", "hold"}
-
-
 class ReportFromDraftRequest(BaseModel):
-    title: str
     company_name: str
     ticker: Optional[str] = None
-    description: Optional[str] = None
-    recommendation: Optional[str] = Field(None, description="buy | sell | hold")
-    source_session_ids: Optional[List[str]] = Field(default_factory=list)
     portfolio_id: Optional[int] = None
-    tags: Optional[List[str]] = Field(default_factory=list)
+    source_session_ids: Optional[List[str]] = Field(default_factory=list)
     clear_draft: bool = Field(True, description="Clear clipboard after creating the report")
 
 
@@ -282,30 +259,17 @@ def create_report_from_draft(
     db: Session = Depends(get_db_session),
 ):
     """
-    One-shot endpoint for the creation tab.
-
-    Reads all the user's staged clipboard items, assembles them into a report:
-    - text/summary items → joined as markdown sections (label becomes heading)
-    - image items → collected as image_urls
-
-    The clipboard is cleared afterwards (set clear_draft=false to keep it).
-    Returns the saved report with its ID — pass that to GET /reports/{id}/export/pdf.
+    One-shot endpoint for the creation tab. Reads all staged clipboard items,
+    assembles them into a report, and optionally clears the clipboard.
     """
-    if payload.recommendation and payload.recommendation not in _VALID_RECOMMENDATIONS:
-        raise HTTPException(status_code=400, detail=f"recommendation must be one of {_VALID_RECOMMENDATIONS}")
-
     try:
         report = report_svc.create_report_from_draft(
             db=db,
             user_id=user_id,
-            title=payload.title,
             company_name=payload.company_name,
             ticker=payload.ticker,
-            description=payload.description,
-            recommendation=payload.recommendation,
             source_session_ids=payload.source_session_ids,
             portfolio_id=payload.portfolio_id,
-            tags=payload.tags,
             clear_draft=payload.clear_draft,
         )
     except ValueError as e:
@@ -316,26 +280,16 @@ def create_report_from_draft(
 
 @router.post("", response_model=ReportResponse, status_code=201)
 def create_report(payload: ReportCreate, db: Session = Depends(get_db_session)):
-    """
-    Save an assembled analyst report. Pass content_markdown (built from clipboard items)
-    and image_urls (Cloudinary chart URLs). Status starts as 'draft'.
-    """
-    if payload.recommendation and payload.recommendation not in _VALID_RECOMMENDATIONS:
-        raise HTTPException(status_code=400, detail=f"recommendation must be one of {_VALID_RECOMMENDATIONS}")
-
+    """Save an assembled analyst report. Status starts as 'draft'."""
     report = report_svc.create_report(
         db=db,
         user_id=payload.user_id,
-        title=payload.title,
         company_name=payload.company_name,
         ticker=payload.ticker,
-        description=payload.description,
-        recommendation=payload.recommendation,
         content_markdown=payload.content_markdown,
         image_urls=payload.image_urls,
         source_session_ids=payload.source_session_ids,
         portfolio_id=payload.portfolio_id,
-        tags=payload.tags,
     )
     return ReportResponse.from_orm(report)
 
@@ -361,7 +315,6 @@ def list_user_reports(
     status: Optional[str] = Query(None, description="draft | published"),
     company: Optional[str] = None,
     ticker: Optional[str] = None,
-    recommendation: Optional[str] = None,
     portfolio_id: Optional[int] = None,
     from_date: Optional[datetime] = Query(None, description="ISO date — earliest created_at"),
     to_date: Optional[datetime] = Query(None, description="ISO date — latest created_at"),
@@ -372,7 +325,7 @@ def list_user_reports(
     """List an analyst's own reports with optional filters."""
     result = report_svc.list_reports(
         db=db, user_id=user_id, status=status,
-        company=company, ticker=ticker, recommendation=recommendation,
+        company=company, ticker=ticker,
         portfolio_id=portfolio_id, from_date=from_date, to_date=to_date,
         page=page, page_size=page_size,
     )
@@ -386,7 +339,6 @@ def list_user_reports(
 def list_published_reports(
     company: Optional[str] = None,
     ticker: Optional[str] = None,
-    recommendation: Optional[str] = None,
     author: Optional[str] = Query(None, description="Filter by author user_id"),
     portfolio_id: Optional[int] = None,
     from_date: Optional[datetime] = Query(None, description="ISO date — earliest created_at"),
@@ -395,12 +347,10 @@ def list_published_reports(
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db_session),
 ):
-    """
-    Fund Manager view — all published reports with optional filters.
-    """
+    """Fund Manager view — all published reports with optional filters."""
     result = report_svc.list_reports(
         db=db, user_id=author, status="published",
-        company=company, ticker=ticker, recommendation=recommendation,
+        company=company, ticker=ticker,
         portfolio_id=portfolio_id, from_date=from_date, to_date=to_date,
         page=page, page_size=page_size,
     )
@@ -416,7 +366,6 @@ def search_reports(
     status: Optional[str] = Query("published", description="draft | published"),
     company: Optional[str] = None,
     ticker: Optional[str] = None,
-    recommendation: Optional[str] = None,
     author: Optional[str] = None,
     from_date: Optional[datetime] = Query(None, description="ISO date — earliest created_at"),
     to_date: Optional[datetime] = Query(None, description="ISO date — latest created_at"),
@@ -424,14 +373,10 @@ def search_reports(
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db_session),
 ):
-    """
-    Full-text search across report title, company, description, and body.
-    Combine with company/ticker/recommendation/date filters for precision.
-    Powered by SQLite FTS5.
-    """
+    """Full-text search across report company and body. Powered by SQLite FTS5."""
     result = report_svc.search_reports(
         db=db, q=q, status=status, user_id=author,
-        company=company, ticker=ticker, recommendation=recommendation,
+        company=company, ticker=ticker,
         from_date=from_date, to_date=to_date,
         page=page, page_size=page_size,
     )
@@ -458,9 +403,6 @@ def update_report(
     db: Session = Depends(get_db_session),
 ):
     """Update a report's content or metadata. Only the author can edit."""
-    if payload.recommendation and payload.recommendation not in _VALID_RECOMMENDATIONS:
-        raise HTTPException(status_code=400, detail=f"recommendation must be one of {_VALID_RECOMMENDATIONS}")
-
     report = report_svc.update_report(
         db=db, report_id=report_id, user_id=user_id,
         patch=payload.model_dump(exclude_none=True),
@@ -539,29 +481,14 @@ def export_report_pdf(report_id: int, db: Session = Depends(get_db_session)):
     w = pdf.epw  # effective page width (page width minus margins)
 
     # --- Header ---
+    company_line = _safe(report.company_name + (f"  ({report.ticker})" if report.ticker else ""))
     pdf.set_font("Helvetica", "B", 20)
-    pdf.multi_cell(w, 10, _safe(report.title), align="C")
+    pdf.multi_cell(w, 10, company_line, align="C")
     pdf.ln(2)
 
-    rec = report.recommendation.value.upper() if report.recommendation else "N/A"
-    pdf.set_font("Helvetica", "B", 13)
-    if rec == "BUY":
-        pdf.set_text_color(0, 128, 0)
-    elif rec == "SELL":
-        pdf.set_text_color(200, 0, 0)
-    else:
-        pdf.set_text_color(100, 100, 100)
-    pdf.cell(w, 8, f"Recommendation: {rec}", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_text_color(0, 0, 0)
-
     pdf.set_font("Helvetica", "", 10)
-    company_line = _safe(report.company_name + (f"  ({report.ticker})" if report.ticker else ""))
-    pdf.cell(w, 6, f"Company: {company_line}", new_x="LMARGIN", new_y="NEXT")
     pdf.cell(w, 6, f"Author: {_safe(report.user_id)}", new_x="LMARGIN", new_y="NEXT")
     pdf.cell(w, 6, f"Date: {report.created_at.strftime('%Y-%m-%d') if report.created_at else ''}", new_x="LMARGIN", new_y="NEXT")
-    if report.description:
-        pdf.set_font("Helvetica", "I", 10)
-        pdf.multi_cell(w, 6, _safe(report.description))
     pdf.ln(4)
 
     # Divider
