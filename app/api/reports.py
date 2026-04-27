@@ -70,7 +70,7 @@ class DraftItemResponse(BaseModel):
             session_id=obj.session_id,
             label=obj.label,
             sort_order=obj.sort_order or 0,
-            created_at=obj.created_at.isoformat() if obj.created_at else "",
+            created_at=obj.created_at.isoformat() + "Z" if obj.created_at else "",
         )
 
 
@@ -228,8 +228,8 @@ class ReportResponse(BaseModel):
             source_session_ids=r.source_session_ids or [],
             portfolio_id=r.portfolio_id,
             status=r.status.value if r.status else "draft",
-            created_at=r.created_at.isoformat() if r.created_at else "",
-            updated_at=r.updated_at.isoformat() if r.updated_at else "",
+            created_at=r.created_at.isoformat() + "Z" if r.created_at else "",
+            updated_at=r.updated_at.isoformat() + "Z" if r.updated_at else "",
         )
 
 

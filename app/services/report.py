@@ -389,8 +389,8 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
             "company_name": r.company_name,
             "ticker": r.ticker,
             "author": r.user_id,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
+            "updated_at": (r.updated_at.isoformat() + "Z") if r.updated_at else None,
         }
 
     return {
