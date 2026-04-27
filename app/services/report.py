@@ -368,8 +368,14 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
             .all()
     ]
 
+    # Top 5 most recently published (all time)
+    recent_published = (
+        base.order_by(AnalystReport.created_at.desc()).limit(5).all()
+    )
+
+    # Reports updated within the last 24 hours
     cutoff = datetime.utcnow() - timedelta(hours=24)
-    recent = (
+    recently_updated = (
         base
         .filter(AnalystReport.updated_at >= cutoff)
         .order_by(AnalystReport.updated_at.desc())
@@ -377,19 +383,20 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
         .all()
     )
 
+    def _report_dict(r):
+        return {
+            "id": r.id,
+            "company_name": r.company_name,
+            "ticker": r.ticker,
+            "author": r.user_id,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        }
+
     return {
         "total_published": total,
         "top_companies": top_companies,
         "top_analysts": top_analysts,
-        "recent_reports": [
-            {
-                "id": r.id,
-                "company_name": r.company_name,
-                "ticker": r.ticker,
-                "author": r.user_id,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-            }
-            for r in recent
-        ],
+        "recent_reports": [_report_dict(r) for r in recent_published],
+        "recently_updated": [_report_dict(r) for r in recently_updated],
     }
