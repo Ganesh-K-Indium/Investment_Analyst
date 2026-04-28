@@ -446,7 +446,7 @@ def delete_report(report_id: int, user_id: str, db: Session = Depends(get_db_ses
 # ---------------------------------------------------------------------------
 
 @router.get("/{report_id}/export/pdf")
-def export_report_pdf(report_id: int, db: Session = Depends(get_db_session)):
+def export_report_pdf(report_id: int, inline: bool = False, db: Session = Depends(get_db_session)):
     """
     Export a report as a downloadable PDF.
     Renders metadata header + markdown body + embedded chart images.
@@ -691,12 +691,13 @@ def export_report_pdf(report_id: int, db: Session = Depends(get_db_session)):
     # --- Output ---
     pdf_bytes = pdf.output()
     filename = f"report_{report_id}_{report.company_name.replace(' ', '_')}.pdf"
+    disposition = f'inline; filename="{filename}"' if inline else f'attachment; filename="{filename}"'
 
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": disposition,
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
             "Expires": "0",
