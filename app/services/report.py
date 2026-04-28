@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
-from app.database.models import ReportDraftItem, AnalystReport, ReportStatus
+from app.database.models import ReportDraftItem, AnalystReport, ReportStatus, User
 
 _VALID_ITEM_TYPES = {"text", "image", "summary"}
 _VALID_SOURCES = {"rag", "quant", "summary", None}
@@ -342,6 +342,16 @@ def search_reports(
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
+def resolve_author_name(db: Session, user_id: str) -> str:
+    try:
+        user = db.query(User).filter(User.id == int(user_id)).first()
+    except (ValueError, TypeError):
+        user = db.query(User).filter(User.username == user_id).first()
+    if user:
+        return (user.full_name or '').strip() or user.username
+    return user_id
+
+
 def get_repository_stats(db: Session) -> Dict[str, Any]:
     """Aggregate stats for the Fund Manager dashboard — published reports only."""
     base = db.query(AnalystReport).filter(AnalystReport.status == ReportStatus.PUBLISHED)
@@ -368,17 +378,12 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
             .all()
     ]
 
-    # Top 5 most recently published (all time)
+    # Published in the last 2 days
+    two_days_ago = datetime.utcnow() - timedelta(days=2)
     recent_published = (
-        base.order_by(AnalystReport.created_at.desc()).limit(5).all()
-    )
-
-    # Reports updated within the last 24 hours
-    cutoff = datetime.utcnow() - timedelta(hours=24)
-    recently_updated = (
         base
-        .filter(AnalystReport.updated_at >= cutoff)
-        .order_by(AnalystReport.updated_at.desc())
+        .filter(AnalystReport.created_at >= two_days_ago)
+        .order_by(AnalystReport.created_at.desc())
         .limit(10)
         .all()
     )
@@ -388,7 +393,7 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
             "id": r.id,
             "company_name": r.company_name,
             "ticker": r.ticker,
-            "author": r.user_id,
+            "author": resolve_author_name(db, r.user_id),
             "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
             "updated_at": (r.updated_at.isoformat() + "Z") if r.updated_at else None,
         }
@@ -398,5 +403,4 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
         "top_companies": top_companies,
         "top_analysts": top_analysts,
         "recent_reports": [_report_dict(r) for r in recent_published],
-        "recently_updated": [_report_dict(r) for r in recently_updated],
     }

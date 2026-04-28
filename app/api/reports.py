@@ -206,6 +206,7 @@ class ReportUpdate(BaseModel):
 class ReportResponse(BaseModel):
     id: int
     user_id: str
+    author_name: str
     company_name: str
     ticker: Optional[str]
     content_markdown: Optional[str]
@@ -217,10 +218,11 @@ class ReportResponse(BaseModel):
     updated_at: str
 
     @classmethod
-    def from_orm(cls, r: AnalystReport):
+    def from_orm(cls, r: AnalystReport, db: Session = None):
         return cls(
             id=r.id,
             user_id=r.user_id,
+            author_name=report_svc.resolve_author_name(db, r.user_id) if db else r.user_id,
             company_name=r.company_name,
             ticker=r.ticker,
             content_markdown=r.content_markdown,
@@ -275,7 +277,7 @@ def create_report_from_draft(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    return ReportResponse.from_orm(report)
+    return ReportResponse.from_orm(report, db)
 
 
 @router.post("", response_model=ReportResponse, status_code=201)
@@ -291,7 +293,7 @@ def create_report(payload: ReportCreate, db: Session = Depends(get_db_session)):
         source_session_ids=payload.source_session_ids,
         portfolio_id=payload.portfolio_id,
     )
-    return ReportResponse.from_orm(report)
+    return ReportResponse.from_orm(report, db)
 
 
 @router.get("/repository/stats")
@@ -331,7 +333,7 @@ def list_user_reports(
     )
     return ReportListResponse(
         total=result["total"], page=result["page"], page_size=result["page_size"],
-        items=[ReportResponse.from_orm(r) for r in result["items"]],
+        items=[ReportResponse.from_orm(r, db) for r in result["items"]],
     )
 
 
@@ -356,7 +358,7 @@ def list_published_reports(
     )
     return ReportListResponse(
         total=result["total"], page=result["page"], page_size=result["page_size"],
-        items=[ReportResponse.from_orm(r) for r in result["items"]],
+        items=[ReportResponse.from_orm(r, db) for r in result["items"]],
     )
 
 
@@ -382,7 +384,7 @@ def search_reports(
     )
     return ReportListResponse(
         total=result["total"], page=result["page"], page_size=result["page_size"],
-        items=[ReportResponse.from_orm(r) for r in result["items"]],
+        items=[ReportResponse.from_orm(r, db) for r in result["items"]],
     )
 
 
@@ -392,7 +394,7 @@ def get_report(report_id: int, db: Session = Depends(get_db_session)):
     report = report_svc.get_report(db, report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
-    return ReportResponse.from_orm(report)
+    return ReportResponse.from_orm(report, db)
 
 
 @router.put("/{report_id}", response_model=ReportResponse)
@@ -409,7 +411,7 @@ def update_report(
     )
     if not report:
         raise HTTPException(status_code=404, detail="Report not found or not owned by user")
-    return ReportResponse.from_orm(report)
+    return ReportResponse.from_orm(report, db)
 
 
 @router.post("/{report_id}/publish", response_model=ReportResponse)
@@ -418,7 +420,7 @@ def publish_report(report_id: int, user_id: str, db: Session = Depends(get_db_se
     report = report_svc.publish_report(db, report_id, user_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found or not owned by user")
-    return ReportResponse.from_orm(report)
+    return ReportResponse.from_orm(report, db)
 
 
 @router.post("/{report_id}/unpublish", response_model=ReportResponse)
@@ -427,7 +429,7 @@ def unpublish_report(report_id: int, user_id: str, db: Session = Depends(get_db_
     report = report_svc.unpublish_report(db, report_id, user_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found or not owned by user")
-    return ReportResponse.from_orm(report)
+    return ReportResponse.from_orm(report, db)
 
 
 @router.delete("/{report_id}", status_code=200)
