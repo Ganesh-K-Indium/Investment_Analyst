@@ -27,7 +27,8 @@ from app.services.stock_agent import initialize_stock_agents, cleanup_stock_agen
 app = FastAPI(
     title="Investment Analyst API",
     description="Unified AI-powered investment analysis platform with document Q&A, stock market analysis, portfolio management, and data integrations",
-    version="2.1.0"
+    version="2.1.0",
+    redirect_slashes=False,
 )
 
 # CORS configuration
