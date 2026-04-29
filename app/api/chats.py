@@ -2,13 +2,13 @@
 Chat History API endpoints
 Manages chat sessions, history retrieval, export, and clearing across all agents
 """
-from fastapi import APIRouter, HTTPException, Depends, Response,Query
+from fastapi import APIRouter, HTTPException, Depends, Response, Query, status
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from app.database.connection import get_db_session
 from app.services.chat import ChatService
-from app.database.models import AgentType, ChatSession, ChatMessage
+from app.database.models import AgentType, ChatSession, ChatMessage, ConsolidatedSummary
 from datetime import datetime
 import json
 
@@ -230,6 +230,43 @@ def get_user_summaries(
         return SummariesByAgentResponse(**summaries)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/session/{session_id}/summary", status_code=status.HTTP_200_OK)
+def delete_session_summary(
+    session_id: str,
+    db: Session = Depends(get_db_session)
+):
+    """Clear the summary from a single session or delete a consolidated summary row."""
+    if session_id.startswith("consolidated-"):
+        row_id = int(session_id.split("-", 1)[1])
+        row = db.query(ConsolidatedSummary).filter(ConsolidatedSummary.id == row_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Consolidated summary not found")
+        db.delete(row)
+    else:
+        session = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        session.summary = None
+        session.summary_updated_at = None
+    db.commit()
+    return {"message": "Summary deleted"}
+
+
+@router.delete("/user/{user_id}/summaries", status_code=status.HTTP_200_OK)
+def clear_all_user_summaries(
+    user_id: str,
+    db: Session = Depends(get_db_session)
+):
+    """Clear all summaries for a user — nullifies ChatSession summaries and deletes consolidated rows."""
+    db.query(ChatSession).filter(
+        ChatSession.user_id == user_id,
+        ChatSession.summary.isnot(None)
+    ).update({"summary": None, "summary_updated_at": None})
+    db.query(ConsolidatedSummary).filter(ConsolidatedSummary.user_id == user_id).delete()
+    db.commit()
+    return {"message": "All summaries cleared"}
 
 
 @router.post("/session")
