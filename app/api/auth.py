@@ -153,6 +153,16 @@ def get_me(current_user: User = Depends(get_current_user)):
     )
 
 
+@router.post("/logout", status_code=status.HTTP_200_OK)
+def logout(current_user: User = Depends(get_current_user)):
+    """
+    Invalidate the current session.
+    JWT is stateless so the client must discard its tokens.
+    This endpoint confirms the token was valid at logout time.
+    """
+    return {"message": "Logged out successfully"}
+
+
 @router.put("/me", response_model=UserResponse)
 def update_me(
     payload: UpdateProfileRequest,
