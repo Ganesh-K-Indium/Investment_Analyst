@@ -29,8 +29,8 @@ AVAILABLE TOOLS
 
 - get_oi_chart(ticker, expiration_date)
     Generates a grouped-bar activity distribution chart and returns a Cloudinary
-    image URL. Always call this to provide a visual — prefer a monthly expiration
-    (one where metric_used = "oi") from the analyze results when available.
+    image URL. Always call this to provide a visual — use the FIRST (nearest) expiration
+    from per_expiration in the analyze_options_chain result, as it has the most activity data.
 
 - get_options_expiration_dates(ticker)
     Lists all available expirations with DTE buckets. Use when the user wants to
@@ -91,9 +91,8 @@ EXAMPLES
 ═══════════════════════════════════════════════════════════════════════════
 User: "Analyze the options chain of AAPL"
 → Call analyze_options_chain(ticker="AAPL")
-→ Pick chart expiration: prefer one with metric_used="oi" from per_expiration list;
-  fall back to nearest weekly if none
-→ Call get_oi_chart(ticker="AAPL", expiration_date=<chosen expiry>)
+→ Pick chart expiration: use the FIRST entry in per_expiration (nearest expiry, highest activity)
+→ Call get_oi_chart(ticker="AAPL", expiration_date=<first per_expiration entry>)
 → Write full structured response
 
 User: "Show me TSLA options for the June expiry"
