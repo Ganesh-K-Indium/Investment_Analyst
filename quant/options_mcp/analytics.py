@@ -1,6 +1,11 @@
 """
 Options chain analytics engine — pure deterministic Python, no LLM calls.
-All pattern detection, OI clustering, and signal generation is rule-based.
+
+Metric strategy (per expiration):
+  OI > 0  → use openInterest  (multi-day positional buildup)
+  OI = 0  → use volume        (today's intraday flow)
+Yahoo Finance only populates OI after end-of-day settlement; it is reliably
+non-zero only for monthly expirations that have been active 1+ days.
 """
 import traceback
 from datetime import datetime, timezone
@@ -12,150 +17,139 @@ import yfinance as yf
 
 
 class OptionsAnalytics:
-    """
-    Deterministic analytics engine for options chain data.
-    Produces structured JSON consumed by the LLM for natural-language narration.
-    """
 
-    UNUSUAL_VOLUME_OI_RATIO = 3.0
-    UNUSUAL_MIN_VOLUME = 500
+    UNUSUAL_VOLUME_OI_RATIO   = 3.0     # vol/OI threshold in OI mode
+    UNUSUAL_MIN_VOLUME        = 500     # absolute floor for unusual activity
+    UNUSUAL_VOL_PERCENTILE    = 90      # percentile threshold in volume mode
     SMART_MONEY_DTE_THRESHOLD = 90
-    SMART_MONEY_OI_PERCENTILE = 95
-    SMART_MONEY_MIN_ABS_OI = 1000
-    BULLISH_PC_THRESHOLD = 0.7
-    BEARISH_PC_THRESHOLD = 1.3
-    TOP_N_STRIKES = 5
-    # Price window for chart / strike filtering (±15% of current price)
-    PRICE_WINDOW_PCT = 0.15
-    # Expirations to pull: nearest N near-term + M long-dated
-    MAX_NEAR_TERM = 4
-    MAX_LONG_DATED = 1
+    SMART_MONEY_MIN_ABS_OI    = 500
+    BULLISH_PC_THRESHOLD      = 0.7
+    BEARISH_PC_THRESHOLD      = 1.3
+    TOP_N_STRIKES             = 5
+    PRICE_WINDOW_PCT          = 0.20    # ±20% window for chart / level derivation
+    MAX_NEAR_TERM             = 4       # near-term expirations to include
+    MAX_LONG_DATED            = 2       # monthly expirations (DTE>90) to include
+
+    # ── Public API ──────────────────────────────────────────────────────────
 
     def analyze(self, ticker_symbol: str, expiration_date: Optional[str] = None) -> dict:
-        """
-        Run the full options analytics pipeline for a ticker.
-
-        Returns a structured dict ready for LLM narration — never exposes raw
-        option chain DataFrames.
-        """
         errors = []
         ticker_symbol = ticker_symbol.upper().strip()
 
         try:
             tk = yf.Ticker(ticker_symbol)
         except Exception as e:
-            return {"error": f"Cannot create ticker object for {ticker_symbol}: {e}"}
+            return {"error": f"Cannot create ticker for {ticker_symbol}: {e}"}
 
-        # ── Current price ────────────────────────────────────────────────────
         current_price = self._get_current_price(tk, errors)
 
-        # ── Available expirations ────────────────────────────────────────────
         try:
             all_expirations = list(tk.options)
         except Exception as e:
-            return {"error": f"No options data available for {ticker_symbol}: {e}"}
+            return {"error": f"No options data for {ticker_symbol}: {e}"}
 
         if not all_expirations:
             return {"error": f"No options expirations found for {ticker_symbol}"}
 
         today = datetime.now(timezone.utc).date()
 
-        # ── Select expirations to analyze ────────────────────────────────────
         if expiration_date:
             if expiration_date not in all_expirations:
                 return {
                     "error": f"Expiration '{expiration_date}' not available.",
-                    "available_expirations": all_expirations[:8],
+                    "available_expirations": all_expirations[:10],
                 }
             expirations_to_analyze = [expiration_date]
         else:
             expirations_to_analyze = self._select_expirations(all_expirations, today)
 
-        # ── Fetch chains ─────────────────────────────────────────────────────
-        all_calls, all_puts, per_exp_results, near_term_oi_pool = (
-            self._fetch_chains(tk, expirations_to_analyze, today, errors)
+        all_calls, all_puts, per_exp_results = self._fetch_chains(
+            tk, expirations_to_analyze, today, errors
         )
 
         if not all_calls:
-            return {
-                "error": "Failed to fetch any option chain data.",
-                "details": errors,
-            }
+            return {"error": "Failed to fetch any option chain data.", "details": errors}
 
         calls_df = pd.concat(all_calls, ignore_index=True)
-        puts_df = pd.concat(all_puts, ignore_index=True)
+        puts_df  = pd.concat(all_puts,  ignore_index=True)
 
-        # ── Aggregate metrics ────────────────────────────────────────────────
-        total_call_oi = int(calls_df["openInterest"].sum())
-        total_put_oi = int(puts_df["openInterest"].sum())
-        agg_pc_ratio = (
-            round(total_put_oi / total_call_oi, 4) if total_call_oi > 0 else None
-        )
+        # Aggregate put/call ratio — prefer OI when any expiration has it
+        total_call_oi  = int(calls_df["openInterest"].sum())
+        total_put_oi   = int(puts_df["openInterest"].sum())
+        total_call_vol = int(calls_df["volume"].sum())
+        total_put_vol  = int(puts_df["volume"].sum())
+
+        if total_call_oi > 0:
+            agg_metric     = "oi"
+            agg_call_act   = total_call_oi
+            agg_put_act    = total_put_oi
+            agg_pc_ratio   = round(total_put_oi / total_call_oi, 4)
+        elif total_call_vol > 0:
+            agg_metric     = "volume"
+            agg_call_act   = total_call_vol
+            agg_put_act    = total_put_vol
+            agg_pc_ratio   = round(total_put_vol / total_call_vol, 4)
+        else:
+            agg_metric     = "none"
+            agg_call_act   = 0
+            agg_put_act    = 0
+            agg_pc_ratio   = None
+
         sentiment = self._classify_sentiment(agg_pc_ratio)
 
-        # ── OI concentration zones ───────────────────────────────────────────
-        bullish_zones = self._top_oi_strikes(calls_df, "call", total_call_oi)
-        bearish_zones = self._top_oi_strikes(puts_df, "put", total_put_oi)
+        # Add activity column to each df for downstream functions
+        calls_df = self._add_activity_col(calls_df)
+        puts_df  = self._add_activity_col(puts_df)
 
-        # ── Support / resistance from OI ─────────────────────────────────────
-        support_levels, resistance_levels = self._derive_levels(
-            calls_df, puts_df, current_price
-        )
+        total_call_activity = int(calls_df["activity"].sum())
+        total_put_activity  = int(puts_df["activity"].sum())
+        bullish_zones    = self._top_activity_strikes(calls_df, "call", total_call_activity)
+        bearish_zones    = self._top_activity_strikes(puts_df,  "put",  total_put_activity)
+        support_levels, resistance_levels = self._derive_levels(calls_df, puts_df, current_price)
 
-        # ── Max pain per expiration ──────────────────────────────────────────
         max_pain_list = [
             {"expiration": r["expiration"], "strike": r["max_pain_strike"]}
             for r in per_exp_results
             if r["max_pain_strike"] is not None
         ]
 
-        # ── Smart money (long-dated OI) ───────────────────────────────────────
-        smart_money = self._scan_smart_money(
-            calls_df, puts_df, expirations_to_analyze, today, near_term_oi_pool
-        )
-
-        # ── Unusual activity ─────────────────────────────────────────────────
-        unusual = self._detect_unusual_activity(calls_df, puts_df)
+        smart_money = self._scan_smart_money(calls_df, puts_df, expirations_to_analyze, today)
+        unusual     = self._detect_unusual_activity(calls_df, puts_df, per_exp_results)
 
         return {
-            "ticker": ticker_symbol,
-            "current_price": (
-                round(float(current_price), 2) if current_price is not None else None
-            ),
+            "ticker":           ticker_symbol,
+            "current_price":    round(float(current_price), 2) if current_price else None,
             "analysis_timestamp": datetime.now(timezone.utc).isoformat(),
             "expirations_analyzed": expirations_to_analyze,
             "all_available_expirations": all_expirations,
-            "per_expiration": per_exp_results,
+            "per_expiration":   per_exp_results,
             "aggregate": {
+                "metric_used":   agg_metric,
                 "put_call_ratio": agg_pc_ratio,
-                "sentiment": sentiment,
-                "total_call_oi": total_call_oi,
-                "total_put_oi": total_put_oi,
+                "sentiment":     sentiment,
+                "call_activity": agg_call_act,
+                "put_activity":  agg_put_act,
                 "sentiment_thresholds": {
                     "bullish_below": self.BULLISH_PC_THRESHOLD,
                     "bearish_above": self.BEARISH_PC_THRESHOLD,
                 },
             },
-            "concentration_zones": {
-                "bullish": bullish_zones,
-                "bearish": bearish_zones,
-            },
-            "support_levels": support_levels,
+            "concentration_zones": {"bullish": bullish_zones, "bearish": bearish_zones},
+            "support_levels":    support_levels,
             "resistance_levels": resistance_levels,
-            "max_pain": max_pain_list,
-            "smart_money": smart_money,
-            "unusual_activity": unusual,
+            "max_pain":          max_pain_list,
+            "smart_money":       smart_money,
+            "unusual_activity":  unusual,
             "data_quality": {
-                "expirations_requested": len(expirations_to_analyze),
-                "expirations_with_data": len(per_exp_results),
+                "expirations_requested":   len(expirations_to_analyze),
+                "expirations_with_data":   len(per_exp_results),
+                "expirations_oi_mode":     sum(1 for r in per_exp_results if r["metric_used"] == "oi"),
+                "expirations_volume_mode": sum(1 for r in per_exp_results if r["metric_used"] == "volume"),
                 "errors": errors,
             },
         }
 
-    # ── Expiration date helpers ──────────────────────────────────────────────
-
     def get_expiration_dates_with_dte(self, ticker_symbol: str) -> dict:
-        """Return all expiration dates bucketed by DTE (days to expiration)."""
         try:
             tk = yf.Ticker(ticker_symbol.upper().strip())
             expirations = tk.options
@@ -174,77 +168,75 @@ class OptionsAnalytics:
                     long_dated.append(entry)
 
             return {
-                "ticker": ticker_symbol.upper(),
+                "ticker":            ticker_symbol.upper(),
                 "total_expirations": len(expirations),
-                "near_term_le30": near_term,
-                "mid_term_31_90": mid_term,
-                "long_dated_gt90": long_dated,
-                "all_expirations": list(expirations),
+                "near_term_le30":    near_term,
+                "mid_term_31_90":    mid_term,
+                "long_dated_gt90":   long_dated,
+                "all_expirations":   list(expirations),
             }
         except Exception as e:
             return {"error": str(e), "traceback": traceback.format_exc()}
 
     def get_chain_for_chart(
-        self, ticker_symbol: str, expiration_date: str, current_price: Optional[float] = None
+        self,
+        ticker_symbol: str,
+        expiration_date: str,
+        current_price: Optional[float] = None,
     ) -> dict:
         """
-        Return calls/puts OI by strike for the visualization layer.
-        Filtered to price ± PRICE_WINDOW_PCT to keep charts readable.
+        Return per-strike activity data for the visualization layer.
+        Uses OI when populated, volume otherwise.
+        Filtered to current_price ± PRICE_WINDOW_PCT for chart readability.
         """
         try:
-            tk = yf.Ticker(ticker_symbol.upper().strip())
+            tk    = yf.Ticker(ticker_symbol.upper().strip())
             chain = tk.option_chain(expiration_date)
             calls = chain.calls.copy()
-            puts = chain.puts.copy()
+            puts  = chain.puts.copy()
 
             for df in [calls, puts]:
-                df["openInterest"] = (
-                    pd.to_numeric(df.get("openInterest", 0), errors="coerce").fillna(0)
-                )
-                df["strike"] = pd.to_numeric(df.get("strike", 0), errors="coerce").fillna(0)
+                df["openInterest"] = pd.to_numeric(df.get("openInterest", 0), errors="coerce").fillna(0)
+                df["volume"]       = pd.to_numeric(df.get("volume",       0), errors="coerce").fillna(0)
+                df["strike"]       = pd.to_numeric(df.get("strike",       0), errors="coerce").fillna(0)
 
             if current_price is None:
-                info = tk.info
-                current_price = (
-                    info.get("currentPrice")
-                    or info.get("regularMarketPrice")
-                    or info.get("ask")
-                )
+                current_price = self._get_current_price(tk, [])
 
+            # Determine metric for this expiration
+            total_oi = calls["openInterest"].sum() + puts["openInterest"].sum()
+            metric_used = "oi" if total_oi > 0 else "volume"
+            act_col = "openInterest" if metric_used == "oi" else "volume"
+
+            # Filter to price window
             if current_price:
                 lo = current_price * (1 - self.PRICE_WINDOW_PCT)
                 hi = current_price * (1 + self.PRICE_WINDOW_PCT)
                 calls = calls[(calls["strike"] >= lo) & (calls["strike"] <= hi)]
-                puts = puts[(puts["strike"] >= lo) & (puts["strike"] <= hi)]
+                puts  = puts[ (puts["strike"]  >= lo) & (puts["strike"]  <= hi)]
 
-            # Merge on strike for chart
-            call_oi = calls[["strike", "openInterest"]].rename(
-                columns={"openInterest": "call_oi"}
-            )
-            put_oi = puts[["strike", "openInterest"]].rename(
-                columns={"openInterest": "put_oi"}
-            )
-            merged = pd.merge(call_oi, put_oi, on="strike", how="outer").fillna(0)
-            merged = merged.sort_values("strike")
+            call_act = calls[["strike", act_col]].rename(columns={act_col: "call_activity"})
+            put_act  = puts[ ["strike", act_col]].rename(columns={act_col: "put_activity"})
+            merged   = pd.merge(call_act, put_act, on="strike", how="outer").fillna(0)
+            merged   = merged.sort_values("strike")
 
-            # Max pain for this expiration
-            max_pain = self._calculate_max_pain(calls, puts)
+            total_call = merged["call_activity"].sum()
+            total_put  = merged["put_activity"].sum()
+            pc_ratio   = round(total_put / total_call, 4) if total_call > 0 else None
+
+            # Max pain only meaningful in OI mode
+            max_pain = self._calculate_max_pain(calls, puts) if metric_used == "oi" else None
 
             return {
-                "ticker": ticker_symbol.upper(),
-                "expiration": expiration_date,
-                "current_price": (
-                    round(float(current_price), 2) if current_price else None
-                ),
-                "max_pain": max_pain,
-                "strikes": merged["strike"].tolist(),
-                "call_oi": merged["call_oi"].astype(int).tolist(),
-                "put_oi": merged["put_oi"].astype(int).tolist(),
-                "put_call_ratio": (
-                    round(float(merged["put_oi"].sum()) / float(merged["call_oi"].sum()), 4)
-                    if merged["call_oi"].sum() > 0
-                    else None
-                ),
+                "ticker":         ticker_symbol.upper(),
+                "expiration":     expiration_date,
+                "metric_used":    metric_used,
+                "current_price":  round(float(current_price), 2) if current_price else None,
+                "max_pain":       max_pain,
+                "strikes":        merged["strike"].tolist(),
+                "call_activity":  merged["call_activity"].astype(int).tolist(),
+                "put_activity":   merged["put_activity"].astype(int).tolist(),
+                "put_call_ratio": pc_ratio,
             }
         except Exception as e:
             return {"error": str(e), "traceback": traceback.format_exc()}
@@ -253,90 +245,73 @@ class OptionsAnalytics:
 
     def _get_current_price(self, tk: yf.Ticker, errors: list) -> Optional[float]:
         try:
-            info = tk.info
-            price = (
-                info.get("currentPrice")
-                or info.get("regularMarketPrice")
-                or info.get("ask")
-            )
-            if price is not None:
+            info  = tk.info
+            price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("ask")
+            if price:
                 return float(price)
             hist = tk.history(period="1d")
             if not hist.empty:
                 return float(hist["Close"].iloc[-1])
         except Exception as e:
-            errors.append(f"Price fetch error: {e}")
+            errors.append(f"Price fetch: {e}")
         return None
 
     def _select_expirations(self, all_expirations: list, today) -> list:
         exp_with_dte = []
         for exp in all_expirations:
             try:
-                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-                dte = (exp_date - today).days
+                dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
                 if dte > 0:
                     exp_with_dte.append((exp, dte))
             except Exception:
                 pass
 
-        near_term = [e for e, d in exp_with_dte if d <= self.SMART_MONEY_DTE_THRESHOLD][
-            : self.MAX_NEAR_TERM
-        ]
-        long_dated = [e for e, d in exp_with_dte if d > self.SMART_MONEY_DTE_THRESHOLD][
-            : self.MAX_LONG_DATED
-        ]
+        near_term  = [e for e, d in exp_with_dte if d <= self.SMART_MONEY_DTE_THRESHOLD][: self.MAX_NEAR_TERM]
+        long_dated = [e for e, d in exp_with_dte if d > self.SMART_MONEY_DTE_THRESHOLD][: self.MAX_LONG_DATED]
         result = near_term + long_dated
-        return result if result else [all_expirations[0]]
+        return result or [all_expirations[0]]
 
-    def _fetch_chains(
-        self, tk: yf.Ticker, expirations: list, today, errors: list
-    ):
-        all_calls, all_puts, per_exp_results, near_term_oi_pool = [], [], [], []
+    def _fetch_chains(self, tk: yf.Ticker, expirations: list, today, errors: list):
+        all_calls, all_puts, per_exp_results = [], [], []
 
         for exp in expirations:
             try:
                 chain = tk.option_chain(exp)
                 calls = chain.calls.copy()
-                puts = chain.puts.copy()
+                puts  = chain.puts.copy()
 
                 for df in [calls, puts]:
-                    df["openInterest"] = (
-                        pd.to_numeric(df.get("openInterest", 0), errors="coerce").fillna(0)
-                    )
-                    df["volume"] = (
-                        pd.to_numeric(df.get("volume", 0), errors="coerce").fillna(0)
-                    )
-                    df["strike"] = (
-                        pd.to_numeric(df.get("strike", 0), errors="coerce").fillna(0)
-                    )
-                    df["impliedVolatility"] = (
-                        pd.to_numeric(
-                            df.get("impliedVolatility", 0), errors="coerce"
-                        ).fillna(0)
-                    )
+                    df["openInterest"]    = pd.to_numeric(df.get("openInterest",    0), errors="coerce").fillna(0)
+                    df["volume"]          = pd.to_numeric(df.get("volume",          0), errors="coerce").fillna(0)
+                    df["strike"]          = pd.to_numeric(df.get("strike",          0), errors="coerce").fillna(0)
+                    df["impliedVolatility"] = pd.to_numeric(df.get("impliedVolatility", 0), errors="coerce").fillna(0)
 
                 calls["expiration"] = exp
-                puts["expiration"] = exp
+                puts["expiration"]  = exp
 
-                call_oi = int(calls["openInterest"].sum())
-                put_oi = int(puts["openInterest"].sum())
-                pc = round(put_oi / call_oi, 4) if call_oi > 0 else None
-                max_pain_strike = self._calculate_max_pain(calls, puts)
+                # Decide metric for this expiration
+                total_oi = int(calls["openInterest"].sum() + puts["openInterest"].sum())
+                metric_used = "oi" if total_oi > 0 else "volume"
+                act_col = "openInterest" if metric_used == "oi" else "volume"
 
-                per_exp_results.append(
-                    {
-                        "expiration": exp,
-                        "call_oi": call_oi,
-                        "put_oi": put_oi,
-                        "put_call_ratio": pc,
-                        "max_pain_strike": max_pain_strike,
-                    }
-                )
+                call_act = int(calls[act_col].sum())
+                put_act  = int(puts[act_col].sum())
+                pc       = round(put_act / call_act, 4) if call_act > 0 else None
 
-                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-                if (exp_date - today).days <= self.SMART_MONEY_DTE_THRESHOLD:
-                    near_term_oi_pool.extend(calls["openInterest"].tolist())
-                    near_term_oi_pool.extend(puts["openInterest"].tolist())
+                # Max pain only in OI mode
+                max_pain_strike = self._calculate_max_pain(calls, puts) if metric_used == "oi" else None
+
+                dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+
+                per_exp_results.append({
+                    "expiration":      exp,
+                    "dte":             dte,
+                    "metric_used":     metric_used,
+                    "call_activity":   call_act,
+                    "put_activity":    put_act,
+                    "put_call_ratio":  pc,
+                    "max_pain_strike": max_pain_strike,
+                })
 
                 all_calls.append(calls)
                 all_puts.append(puts)
@@ -344,27 +319,29 @@ class OptionsAnalytics:
             except Exception as e:
                 errors.append(f"Expiration {exp}: {e}")
 
-        return all_calls, all_puts, per_exp_results, near_term_oi_pool
+        return all_calls, all_puts, per_exp_results
 
-    def _calculate_max_pain(
-        self, calls: pd.DataFrame, puts: pd.DataFrame
-    ) -> Optional[float]:
-        """Strike that minimises total dollar loss to option buyers at expiry."""
+    def _add_activity_col(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add an 'activity' column: openInterest where available, volume otherwise.
+        Applied per-row so mixed expirations within the same DataFrame are handled correctly.
+        """
+        df = df.copy()
+        df["activity"] = df.apply(
+            lambda row: row["openInterest"] if row["openInterest"] > 0 else row["volume"],
+            axis=1,
+        )
+        return df
+
+    def _calculate_max_pain(self, calls: pd.DataFrame, puts: pd.DataFrame) -> Optional[float]:
         try:
-            all_strikes = sorted(
-                set(calls["strike"].unique()) | set(puts["strike"].unique())
-            )
+            all_strikes = sorted(set(calls["strike"].unique()) | set(puts["strike"].unique()))
             if not all_strikes:
                 return None
-
             min_pain, max_pain_strike = float("inf"), None
             for k in all_strikes:
-                call_pain = float(
-                    ((calls["strike"] - k).clip(lower=0) * calls["openInterest"]).sum()
-                )
-                put_pain = float(
-                    ((k - puts["strike"]).clip(lower=0) * puts["openInterest"]).sum()
-                )
+                call_pain = float(((calls["strike"] - k).clip(lower=0) * calls["openInterest"]).sum())
+                put_pain  = float(((k - puts["strike"]).clip(lower=0) * puts["openInterest"]).sum())
                 total = call_pain + put_pain
                 if total < min_pain:
                     min_pain = total
@@ -382,144 +359,148 @@ class OptionsAnalytics:
             return "BEARISH"
         return "NEUTRAL"
 
-    def _top_oi_strikes(
-        self, df: pd.DataFrame, option_type: str, total_oi: int
-    ) -> list:
-        oi_col = "openInterest"
+    def _top_activity_strikes(self, df: pd.DataFrame, option_type: str, total_activity: int) -> list:
         grouped = (
-            df.groupby("strike")[oi_col]
+            df.groupby("strike")["activity"]
             .sum()
             .sort_values(ascending=False)
             .head(self.TOP_N_STRIKES)
         )
         result = []
-        for strike, oi in grouped.items():
-            best_row = df[df["strike"] == strike].sort_values(oi_col, ascending=False)
+        for strike, act in grouped.items():
+            if act == 0:
+                continue
+            best_row   = df[df["strike"] == strike].sort_values("activity", ascending=False)
             expiration = best_row.iloc[0]["expiration"] if not best_row.empty else "N/A"
-            pct = round(100 * oi / total_oi, 2) if total_oi > 0 else 0
-            entry = {
-                "strike": float(strike),
-                "expiration": expiration,
-                f"{option_type}_oi": int(oi),
-                "pct_of_total": pct,
-            }
-            result.append(entry)
+            metric     = best_row.iloc[0].get("metric_used", "unknown") if "metric_used" in best_row.columns else (
+                "oi" if best_row.iloc[0]["openInterest"] > 0 else "volume"
+            )
+            pct = round(100 * act / total_activity, 2) if total_activity > 0 else 0
+            result.append({
+                "strike":         float(strike),
+                "expiration":     expiration,
+                "metric_used":    metric,
+                f"{option_type}_activity": int(act),
+                "pct_of_total":   pct,
+            })
         return result
 
-    def _derive_levels(
-        self,
-        calls_df: pd.DataFrame,
-        puts_df: pd.DataFrame,
-        current_price: Optional[float],
-    ):
+    def _derive_levels(self, calls_df: pd.DataFrame, puts_df: pd.DataFrame, current_price: Optional[float]):
         if current_price is None:
             return [], []
 
         below = puts_df[puts_df["strike"] < current_price]
         above = calls_df[calls_df["strike"] > current_price]
 
-        support = (
-            below.groupby("strike")["openInterest"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(3)
-            .index.tolist()
-        )
-        resistance = (
-            above.groupby("strike")["openInterest"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(3)
-            .index.tolist()
-        )
+        support    = below.groupby("strike")["activity"].sum().sort_values(ascending=False).head(3).index.tolist()
+        resistance = above.groupby("strike")["activity"].sum().sort_values(ascending=False).head(3).index.tolist()
+
         return (
             sorted([float(s) for s in support], reverse=True),
             sorted([float(s) for s in resistance]),
         )
 
-    def _scan_smart_money(
-        self,
-        calls_df: pd.DataFrame,
-        puts_df: pd.DataFrame,
-        expirations: list,
-        today,
-        near_term_oi_pool: list,
-    ) -> dict:
-        sm_threshold = (
-            float(np.percentile(near_term_oi_pool, self.SMART_MONEY_OI_PERCENTILE))
-            if near_term_oi_pool
-            else 0.0
-        )
-
+    def _scan_smart_money(self, calls_df: pd.DataFrame, puts_df: pd.DataFrame, expirations: list, today) -> dict:
+        """Only scans expirations with DTE > 90 AND where OI > 0."""
         signals = []
+
         for exp in expirations:
             exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
             dte = (exp_date - today).days
             if dte <= self.SMART_MONEY_DTE_THRESHOLD:
                 continue
 
-            for option_type, df in [("call", calls_df), ("put", puts_df)]:
-                exp_df = df[df["expiration"] == exp]
-                for _, row in exp_df.iterrows():
-                    oi = row["openInterest"]
-                    if oi > sm_threshold and oi >= self.SMART_MONEY_MIN_ABS_OI:
-                        signals.append(
-                            {
-                                "type": option_type,
-                                "expiration": exp,
-                                "dte": dte,
-                                "strike": float(row["strike"]),
-                                "open_interest": int(oi),
-                                "implied_volatility": round(
-                                    float(row["impliedVolatility"]), 4
-                                ),
-                            }
-                        )
+            exp_calls = calls_df[calls_df["expiration"] == exp]
+            exp_puts  = puts_df[ puts_df["expiration"]  == exp]
 
-        assessment = "INSUFFICIENT_DATA"
+            # Only proceed if OI is populated for this expiration
+            total_oi = int(exp_calls["openInterest"].sum() + exp_puts["openInterest"].sum())
+            if total_oi == 0:
+                continue
+
+            # Threshold: 95th percentile of OI across this expiration
+            all_oi = pd.concat([exp_calls["openInterest"], exp_puts["openInterest"]])
+            threshold = float(np.percentile(all_oi, 95)) if len(all_oi) else 0.0
+
+            for option_type, df in [("call", exp_calls), ("put", exp_puts)]:
+                for _, row in df.iterrows():
+                    oi = row["openInterest"]
+                    if oi >= threshold and oi >= self.SMART_MONEY_MIN_ABS_OI:
+                        signals.append({
+                            "type":             option_type,
+                            "expiration":       exp,
+                            "dte":              dte,
+                            "strike":           float(row["strike"]),
+                            "open_interest":    int(oi),
+                            "implied_volatility": round(float(row["impliedVolatility"]), 4),
+                        })
+
+        assessment      = "INSUFFICIENT_DATA"
         dominant_strike = None
 
         if signals:
             sm_call_oi = sum(s["open_interest"] for s in signals if s["type"] == "call")
-            sm_put_oi = sum(s["open_interest"] for s in signals if s["type"] == "put")
-            if sm_call_oi > sm_put_oi * 1.5:
-                assessment = "ACCUMULATING"
-            elif sm_put_oi > sm_call_oi * 1.5:
-                assessment = "HEDGING"
-            else:
-                assessment = "MIXED"
+            sm_put_oi  = sum(s["open_interest"] for s in signals if s["type"] == "put")
+            if   sm_call_oi > sm_put_oi * 1.5:  assessment = "ACCUMULATING"
+            elif sm_put_oi  > sm_call_oi * 1.5:  assessment = "HEDGING"
+            else:                                 assessment = "MIXED"
             dominant_strike = max(signals, key=lambda x: x["open_interest"])["strike"]
 
         return {
-            "signals": signals[:10],
-            "assessment": assessment,
+            "signals":                 signals[:10],
+            "assessment":              assessment,
             "dominant_long_dated_strike": dominant_strike,
-            "oi_threshold_used": round(sm_threshold, 0),
         }
 
     def _detect_unusual_activity(
-        self, calls_df: pd.DataFrame, puts_df: pd.DataFrame
+        self,
+        calls_df: pd.DataFrame,
+        puts_df:  pd.DataFrame,
+        per_exp_results: list,
     ) -> list:
-        unusual = []
-        for option_type, df in [("call", calls_df), ("put", puts_df)]:
-            for _, row in df.iterrows():
-                oi = row["openInterest"]
-                vol = row["volume"]
-                if (
-                    vol >= self.UNUSUAL_MIN_VOLUME
-                    and oi > 0
-                    and vol >= self.UNUSUAL_VOLUME_OI_RATIO * oi
-                ):
-                    unusual.append(
-                        {
-                            "type": option_type,
-                            "strike": float(row["strike"]),
-                            "expiration": row["expiration"],
-                            "volume": int(vol),
-                            "open_interest": int(oi),
-                            "vol_oi_ratio": round(vol / oi, 2),
-                        }
-                    )
+        """
+        OI mode:     volume >= UNUSUAL_VOLUME_OI_RATIO × openInterest AND volume >= UNUSUAL_MIN_VOLUME
+        Volume mode: volume >= 90th-percentile of all volumes for that expiration AND volume >= UNUSUAL_MIN_VOLUME
+        """
+        exp_metric = {r["expiration"]: r["metric_used"] for r in per_exp_results}
+        unusual    = []
 
-        unusual.sort(key=lambda x: x["vol_oi_ratio"], reverse=True)
-        return unusual[:10]
+        for option_type, df in [("call", calls_df), ("put", puts_df)]:
+            for exp, grp in df.groupby("expiration"):
+                metric = exp_metric.get(exp, "volume")
+
+                if metric == "oi":
+                    for _, row in grp.iterrows():
+                        oi  = row["openInterest"]
+                        vol = row["volume"]
+                        if vol >= self.UNUSUAL_MIN_VOLUME and oi > 0 and vol >= self.UNUSUAL_VOLUME_OI_RATIO * oi:
+                            unusual.append({
+                                "type":           option_type,
+                                "strike":         float(row["strike"]),
+                                "expiration":     exp,
+                                "volume":         int(vol),
+                                "open_interest":  int(oi),
+                                "signal":         "vol_oi_ratio",
+                                "ratio":          round(vol / oi, 2),
+                            })
+                else:
+                    # Volume mode: flag strikes in top 10th percentile of volume for this expiration
+                    vols = grp["volume"]
+                    if vols.empty or vols.sum() == 0:
+                        continue
+                    threshold = float(np.percentile(vols[vols > 0], self.UNUSUAL_VOL_PERCENTILE)) if (vols > 0).any() else 0
+                    for _, row in grp.iterrows():
+                        vol = row["volume"]
+                        if vol >= threshold and vol >= self.UNUSUAL_MIN_VOLUME:
+                            unusual.append({
+                                "type":          option_type,
+                                "strike":        float(row["strike"]),
+                                "expiration":    exp,
+                                "volume":        int(vol),
+                                "open_interest": int(row["openInterest"]),
+                                "signal":        "volume_spike",
+                                "ratio":         round(vol / threshold, 2) if threshold > 0 else None,
+                            })
+
+        unusual.sort(key=lambda x: x["volume"], reverse=True)
+        return unusual[:15]

@@ -72,9 +72,10 @@ async def analyze_options_chain(
 @options_server.tool(
     name="get_oi_chart",
     description=(
-        "Generate an Open Interest distribution chart for a specific expiration date. "
-        "Produces a grouped bar chart (Call OI in green vs Put OI in red) across strike "
-        "prices, with vertical lines marking current price and max pain. "
+        "Generate an activity distribution chart for a specific expiration date. "
+        "Uses Open Interest when available (monthly expirations), volume otherwise (near-term weeklies). "
+        "Produces a grouped bar chart (calls green, puts red) across strike prices, with vertical "
+        "lines for current price and max pain (OI mode only). "
         "Uploads to Cloudinary and returns the image URL. "
         "Args: ticker (str), expiration_date (YYYY-MM-DD string). "
         "Call this after analyze_options_chain to give users a visual."
