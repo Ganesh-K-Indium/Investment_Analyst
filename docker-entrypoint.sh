@@ -2,7 +2,7 @@
 # =============================================================================
 # Docker Entrypoint - Investment Analyst API
 # =============================================================================
-# Starts the 3 MCP servers in background, then runs the main FastAPI app.
+# Starts the 4 MCP servers in background, then runs the main FastAPI app.
 # =============================================================================
 
 set -e
@@ -23,6 +23,11 @@ echo "[entrypoint] Technical Analysis MCP server starting on port 8566 (PID: $!)
 cd /app/quant/research_mcp
 python server_mcp.py &
 echo "[entrypoint] Research MCP server starting on port 8567 (PID: $!)"
+
+# Start Options Intelligence MCP server (port 8568)
+cd /app/quant/options_mcp
+python server_mcp.py &
+echo "[entrypoint] Options Intelligence MCP server starting on port 8568 (PID: $!)"
 
 # Give MCP servers a moment to initialize before the API tries to connect
 sleep 3

@@ -84,7 +84,7 @@ class SessionResponse(BaseModel):
     last_accessed: datetime
 
 
-@router.post("/", response_model=PortfolioResponse)
+@router.post("", response_model=PortfolioResponse)
 def create_portfolio(
     payload: PortfolioCreate,
     db: Session = Depends(get_db_session)

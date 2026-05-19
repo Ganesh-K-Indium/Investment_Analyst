@@ -20,6 +20,7 @@ from stock_exchange_agent.subagents.stock_information.langgraph_agent import cre
 from stock_exchange_agent.subagents.technical_analysis_agent.langgraph_agent import create_technical_analysis_agent
 from stock_exchange_agent.subagents.ticker_finder_tool.langgraph_agent import create_ticker_finder_agent
 from stock_exchange_agent.subagents.research_agent.langgraph_agent import create_research_agent
+from stock_exchange_agent.subagents.options_agent.langgraph_agent import create_options_agent
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 import os
 from datetime import datetime
@@ -73,32 +74,38 @@ async def main():
         await wait_for_server("http://localhost:8565/mcp")  # Stock Information
         await wait_for_server("http://localhost:8566/mcp")  # Technical Analysis
         await wait_for_server("http://localhost:8567/mcp")  # Research
-        
+        await wait_for_server("http://localhost:8568/mcp")  # Options Intelligence
+
         # Create sub-agents
         print(" Creating sub-agents...")
         stock_info_agent = await create_stock_information_agent(checkpointer=saver)
         technical_agent = await create_technical_analysis_agent(checkpointer=saver)
         ticker_finder = await create_ticker_finder_agent(checkpointer=saver)
         research_agent = await create_research_agent(checkpointer=saver)
-        
+        options_agent = await create_options_agent(checkpointer=saver)
+
         print(" Sub-agents created successfully")
-    
+
         supervisor_graph = create_supervisor(
             model=ChatOpenAI(temperature=0, model_name="gpt-4o"),
-            agents=[stock_info_agent, technical_agent, ticker_finder, research_agent],
+            agents=[stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent],
             prompt=(
-                "You are a supervisor managing four stock analysis agents. Route user requests to the appropriate agent.\n\n"
+                "You are a supervisor managing five stock analysis agents. Route user requests to the appropriate agent.\n\n"
                 "**AGENTS:**\n"
                 "1. **ticker_finder_agent**: Converts company names to ticker symbols. Use FIRST when user provides a company name.\n"
-                "2. **stock_information_agent**: Stock prices, financials, news, dividends, holder info, recommendations, options, projections.\n"
+                "2. **stock_information_agent**: Stock prices, financials, news, dividends, holder info, recommendations, projections.\n"
                 "3. **technical_analysis_agent**: Charts and technical indicators (SMA, RSI, MACD, Bollinger Bands, Volume, Support/Resistance).\n"
-                "4. **research_agent**: Web research, analyst ratings, sentiment analysis, bull/bear scenarios.\n\n"
+                "4. **research_agent**: Web research, analyst ratings, sentiment analysis, bull/bear scenarios.\n"
+                "5. **options_intelligence_agent**: Options chain analysis — put/call ratio, OI concentration, max pain, "
+                "smart money signals, unusual activity, support/resistance from OI, OI visualization charts.\n\n"
                 "**ROUTING RULES:**\n"
                 "- Company name (Apple, Tesla) → ticker_finder_agent FIRST, then route to specialist\n"
                 "- Ticker symbol provided (AAPL, TSLA) → Route directly to specialist\n"
-                "- Price/financials/news/dividends/holders/options → stock_information_agent\n"
+                "- Price/financials/news/dividends/holders → stock_information_agent\n"
                 "- Charts/RSI/SMA/MACD/Bollinger/technical → technical_analysis_agent\n"
-                "- Analyst ratings/research/scenarios/sentiment → research_agent\n\n"
+                "- Analyst ratings/research/scenarios/sentiment → research_agent\n"
+                "- Options chain / put-call ratio / max pain / OI / open interest / "
+                "smart money options / unusual options activity / options positioning → options_intelligence_agent\n\n"
                 "**CRITICAL RULES:**\n"
                 "1. Delegate to ONE agent at a time. Wait for response before next delegation.\n"
                 "2. Do NOT make up stock data. Only present what agents return.\n"
@@ -118,6 +125,7 @@ async def main():
                 "User: 'Apple stock price' → ticker_finder_agent → stock_information_agent\n"
                 "User: 'TSLA RSI chart' → technical_analysis_agent (ticker already provided)\n"
                 "User: 'What do analysts think about NVDA?' → research_agent\n"
+                "User: 'Analyze the options chain of AAPL' → options_intelligence_agent\n"
                 "User: 'Show me RSI for Netflix' (no dates) → Agent will ask for date range, relay to user"
             ),
             add_handoff_back_messages=True,
@@ -133,6 +141,13 @@ async def main():
         print("\n" + "="*80)
         print(" STOCK ANALYSIS SUPERVISOR AGENT - Ready for Commands")
         print("="*80)
+        print("\n OPTIONS INTELLIGENCE (NEW):")
+        print("  • Options chain analysis (put/call ratio, OI heatmap)")
+        print("  • Bullish/bearish concentration zones from open interest")
+        print("  • Max pain calculation per expiration")
+        print("  • Smart money detection (long-dated unusual OI)")
+        print("  • Unusual options activity (volume/OI spikes)")
+        print("  • Support & resistance levels derived from OI")
         print("\n What I can help you with:")
         print("\n FUNDAMENTAL ANALYSIS:")
         print("  • Current stock prices and market data")

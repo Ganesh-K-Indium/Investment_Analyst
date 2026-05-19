@@ -68,6 +68,7 @@ ${YELLOW}MCP Servers (optional):${NC}
   Stock Info:    http://localhost:8565
   Technical:     http://localhost:8566
   Research:      http://localhost:8567
+  Options:       http://localhost:8568
 
 EOF
             exit 0
@@ -171,14 +172,16 @@ check_mcp_status() {
     local stock_info_running=false
     local technical_running=false
     local research_running=false
-    
+    local options_running=false
+
     check_port 8565 && stock_info_running=true
     check_port 8566 && technical_running=true
     check_port 8567 && research_running=true
-    
-    if $stock_info_running && $technical_running && $research_running; then
-        print_success "All MCP servers are running"
-        print_info "Full stock analysis features available"
+    check_port 8568 && options_running=true
+
+    if $stock_info_running && $technical_running && $research_running && $options_running; then
+        print_success "All MCP servers are running (8565, 8566, 8567, 8568)"
+        print_info "Full stock analysis + options intelligence features available"
     else
         print_warning "Some or all MCP servers are not running"
         print_info "Stock analysis will work with limited functionality"

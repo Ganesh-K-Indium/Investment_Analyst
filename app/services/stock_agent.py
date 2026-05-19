@@ -99,7 +99,8 @@ async def initialize_stock_agents(checkpointer: Optional[AsyncSqliteSaver] = Non
         servers = [
             ("http://localhost:8565/mcp", "Stock Information"),
             ("http://localhost:8566/mcp", "Technical Analysis"),
-            ("http://localhost:8567/mcp", "Research")
+            ("http://localhost:8567/mcp", "Research"),
+            ("http://localhost:8568/mcp", "Options Intelligence"),
         ]
         
         server_status = {}
@@ -117,6 +118,7 @@ async def initialize_stock_agents(checkpointer: Optional[AsyncSqliteSaver] = Non
             print("   - Stock Information: port 8565")
             print("   - Technical Analysis: port 8566")
             print("   - Research: port 8567")
+            print("   - Options Intelligence: port 8568")
         
         # Import here to avoid circular dependencies
         try:
@@ -125,11 +127,12 @@ async def initialize_stock_agents(checkpointer: Optional[AsyncSqliteSaver] = Non
             quant_dir = os.path.join(os.getcwd(), 'quant', 'stock_agent')
             if quant_dir not in sys.path:
                 sys.path.insert(0, quant_dir)
-            
+
             from stock_exchange_agent.subagents.stock_information.langgraph_agent import create_stock_information_agent
             from stock_exchange_agent.subagents.technical_analysis_agent.langgraph_agent import create_technical_analysis_agent
             from stock_exchange_agent.subagents.ticker_finder_tool.langgraph_agent import create_ticker_finder_agent
             from stock_exchange_agent.subagents.research_agent.langgraph_agent import create_research_agent
+            from stock_exchange_agent.subagents.options_agent.langgraph_agent import create_options_agent
             from langgraph_supervisor import create_supervisor
         except ImportError as e:
             print(f"ERROR: Failed to import stock agent modules: {e}")
@@ -196,11 +199,26 @@ async def initialize_stock_agents(checkpointer: Optional[AsyncSqliteSaver] = Non
         else:
             print("   Skipping research_agent (MCP server not ready)")
             research_agent = None
-        
-        print(f"Created {len(agents_created)}/4 sub-agents: {', '.join(agents_created)}")
+
+        # Options Intelligence Agent
+        if server_status.get("Options Intelligence"):
+            try:
+                print("   Creating options_intelligence_agent...")
+                options_agent = await create_options_agent(checkpointer=_stock_saver)
+                agents_created.append("options_intelligence")
+                print("   options_intelligence_agent created")
+            except Exception as e:
+                print(f"   WARNING: Failed to create options_intelligence_agent: {e}")
+                print(f"   -> Options Intelligence MCP server may not be running (port 8568)")
+                options_agent = None
+        else:
+            print("   Skipping options_intelligence_agent (MCP server not ready)")
+            options_agent = None
+
+        print(f"Created {len(agents_created)}/5 sub-agents: {', '.join(agents_created)}")
         
         # Check if we have at least one working agent
-        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent] if a is not None]
+        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent] if a is not None]
         
         if len(available_agents) == 0:
             print("ERROR: No agents were successfully created")
@@ -220,7 +238,9 @@ async def initialize_stock_agents(checkpointer: Optional[AsyncSqliteSaver] = Non
             agent_names.append("ticker_finder_agent")
         if research_agent:
             agent_names.append("research_agent")
-        
+        if options_agent:
+            agent_names.append("options_intelligence_agent")
+
         supervisor_prompt = f"""You are a stock analysis supervisor managing {len(available_agents)} agents:
 
 AVAILABLE AGENTS:
@@ -228,15 +248,19 @@ AVAILABLE AGENTS:
 
 CAPABILITIES:
 - ticker_finder_agent: Converts company names to ticker symbols
-- stock_information_agent: Fundamental data (prices, financials, news, statements, holders, options)
+- stock_information_agent: Fundamental data (prices, financials, news, statements, holders)
 - technical_analysis_agent: Technical charts (SMA, RSI, MACD, Bollinger, Volume, Support/Resistance, Candlestick)
 - research_agent: Analyst ratings, web research, sentiment, bull/bear scenarios
+- options_intelligence_agent: Options chain analysis — put/call ratio, OI concentration zones, max pain,
+  smart money signals, unusual activity, support/resistance from OI, OI visualization charts
 
 ROUTING RULES:
 - Company name mentioned -> ticker_finder_agent FIRST (if available)
 - Price/financials/news/fundamentals -> stock_information_agent (if available)
 - Charts/indicators/technical analysis -> technical_analysis_agent (if available)
 - Analyst opinions/research/scenarios -> research_agent (if available)
+- Options chain / put-call ratio / max pain / OI distribution / open interest analysis /
+  smart money options / unusual options activity / options positioning -> options_intelligence_agent (if available)
 - If an agent is not available, apologize and suggest alternatives
 
 CRITICAL:

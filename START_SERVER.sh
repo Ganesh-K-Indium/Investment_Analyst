@@ -39,5 +39,11 @@ echo ""
 echo "Press Ctrl+C to stop the server"
 echo ""
 
+# MCP servers must be started in separate terminals before running this script:
+#   Stock Information (port 8565):    cd quant/yahoo-finance-mcp && python server.py
+#   Technical Analysis (port 8566):   cd quant/Stock_Analysis && python server_mcp.py
+#   Research (port 8567):             cd quant/research_mcp && python server_mcp.py
+#   Options Intelligence (port 8568): cd quant/options_mcp && python server_mcp.py
+
 # Run from root with correct module path: app.main:app
 python -m uvicorn app.main:app --reload --reload-dir app --reload-dir rag --reload-dir quant --reload-dir schemas --reload-dir ingestion --port 8000

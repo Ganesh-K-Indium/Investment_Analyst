@@ -3,11 +3,39 @@ Investment Analyst API - Production-grade FastAPI backend
 Unified platform for portfolio management, document analysis, and stock market analysis
 """
 import os
+import time
+import logging
 from dotenv import load_dotenv
 load_dotenv(override=True)
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+# ── Logging setup ────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("api")
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log every request: method, path, status code, and elapsed time."""
+
+    async def dispatch(self, request: Request, call_next):
+        start = time.perf_counter()
+        response = await call_next(request)
+        ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "%-6s %-45s %s  %.0fms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            ms,
+        )
+        return response
 
 from rag.graph.builder import BuildingGraph
 from app.database.connection import init_db
@@ -39,6 +67,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestLoggingMiddleware)
 
 # Global instances
 graph_obj = None
@@ -52,88 +81,63 @@ stock_supervisor = None
 async def startup_event():
     """Initialize database, graph, cache, and stock agents on startup"""
     global graph_obj, agent, checkpointer_context, checkpointer, stock_supervisor
-    
-    print("\n" + "="*70)
-    print("Starting Investment Analyst API v2.1...")
-    print("="*70)
-    
-    # Initialize database
-    print("Initializing database...")
+
+    logger.info("=" * 70)
+    logger.info("Starting Investment Analyst API v2.1...")
+    logger.info("=" * 70)
+
+    logger.info("Initializing database...")
     init_db()
-    
-    # Initialize LangGraph checkpointer (shared for RAG and stock agents)
-    print("Initializing RAG checkpointer...")
+
+    logger.info("Initializing RAG checkpointer...")
     rag_db_path = os.getenv("RAG_SQLITE_DB_PATH", "checkpoints.sqlite")
     checkpointer_context = AsyncSqliteSaver.from_conn_string(rag_db_path)
     checkpointer = await checkpointer_context.__aenter__()
-    
-    # Initialize RAG graph
-    print("Building RAG graph...")
+
+    logger.info("Building RAG graph...")
     graph_obj = BuildingGraph()
     agent = await graph_obj.get_graph(checkpointer=checkpointer)
-    
-    # Set global instances in RAG router
     rag_router_module.set_agent(agent)
-    
-    # Initialize Stock Analysis Agents (with separate checkpointer)
-    print("\nInitializing Stock Analysis System...")
+
+    logger.info("Initializing Stock Analysis System...")
     try:
-        # IMPORTANT: Pass None to force separate checkpointer creation
         stock_supervisor, agents_ready = await initialize_stock_agents(checkpointer=None)
-        
-        # Set global instances in quant router
         quant_router_module.set_stock_supervisor(stock_supervisor)
         quant_router_module.set_agents_status(agents_ready)
-        
         if agents_ready and stock_supervisor:
-            print("Stock Analysis System ready!")
+            logger.info("Stock Analysis System ready!")
         else:
-            print("WARNING: Stock Analysis System not available")
-            print("   Start MCP servers and restart to enable stock analysis")
+            logger.warning("Stock Analysis System not available — start MCP servers and restart")
     except Exception as e:
-        print(f"WARNING: Failed to initialize Stock Analysis System: {e}")
-        print("   The API will run without stock analysis capabilities")
-        # Set to None so API knows it's unavailable
+        logger.warning("Failed to initialize Stock Analysis System: %s", e)
         quant_router_module.set_stock_supervisor(None)
         quant_router_module.set_agents_status(False)
-    
-    print("\n" + "="*70)
-    print("Investment Analyst API v2.1 Ready!")
-    print()
-    print("Server URL: http://localhost:8000")
-    print("API Docs: http://localhost:8000/docs")
-    print()
-    print("Available Services:")
-    print("   - Portfolio Management: /portfolios")
-    print("   - Document Analysis: /ask, /compare")
-    print("   - Stock Market Analysis: /quant/query")
-    print("   - Chat History: /chats")
-    print("   - Data Integrations: /integrations")
-    print("   - Form 4 Insider Trading: /form4")
-    print()
-    print("TIP: Open static/index.html in browser for web interface")
-    print("="*70 + "\n")
+
+    logger.info("=" * 70)
+    logger.info("Investment Analyst API v2.1 Ready!")
+    logger.info("  Server : http://localhost:8000")
+    logger.info("  Docs   : http://localhost:8000/docs")
+    logger.info("  Routes : /portfolios  /ask  /quant/query  /chats  /integrations  /form4")
+    logger.info("=" * 70)
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup resources on shutdown"""
     global graph_obj, checkpointer_context
-    
-    print("Shutting down...")
-    
-    # Cleanup stock agents
+
+    logger.info("Shutting down...")
     await cleanup_stock_agents()
-    
+
     if checkpointer_context:
         await checkpointer_context.__aexit__(None, None, None)
-        print("Checkpointer connection closed")
-    
+        logger.info("Checkpointer connection closed")
+
     if graph_obj:
         await graph_obj.cleanup()
-        print("Graph cleaned up")
-    
-    print("Shutdown complete")
+        logger.info("Graph cleaned up")
+
+    logger.info("Shutdown complete")
 
 
 # Include routers FIRST before defining other routes

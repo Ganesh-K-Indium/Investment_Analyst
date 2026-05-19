@@ -163,16 +163,17 @@ class ReportDraftItem(Base):
     """Staging clipboard — replaces localStorage for report creation"""
     __tablename__ = "report_draft_items"
 
-    id         = Column(Integer, primary_key=True, index=True)
-    user_id    = Column(String, nullable=False, index=True)
-    item_type  = Column(String, nullable=False)   # "text" | "image" | "summary"
-    content    = Column(Text, nullable=True)       # markdown text or summary
-    image_url  = Column(String, nullable=True)     # Cloudinary URL for charts
-    source     = Column(String, nullable=True)     # "rag" | "quant" | "summary"
-    session_id = Column(String, nullable=True)     # originating chat session
-    label      = Column(String, nullable=True)     # user-editable label
-    sort_order = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    id           = Column(Integer, primary_key=True, index=True)
+    user_id      = Column(String, nullable=False, index=True)
+    portfolio_id = Column(Integer, nullable=True, index=True)  # scopes clip to a portfolio
+    item_type    = Column(String, nullable=False)   # "text" | "image" | "summary"
+    content      = Column(Text, nullable=True)       # markdown text or summary
+    image_url    = Column(String, nullable=True)     # Cloudinary URL for charts
+    source       = Column(String, nullable=True)     # "rag" | "quant" | "summary"
+    session_id   = Column(String, nullable=True)     # originating chat session
+    label        = Column(String, nullable=True)     # user-editable label
+    sort_order   = Column(Integer, default=0)
+    created_at   = Column(DateTime, default=datetime.utcnow)
 
 
 class Integration(Base):

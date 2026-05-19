@@ -19,6 +19,7 @@ def add_draft_item(
     db: Session,
     user_id: str,
     item_type: str,
+    portfolio_id: Optional[int] = None,
     content: Optional[str] = None,
     image_url: Optional[str] = None,
     source: Optional[str] = None,
@@ -28,6 +29,7 @@ def add_draft_item(
 ) -> ReportDraftItem:
     item = ReportDraftItem(
         user_id=user_id,
+        portfolio_id=portfolio_id,
         item_type=item_type,
         content=content,
         image_url=image_url,
@@ -42,13 +44,18 @@ def add_draft_item(
     return item
 
 
-def get_draft_items(db: Session, user_id: str) -> List[ReportDraftItem]:
-    return (
+def get_draft_items(
+    db: Session,
+    user_id: str,
+    portfolio_id: Optional[int] = None,
+) -> List[ReportDraftItem]:
+    q = (
         db.query(ReportDraftItem)
         .filter(ReportDraftItem.user_id == user_id)
-        .order_by(ReportDraftItem.sort_order, ReportDraftItem.created_at)
-        .all()
     )
+    if portfolio_id is not None:
+        q = q.filter(ReportDraftItem.portfolio_id == portfolio_id)
+    return q.order_by(ReportDraftItem.sort_order, ReportDraftItem.created_at).all()
 
 
 def get_draft_item(db: Session, item_id: int, user_id: str) -> Optional[ReportDraftItem]:
@@ -90,9 +97,16 @@ def delete_draft_item(db: Session, item_id: int, user_id: str) -> bool:
     return True
 
 
-def clear_draft_items(db: Session, user_id: str) -> int:
-    count = db.query(ReportDraftItem).filter(ReportDraftItem.user_id == user_id).count()
-    db.query(ReportDraftItem).filter(ReportDraftItem.user_id == user_id).delete()
+def clear_draft_items(
+    db: Session,
+    user_id: str,
+    portfolio_id: Optional[int] = None,
+) -> int:
+    q = db.query(ReportDraftItem).filter(ReportDraftItem.user_id == user_id)
+    if portfolio_id is not None:
+        q = q.filter(ReportDraftItem.portfolio_id == portfolio_id)
+    count = q.count()
+    q.delete(synchronize_session=False)
     db.commit()
     return count
 
@@ -107,13 +121,13 @@ def create_report_from_draft(
     clear_draft: bool = True,
 ) -> AnalystReport:
     """
-    Assemble a report from the user's current clipboard items, then optionally
-    clear the clipboard. Text/summary items are joined into content_markdown
-    (with their labels as section headings). Image items become image_urls.
+    Assemble a report from the user's clipboard for this portfolio, then
+    optionally clear it. Text/summary items become content_markdown sections;
+    image items become image_urls.
     """
-    items = get_draft_items(db, user_id)
+    items = get_draft_items(db, user_id, portfolio_id=portfolio_id)
     if not items:
-        raise ValueError("No draft items found — clipboard is empty")
+        raise ValueError("No draft items found — clipboard is empty for this portfolio")
 
     md_sections: List[str] = []
     image_urls: List[str] = []
@@ -123,11 +137,10 @@ def create_report_from_draft(
             if item.image_url:
                 image_urls.append(item.image_url)
         else:
-            heading = item.label or (item.item_type.capitalize())
+            heading = item.label or item.item_type.capitalize()
             md_sections.append(f"## {heading}\n\n{item.content or ''}")
 
     content_markdown = "\n\n---\n\n".join(md_sections) if md_sections else None
-
     draft_session_ids = list({i.session_id for i in items if i.session_id})
     merged_session_ids = list(set((source_session_ids or []) + draft_session_ids))
 
@@ -143,12 +156,17 @@ def create_report_from_draft(
     )
 
     if clear_draft:
-        clear_draft_items(db, user_id)
+        clear_draft_items(db, user_id, portfolio_id=portfolio_id)
 
     return report
 
 
-def reorder_draft_items(db: Session, user_id: str, ordered_ids: List[int]) -> List[ReportDraftItem]:
+def reorder_draft_items(
+    db: Session,
+    user_id: str,
+    ordered_ids: List[int],
+    portfolio_id: Optional[int] = None,
+) -> List[ReportDraftItem]:
     items_map = {
         item.id: item
         for item in db.query(ReportDraftItem).filter(
@@ -160,7 +178,7 @@ def reorder_draft_items(db: Session, user_id: str, ordered_ids: List[int]) -> Li
         if item_id in items_map:
             items_map[item_id].sort_order = position
     db.commit()
-    return get_draft_items(db, user_id)
+    return get_draft_items(db, user_id, portfolio_id=portfolio_id)
 
 
 # ---------------------------------------------------------------------------

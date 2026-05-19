@@ -63,6 +63,7 @@ visualize_graph.py
 
 # Large data/ingestion directories (Prevents massive build context loading)
 10k_7_companies/
+10q_filings/
 pdf_filings/
 xml_filings/
 tsm/

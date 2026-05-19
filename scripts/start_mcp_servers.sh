@@ -3,11 +3,12 @@
 # =============================================================================
 # MCP Servers Startup Script for Investment Analyst API
 # =============================================================================
-# This script starts the 3 MCP (Model Context Protocol) servers required for
+# This script starts the 4 MCP (Model Context Protocol) servers required for
 # the Stock Analysis system:
 #   1. Stock Information Server (port 8565) - yahoo-finance-mcp
 #   2. Technical Analysis Server (port 8566) - Stock_Analysis
 #   3. Research Server (port 8567) - research_mcp
+#   4. Options Intelligence Server (port 8568) - options_mcp
 #
 # Usage:
 #   ./start_mcp_servers.sh        # Start all servers
@@ -38,6 +39,7 @@ SERVER_CONFIGS=(
     "stock_info|yahoo-finance-mcp|server.py|8565"
     "technical|Stock_Analysis|server_mcp.py|8566"
     "research|research_mcp|server_mcp.py|8567"
+    "options|options_mcp|server_mcp.py|8568"
 )
 
 # Function to print colored output
@@ -295,8 +297,9 @@ ${YELLOW}Commands:${NC}
 
 ${YELLOW}Servers:${NC}
   1. Stock Information (port 8565) - yahoo-finance-mcp
-  2. Technical Analysis (port 8566) - Stock_Analysis  
+  2. Technical Analysis (port 8566) - Stock_Analysis
   3. Research (port 8567) - research_mcp
+  4. Options Intelligence (port 8568) - options_mcp
 
 ${YELLOW}Examples:${NC}
   ./start_mcp_servers.sh              # Start all servers

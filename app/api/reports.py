@@ -27,6 +27,7 @@ _VALID_SOURCES = {"rag", "quant", "summary"}
 
 class DraftItemCreate(BaseModel):
     user_id: str = Field(..., description="Author user ID")
+    portfolio_id: Optional[int] = Field(None, description="Portfolio this clip belongs to")
     item_type: str = Field(..., description="text | image | summary")
     content: Optional[str] = Field(None, description="Markdown text or summary body")
     image_url: Optional[str] = Field(None, description="Cloudinary URL for chart images")
@@ -49,6 +50,7 @@ class ReorderRequest(BaseModel):
 class DraftItemResponse(BaseModel):
     id: int
     user_id: str
+    portfolio_id: Optional[int]
     item_type: str
     content: Optional[str]
     image_url: Optional[str]
@@ -63,6 +65,7 @@ class DraftItemResponse(BaseModel):
         return cls(
             id=obj.id,
             user_id=obj.user_id,
+            portfolio_id=obj.portfolio_id,
             item_type=obj.item_type,
             content=obj.content,
             image_url=obj.image_url,
@@ -100,6 +103,7 @@ def add_draft_item(payload: DraftItemCreate, db: Session = Depends(get_db_sessio
     item = report_svc.add_draft_item(
         db=db,
         user_id=payload.user_id,
+        portfolio_id=payload.portfolio_id,
         item_type=payload.item_type,
         content=payload.content,
         image_url=payload.image_url,
@@ -112,12 +116,16 @@ def add_draft_item(payload: DraftItemCreate, db: Session = Depends(get_db_sessio
 
 
 @router.get("/draft/items/{user_id}", response_model=List[DraftItemResponse])
-def get_draft_items(user_id: str, db: Session = Depends(get_db_session)):
+def get_draft_items(
+    user_id: str,
+    portfolio_id: Optional[int] = Query(None, description="Filter clips by portfolio"),
+    db: Session = Depends(get_db_session),
+):
     """
-    Retrieve all clipboard items for the given user, sorted by sort_order then created_at.
-    The creation tab calls this to populate the report builder.
+    Retrieve clipboard items for the given user, scoped to a portfolio when portfolio_id is provided.
+    Sorted by sort_order then created_at.
     """
-    items = report_svc.get_draft_items(db, user_id)
+    items = report_svc.get_draft_items(db, user_id, portfolio_id=portfolio_id)
     return [DraftItemResponse.from_orm(i) for i in items]
 
 
@@ -149,13 +157,14 @@ def update_draft_item(
 def reorder_draft_items(
     payload: ReorderRequest,
     user_id: str,
+    portfolio_id: Optional[int] = Query(None),
     db: Session = Depends(get_db_session),
 ):
     """
     Reorder clipboard items by supplying all item IDs in the desired display order.
-    Pass user_id as a query parameter.
+    Pass user_id (and optionally portfolio_id) as query parameters.
     """
-    items = report_svc.reorder_draft_items(db, user_id, payload.ordered_ids)
+    items = report_svc.reorder_draft_items(db, user_id, payload.ordered_ids, portfolio_id=portfolio_id)
     return [DraftItemResponse.from_orm(i) for i in items]
 
 
@@ -172,11 +181,15 @@ def delete_draft_item(item_id: int, user_id: str, db: Session = Depends(get_db_s
 
 
 @router.delete("/draft/items/user/{user_id}", status_code=200)
-def clear_draft_items(user_id: str, db: Session = Depends(get_db_session)):
+def clear_draft_items(
+    user_id: str,
+    portfolio_id: Optional[int] = Query(None, description="Clear only clips for this portfolio"),
+    db: Session = Depends(get_db_session),
+):
     """
-    Clear all clipboard items for a user (e.g. after the report is saved/exported).
+    Clear clipboard items for a user. When portfolio_id is supplied, only clips for that portfolio are removed.
     """
-    count = report_svc.clear_draft_items(db, user_id)
+    count = report_svc.clear_draft_items(db, user_id, portfolio_id=portfolio_id)
     return {"message": f"Cleared {count} item(s)", "user_id": user_id, "deleted": count}
 
 
