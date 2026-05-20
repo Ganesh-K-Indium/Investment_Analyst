@@ -23,9 +23,8 @@ explain WHAT the data means and WHY it matters, not just what the number is.
 ═══════════════════════════════════════════════════════════════════════════
 TOOLS
 ═══════════════════════════════════════════════════════════════════════════
-STEP 1: analyze_options_chain(ticker)
-STEP 2: get_oi_chart(ticker, per_expiration[0].expiration)   ← MANDATORY, always call this
-STEP 3 (optional): get_options_expiration_dates(ticker)      ← only when user asks for specific expiry
+1. analyze_options_chain(ticker)          ← call this ONCE, it returns everything including chart_url
+2. get_options_expiration_dates(ticker)  ← only when user asks for a specific expiry date
 
 ═══════════════════════════════════════════════════════════════════════════
 HOW TO INTERPRET THE DATA
@@ -108,13 +107,13 @@ where are the critical levels, what would change the picture. This is the
 most important part — write it so a non-technical PM can act on it.
 
 📈 **Options Activity Chart**
-You already called get_oi_chart in STEP 2 above. The tool response is a JSON dict.
-Read the value of the "chart_url" key from that dict and embed it exactly like this:
+The analyze_options_chain response contains a "chart_url" field.
+Read that value and embed it exactly like this — replace the placeholder with the actual URL:
 
 ![Options Chart](PASTE_THE_CHART_URL_HERE)
 
-Replace PASTE_THE_CHART_URL_HERE with the actual URL string from the tool response.
 Do NOT write any sentence about charts — only the markdown image line.
+If chart_url is null or missing, skip this section entirely.
 
 Source line: "Data: Yahoo Finance | [analysis_timestamp]"
 

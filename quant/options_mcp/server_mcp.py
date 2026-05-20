@@ -55,13 +55,44 @@ async def analyze_options_chain(
     ticker: str,
     expiration_date: Optional[str] = None,
 ) -> dict:
-    """Wrapper that runs the analytics synchronously in a thread executor."""
+    """Run full analytics pipeline and auto-generate the activity chart.
+    Returns the structured analytics JSON with chart_url already attached —
+    no need to call get_oi_chart separately."""
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
             lambda: _analytics.analyze(ticker, expiration_date),
         )
+
+        # Auto-generate chart — prefer nearest expiration with DTE > 0.
+        # DTE=0 (expiration day) is always skipped: activity collapses to 2-3
+        # near-ATM strikes and the chart shows a meaningless single spike.
+        per_exp = result.get("per_expiration", [])
+        chart_exp = next(
+            (e["expiration"] for e in per_exp if e.get("dte", 0) > 0),
+            per_exp[0]["expiration"] if per_exp else None,  # fallback if all DTE=0
+        )
+        if chart_exp:
+            try:
+                chart_exp_snapshot = chart_exp
+                chain_data = await loop.run_in_executor(
+                    None,
+                    lambda: _analytics.get_chain_for_chart(ticker, chart_exp_snapshot),
+                )
+                if "error" not in chain_data:
+                    chart_result = await build_oi_chart(chain_data)
+                    result["chart_url"]        = chart_result.get("chart_url")
+                    result["chart_expiration"] = chart_exp_snapshot
+                    result["chart_generated"]  = chart_result.get("chart_generated", False)
+                else:
+                    result["chart_url"] = None
+                    result["chart_generated"] = False
+            except Exception as chart_err:
+                result["chart_url"] = None
+                result["chart_generated"] = False
+                result["chart_error"] = str(chart_err)
+
         return result
     except Exception as e:
         return {"error": str(e), "traceback": traceback.format_exc()}
