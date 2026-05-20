@@ -558,10 +558,13 @@ class OptionsAnalytics:
                 sorted([float(s) for s in resistance]))
 
     def _scan_smart_money(self, calls_df, puts_df, expirations, today):
-        # Get current price for strike distance filter
+        # Volume-only scan — OI is always 0 from Yahoo Finance free tier.
+        # Long-dated options trade fewer contracts/day so thresholds are lower.
+        VOLUME_MIN = 50   # minimum volume at a single strike to qualify
+        VOLUME_PCT = 85   # top 15% of strikes by volume within the expiration
+
         current_price = None
         if "strike" in calls_df.columns and not calls_df.empty:
-            # Approximate from activity-weighted center of call strikes
             try:
                 current_price = float(
                     (calls_df["strike"] * calls_df["activity"]).sum() / calls_df["activity"].sum()
@@ -571,38 +574,45 @@ class OptionsAnalytics:
 
         signals = []
         for exp in expirations:
-            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-            dte = (exp_date - today).days
-            if dte <= self.SMART_MONEY_DTE_THRESHOLD: continue
+            exp_date  = datetime.strptime(exp, "%Y-%m-%d").date()
+            dte       = (exp_date - today).days
+            if dte <= self.SMART_MONEY_DTE_THRESHOLD:
+                continue
             exp_calls = calls_df[calls_df["expiration"] == exp]
             exp_puts  = puts_df[ puts_df["expiration"]  == exp]
-            total_oi  = int(exp_calls["openInterest"].sum() + exp_puts["openInterest"].sum())
-            if total_oi == 0: continue
-            all_oi    = pd.concat([exp_calls["openInterest"], exp_puts["openInterest"]])
-            threshold = float(np.percentile(all_oi, 95)) if len(all_oi) else 0.0
+
+            all_vols  = pd.concat([exp_calls["volume"], exp_puts["volume"]])
+            if all_vols.sum() == 0:
+                continue
+            threshold = float(np.percentile(all_vols[all_vols > 0], VOLUME_PCT)) if (all_vols > 0).any() else 0.0
+
             for opt_type, df in [("call", exp_calls), ("put", exp_puts)]:
                 for _, row in df.iterrows():
-                    oi     = row["openInterest"]
+                    vol    = row["volume"]
                     strike = float(row["strike"])
-                    # Skip strikes that are implausibly far OTM (>40% from current price)
+                    if vol < VOLUME_MIN or vol < threshold:
+                        continue
                     if current_price and abs(strike - current_price) / current_price > self.SMART_MONEY_MAX_STRIKE_PCT:
                         continue
-                    if oi >= threshold and oi >= self.SMART_MONEY_MIN_ABS_OI:
-                        signals.append({
-                            "type": opt_type, "expiration": exp, "dte": dte,
-                            "strike": strike, "open_interest": int(oi),
-                            "notional_usd": int(row["notional"]),
-                            "iv_pct": round(float(row["impliedVolatility"]) * 100, 1) if row["impliedVolatility"] > self.MIN_IV else None,
-                        })
+                    signals.append({
+                        "type":         opt_type,
+                        "expiration":   exp,
+                        "dte":          dte,
+                        "strike":       strike,
+                        "volume":       int(vol),
+                        "notional_usd": int(row["notional"]),
+                        "iv_pct":       round(float(row["impliedVolatility"]) * 100, 1) if row["impliedVolatility"] > self.MIN_IV else None,
+                    })
 
-        assessment = "INSUFFICIENT_DATA"; dominant_strike = None
+        assessment = "INSUFFICIENT_DATA"
+        dominant_strike = None
         if signals:
-            sm_call = sum(s["open_interest"] for s in signals if s["type"] == "call")
-            sm_put  = sum(s["open_interest"] for s in signals if s["type"] == "put")
+            sm_call = sum(s["volume"] for s in signals if s["type"] == "call")
+            sm_put  = sum(s["volume"] for s in signals if s["type"] == "put")
             if   sm_call > sm_put * 1.5:  assessment = "ACCUMULATING"
             elif sm_put  > sm_call * 1.5: assessment = "HEDGING"
             else:                          assessment = "MIXED"
-            dominant_strike = max(signals, key=lambda x: x["open_interest"])["strike"]
+            dominant_strike = max(signals, key=lambda x: x["notional_usd"])["strike"]
 
         return {"signals": signals[:10], "assessment": assessment, "dominant_long_dated_strike": dominant_strike}
 

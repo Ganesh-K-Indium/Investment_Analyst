@@ -98,8 +98,10 @@ For each: trade size in $M, strike vs current price, call or put, what it likely
 Skip entirely if unusual_activity is empty.
 
 🧠 **Long-Dated Positioning**
-Only if smart_money.assessment is not "INSUFFICIENT_DATA".
-What the institutional long-dated positioning implies about the 3-6 month view.
+Only include this section if smart_money.assessment is not "INSUFFICIENT_DATA".
+Show the top 3 signals from smart_money.signals, each on its own line in this format:
+  $[strike] [call/put] ([expiration], [dte] days out) — [volume] contracts — $[notional]M notional
+Then one sentence: what the dominant strike and assessment label (ACCUMULATING / HEDGING / MIXED) tell us about the 3-6 month institutional view.
 
 📋 **Bottom Line**
 One paragraph (3-5 sentences) in plain English: what is the market betting on,
