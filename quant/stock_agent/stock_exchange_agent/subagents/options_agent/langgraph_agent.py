@@ -80,7 +80,7 @@ Then write these sections. Every bullet = interpretation, not a number recitatio
 
 💰 **Biggest Trades (by Dollar Flow)**
 Use top_notional_flow.calls and top_notional_flow.puts — sorted largest first.
-For each trade: [Strike] [Expiry] — $[notional]M in [call/put] premium at $[last_price]/contract
+For each trade: [Strike] [Expiry] — $[notional]M in [call/put] premium at $[last_price]/share ($[last_price x 100] per contract)
 Then: one sentence interpreting the trade (speculation, hedge, lottery ticket, accumulation).
 Show top 3 calls and top 3 puts. Compare total call notional vs put notional to state which
 side is committing more capital.
