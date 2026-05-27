@@ -150,8 +150,8 @@ class OptionsAnalytics:
         unusual = self._detect_unusual_activity(calls_df, puts_df, per_exp_results)
 
         # ── Top notional trades (dollar flow ranking) ─────────────────────────
-        top_notional_calls = self._top_notional_strikes(calls_df, "call", total_call_notional)
-        top_notional_puts  = self._top_notional_strikes(puts_df,  "put",  total_put_notional)
+        top_notional_calls = self._top_notional_strikes(calls_df, "call", total_call_notional, current_price)
+        top_notional_puts  = self._top_notional_strikes(puts_df,  "put",  total_put_notional,  current_price)
 
         return {
             "ticker":         ticker_symbol,
@@ -242,9 +242,8 @@ class OptionsAnalytics:
             if current_price is None:
                 current_price = self._get_current_price(tk, [])
 
-            total_oi    = calls["openInterest"].sum() + puts["openInterest"].sum()
-            metric_used = "oi" if total_oi > 0 else "volume"
-            act_col     = "openInterest" if metric_used == "oi" else "volume"
+            metric_used = "volume"
+            act_col     = "volume"
 
             if current_price:
                 # Tight ±10% window for the chart — avoids deep ITM/OTM dead zones
@@ -350,9 +349,8 @@ class OptionsAnalytics:
 
                 dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
 
-                total_oi    = int(calls["openInterest"].sum() + puts["openInterest"].sum())
-                metric_used = "oi" if total_oi > 0 else "volume"
-                act_col     = "openInterest" if metric_used == "oi" else "volume"
+                metric_used = "volume"
+                act_col     = "volume"
 
                 call_act      = int(calls[act_col].sum())
                 put_act       = int(puts[act_col].sum())
@@ -413,9 +411,7 @@ class OptionsAnalytics:
 
     def _add_activity_col(self, df):
         df = df.copy()
-        df["activity"] = df.apply(
-            lambda r: r["openInterest"] if r["openInterest"] > 0 else r["volume"], axis=1
-        )
+        df["activity"] = df["volume"]
         return df
 
     def _calculate_max_pain(self, calls, puts):
@@ -499,13 +495,22 @@ class OptionsAnalytics:
             })
         return result
 
-    def _top_notional_strikes(self, df, option_type, total_notional):
+    def _top_notional_strikes(self, df, option_type, total_notional, current_price=None):
         """Top (strike, expiration) pairs ranked by dollar flow — each expiry treated separately."""
         if df.empty:
             return []
+        # Filter out deep ITM/OTM contracts (beyond ±20% of current price) — they inflate
+        # notional via intrinsic value rather than directional bets
+        filtered = df
+        if current_price:
+            lo = current_price * 0.80
+            hi = current_price * 1.20
+            filtered = df[(df["strike"] >= lo) & (df["strike"] <= hi)]
+            if filtered.empty:
+                filtered = df  # fall back if filter removes everything
         # Rank each unique (strike, expiration) contract independently
         grouped = (
-            df.groupby(["strike", "expiration"])
+            filtered.groupby(["strike", "expiration"])
             .agg(notional=("notional", "sum"), volume=("volume", "sum"),
                  lastPrice=("lastPrice", "first"), impliedVolatility=("impliedVolatility", "first"))
             .reset_index()
