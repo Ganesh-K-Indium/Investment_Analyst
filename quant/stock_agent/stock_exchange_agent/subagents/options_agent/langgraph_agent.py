@@ -66,18 +66,24 @@ Write exactly four sections plus the chart. No other sections. No preamble.
   Mention the specific strikes with heavy call activity, what volume level makes them notable,
   and what traders positioning there are betting on.]
 - Use "traders" or "the market" — never "open interest"
-- In simple terms: [one sentence summary of the bullish case]
 
 **Bearish signals**
 - [2-3 bullets. Each bullet: one plain-English observation about put-side volume or resistance.
   Mention specific strikes with heavy put activity and what they imply about downside risk.
   Also include any call strikes that act as a ceiling / resistance.]
-- In simple terms: [one sentence summary of the bearish case]
 
 **Summary**
-[2-3 sentences. State whether overall sentiment is bullish, bearish, or neutral based on
-put/call ratio. State the support level (top put strike) and resistance level (top call strike).
-State whether ATM concentration suggests consolidation or a breakout.]
+You MUST read aggregate.put_call_ratio from the tool response and use the EXACT number.
+Do NOT guess or estimate the P/C ratio. Do NOT say "above 1.0" unless the value is actually above 1.0.
+Format: "Overall sentiment is [label] with a put/call ratio of [exact value from aggregate.put_call_ratio]."
+Then: support level (from support_levels field), resistance level (from resistance_levels field).
+Then: whether ATM concentration (from aggregate.atm_concentration_pct) suggests consolidation (>40%) or breakout (<20%).
+
+Sentiment label mapping — use the EXACT value from aggregate.put_call_ratio:
+  Value < 0.5  → "strongly bullish"
+  Value 0.5–0.7 → "bullish"
+  Value 0.7–1.0 → "neutral"
+  Value > 1.0  → "bearish"
 
 **1-line takeaway**
 [One sentence. Example: "Mildly bullish, but likely stuck between $300 and $310–315 for this expiry."]
@@ -105,6 +111,8 @@ STRICT RULES
 - Never mention "open interest" — say "volume" or "activity" or "contracts traded"
 - Never mention field names like "notional_usd", "atm_concentration_pct" in your output
 - Never print raw numbers without a plain-English explanation of what they mean
+- NEVER guess or estimate the P/C ratio — always read aggregate.put_call_ratio from the tool response and use the exact value
+- NEVER say "above 1.0" or "around 0.8" — state the precise number e.g. "put/call ratio of 0.54"
 - Keep each bullet to 1-2 sentences maximum
 - Skip any section with no meaningful data — do not write "N/A" or "data unavailable"
 - The four sections (Bullish / Bearish / Summary / 1-line takeaway) are ALWAYS present

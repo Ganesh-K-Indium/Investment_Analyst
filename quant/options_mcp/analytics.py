@@ -91,13 +91,8 @@ class OptionsAnalytics:
         total_call_oi      = int(calls_df["openInterest"].sum())
         total_put_oi       = int(puts_df["openInterest"].sum())
 
-        # Prefer OI-based ratio if any expiration has OI; else volume
-        if total_call_oi > 0:
-            agg_metric   = "oi"
-            agg_call_act = total_call_oi
-            agg_put_act  = total_put_oi
-            agg_pc_ratio = round(total_put_oi / total_call_oi, 4)
-        elif total_call_vol > 0:
+        # Always use volume — OI is unreliable intraday on Yahoo Finance free tier
+        if total_call_vol > 0:
             agg_metric   = "volume"
             agg_call_act = total_call_vol
             agg_put_act  = total_put_vol
