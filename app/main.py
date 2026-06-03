@@ -50,6 +50,18 @@ from app.api.reports import router as reports_router
 import app.api.rag as rag_router_module
 import app.api.quant as quant_router_module
 from app.services.stock_agent import initialize_stock_agents, cleanup_stock_agents
+import asyncio
+from ingestion.ingest_macro_data import run_ingestion
+from pathlib import Path
+
+async def macro_sync_loop():
+    while True:
+        await asyncio.sleep(86400) # Wait 24 hours
+        try:
+            logger.info("Running scheduled macro data sync...")
+            await asyncio.to_thread(run_ingestion)
+        except Exception as e:
+            logger.error(f"Scheduled macro sync failed: {e}")
 
 # Initialize FastAPI
 app = FastAPI(
@@ -112,6 +124,17 @@ async def startup_event():
         logger.warning("Failed to initialize Stock Analysis System: %s", e)
         quant_router_module.set_stock_supervisor(None)
         quant_router_module.set_agents_status(False)
+
+    logger.info("Checking Macro Data Initialization...")
+    macro_metadata = Path("data/macro/metadata.json")
+    if not macro_metadata.exists():
+        logger.info("Macro data missing. Scheduling background ingestion (non-blocking)...")
+        asyncio.create_task(asyncio.to_thread(run_ingestion))
+    else:
+        logger.info("Macro data found.")
+        
+    logger.info("Starting background macro sync task...")
+    asyncio.create_task(macro_sync_loop())
 
     logger.info("=" * 70)
     logger.info("Investment Analyst API v2.1 Ready!")

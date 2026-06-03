@@ -1,5 +1,6 @@
 "This module contains all info about about the nodes in the graph"
 import re
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 from dotenv import load_dotenv
 from langchain_core.documents import Document
@@ -10,7 +11,10 @@ from langchain_tavily import TavilySearch
 from rag.prompts.prompts import (get_rag_chain,
                                                           get_question_rewriter_chain,
                                                           get_financial_analyst_grader_chain,
-                                                          get_financial_data_extractor_chain)
+                                                          get_financial_data_extractor_chain,
+                                                          MACRO_PLANNER_SYSTEM_PROMPT,
+                                                          MACRO_SYNTHESIS_PROMPT,
+                                                          MACRO_FEW_SHOT)
 from rag.vectordb.client import load_vector_database
 from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company
 load_dotenv()
@@ -2901,3 +2905,617 @@ def scenario_generate_report(state):
         "Intermediate_message": final_report,
         "web_searched": True
     }
+
+# ============================================================================
+# MACRO FRAMEWORK
+# ============================================================================
+
+def detect_macro_query(state):
+    """Detect if the query is asking for macroeconomic data."""
+    print("=" * 80)
+    print(" MACRO QUERY DETECTION")
+    print("=" * 80)
+
+    # If alpha or scenario mode already active, skip macro detection
+    if state.get("alpha_mode", False) or state.get("scenario_mode", False):
+        print(" Higher priority mode active – skipping macro detection")
+        print("=" * 80 + "\n")
+        return {"macro_mode": False}
+
+    messages = state["messages"]
+    question = messages[-1].content.lower()
+
+    # Simple keyword detection
+    macro_keywords = [
+        "macro", "gdp", "inflation", "cpi", "pce", "ppi", "eci",
+        "gross domestic product", "consumer price index", "employment cost",
+        "producer price index", "economy", "interest rate",
+        "yield curve", "yield spread", "treasury yield", "treasury curve",
+        "bond yield", "fed funds", "federal funds", "fedfunds",
+        "maturity", "10-year", "2-year", "30-year", "t-bill", "t-bond"
+    ]
+    
+    is_macro = any(kw in question for kw in macro_keywords)
+    
+    if is_macro:
+        print(" MACRO MODE ACTIVATED")
+        print(f"   Query: {question}")
+        print("=" * 80 + "\n")
+        return {"macro_mode": True}
+    else:
+        print(" Normal query (not a Macro request)")
+        print("=" * 80 + "\n")
+        return {"macro_mode": False}
+
+def macro_analyze_query(state):
+    """
+    MACRO STEP 1: Understand the user's macro query.
+    
+    Uses an LLM to extract structured parameters from the natural language query:
+    - Which indicator(s) to fetch
+    - Time granularity (monthly vs quarterly)
+    - Specific periods (or 'latest' if none mentioned)
+    - Comparison type (YoY, QoQ/MoM)
+    
+    Output is fully inspectable in state['macro_analysis'] before any data is fetched.
+    """
+    print("=" * 80)
+    print(" MACRO STEP 1: QUERY ANALYSIS")
+    print("=" * 80)
+    
+    messages = state["messages"]
+    question = messages[-1].content
+    
+    from pydantic import BaseModel, Field
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import SystemMessage, HumanMessage
+    
+    class MacroExtraction(BaseModel):
+        indicator: str = Field(description=(
+            "The macro indicator code: GDP, GDPCA, CPI, PCE, PPI, ECI, FEDFUNDS, "
+            "GS1M, GS3M, GS6M, GS1, GS2, GS3, GS5, GS7, GS10, GS20, GS30, or 'ALL'."
+        ))
+        period1: Optional[str] = Field(None, description=(
+            "The primary period. Use EXACT format from the user's query: "
+            "'Q1 2026' for quarters, 'January 2025' for months. "
+            "Leave None if no date is mentioned (will use latest available)."
+        ))
+        period2: Optional[str] = Field(None, description=(
+            "The comparison period. Same format rules as period1. "
+            "Leave None to auto-calculate based on comparison_type."
+        ))
+        granularity: str = Field("native", description=(
+            "'annual' if user specifies a year (e.g. 2025), "
+            "'monthly' if user specifies months (January, Feb, etc.), "
+            "'quarterly' if user specifies quarters (Q1, Q2), "
+            "'native' if no specific period is mentioned (system uses the metric's default frequency)."
+        ))
+        comparison_type: str = Field("YoY", description=(
+            "The comparison type to use ('YoY' or 'QoQ'). "
+            "If the user does NOT explicitly specify a type: for GDP default to 'QoQ', for all others (CPI, ECI, etc) default to 'YoY'."
+        ))
+        duration: Optional[str] = Field(None, description=(
+            "If the user asks for a historical trend or a chart over time, extract the duration "
+            "(e.g., '12M' for 12 months, '5Y' for 5 years, '10Y' for 10 years). Leave None if no trend is requested."
+        ))
+
+    class MacroQueryPlan(BaseModel):
+        queries: List[MacroExtraction] = Field(description="List of macro queries to execute.")
+
+    planner_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    structured_llm = planner_llm.with_structured_output(MacroQueryPlan)
+    
+    system_prompt = MACRO_PLANNER_SYSTEM_PROMPT
+    
+    try:
+        plan = structured_llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=question)
+        ])
+        queries_list = [q.model_dump() for q in plan.queries]
+    except Exception as e:
+        print(f"   ✗ Analysis failed: {e}. Falling back to ALL indicators.")
+        queries_list = [{"indicator": "ALL", "period1": None, "period2": None,
+                         "granularity": "native", "comparison_type": "YoY", "duration": None}]
+    
+    # Log the analysis for transparency
+    print(f"   Extracted {len(queries_list)} query/queries:")
+    for i, q in enumerate(queries_list, 1):
+        print(f"     [{i}] {q['indicator']} | {q['granularity']} | "
+              f"{q.get('period1', 'latest')} vs {q.get('period2', 'auto')} | {q['comparison_type']}")
+    
+    print("=" * 80 + "\n")
+    
+    return {
+        "macro_analysis": {
+            "original_question": question,
+            "queries": queries_list
+        }
+    }
+
+
+def macro_fetch_and_calculate(state):
+    """
+    MACRO STEP 2: Fetch data and run deterministic calculations.
+    
+    This node is 100% deterministic Python — NO LLM involved.
+    Takes the structured analysis from Step 1, fetches the correct data
+    from local CSVs at the correct granularity, and computes the math.
+    
+    Rules enforced here (not by LLM):
+    - No date mentioned → uses latest available data, records actual period used
+    - Future/unavailable date → falls back to latest, records explicit warning
+    - Monthly granularity → skips quarterly aggregation, uses raw monthly values
+    """
+    print("=" * 80)
+    print(" MACRO STEP 2: FETCH & CALCULATE (deterministic)")
+    print("=" * 80)
+    
+    from app.utils.macro_utils import get_macro_comparison, get_all_macro_latest
+    
+    analysis = state.get("macro_analysis", {})
+    queries = analysis.get("queries", [])
+    
+    calculation_results = []
+    
+    for i, q in enumerate(queries, 1):
+        indicator = q["indicator"].upper()
+        period1 = q.get("period1")
+        period2 = q.get("period2")
+        granularity = q.get("granularity", "native")
+        comparison_type = q.get("comparison_type", "YoY")
+        duration = q.get("duration")
+        
+        print(f"   [{i}/{len(queries)}] {indicator} | {granularity} | "
+              f"{period1 or 'latest'} vs {period2 or 'auto'} | {comparison_type} | duration={duration}")
+        
+        if indicator == "ALL":
+            result = get_all_macro_latest(comparison_type=comparison_type)
+        else:
+            result = get_macro_comparison(
+                indicator=indicator,
+                period1=period1,
+                period2=period2,
+                comparison_type=comparison_type,
+                granularity=granularity
+            )
+        
+        # Log what actually happened
+        if "error" in result:
+            print(f"       ✗ Error: {result['error']}")
+        else:
+            actual_p1 = result.get("period1", "N/A")
+            actual_p2 = result.get("period2", "N/A")
+            val1 = result.get("val1", "N/A")
+            val2 = result.get("val2", "N/A")
+            print(f"       ✓ {actual_p1}={val1} vs {actual_p2}={val2}")
+            if "info" in result:
+                print(f"       ⚠ Fallback: {result['info']}")
+                
+        # If a trend/duration was requested, fetch the historical data so the LLM can write a factual summary
+        if duration and indicator != "ALL":
+            from app.utils.macro_utils import load_indicator_data
+            import pandas as pd
+            df = load_indicator_data(indicator)
+            if df is not None and not df.empty:
+                df = df.sort_values(by="date")
+                duration_upper = duration.upper()
+                months = int(duration_upper[:-1]) if duration_upper.endswith("M") else (int(duration_upper[:-1]) * 12 if duration_upper.endswith("Y") else 12)
+                
+                latest_date = df['date'].max()
+                start_date = latest_date - pd.DateOffset(months=months)
+                df_history = df[df['date'] >= start_date]
+                
+                history_dict = {}
+                for _, row in df_history.iterrows():
+                    history_dict[row['date'].strftime('%Y-%m')] = row['value']
+                result["history_trend"] = history_dict
+        
+        calculation_results.append({
+            "requested": {
+                "indicator": indicator,
+                "period1": period1,
+                "period2": period2,
+                "granularity": granularity,
+                "comparison_type": comparison_type,
+                "duration": duration
+            },
+            "result": result
+        })
+    
+    # Post-process for Yield Spread (if exactly 2 rate queries)
+    if len(calculation_results) == 2:
+        res1 = calculation_results[0]["result"]
+        res2 = calculation_results[1]["result"]
+        
+        from app.utils.macro_utils import calculate_yield_spread
+        spread_info = calculate_yield_spread(res1, res2)
+        
+        if spread_info:
+            calculation_results.append({
+                "requested": {"special": "yield_spread_calculation"},
+                "result": spread_info
+            })
+
+    print(f"\n   Completed {len(calculation_results)} calculation(s)")
+    print("=" * 80 + "\n")
+    
+    return {"macro_calculation_results": calculation_results}
+
+
+def macro_format_answer(state):
+    """
+    MACRO STEP 3: Format the calculation results into a professional answer.
+    
+    Takes the deterministic calculation results from Step 2 and uses an LLM
+    ONLY for natural language formatting. The numbers are already computed
+    and final — the LLM cannot change them, only present them.
+    
+    Also handles yield curve chart generation if applicable.
+    """
+    print("=" * 80)
+    print(" MACRO STEP 3: FORMAT ANSWER")
+    print("=" * 80)
+    
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
+    
+    analysis = state.get("macro_analysis", {})
+    question = analysis.get("original_question", "")
+    calc_results = state.get("macro_calculation_results", [])
+    
+    # Build data context from deterministic results
+    data_context = ""
+    for i, item in enumerate(calc_results, 1):
+        data_context += f"Query {i}:\n"
+        data_context += f"  Requested: {item['requested']}\n"
+        data_context += f"  Result: {item['result']}\n\n"
+    
+    # ──── Source Attribution: feed citation metadata to LLM ────
+    from app.utils.macro_utils import build_source_attribution_context
+    
+    attribution_text = build_source_attribution_context(calc_results)
+    if attribution_text:
+        data_context += attribution_text
+        print("   Source attribution attached")
+
+    synthesis_prompt = MACRO_SYNTHESIS_PROMPT + "\n\n" + MACRO_FEW_SHOT
+    
+    generator_llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    response = generator_llm.invoke([
+        SystemMessage(content=synthesis_prompt),
+        HumanMessage(content=f"Question: {question}\n\nCalculated Data:\n{data_context}")
+    ])
+    final_answer = response.content
+    print(f"   Generated response: {len(final_answer)} chars")
+    
+    # Dynamic Chart Generation via Tag Parsing
+    import re
+    chart_info = {"chart_url": None, "chart_filename": None}
+    
+    # Find any [CHART: ...] tag in the final answer
+    chart_tag_pattern = re.compile(r'\[CHART:(.*?)\]', re.IGNORECASE)
+    match = chart_tag_pattern.search(final_answer)
+    
+    if match:
+        tag_content = match.group(1)
+        # Parse key=value pairs, allowing for optional quotes
+        kv_pattern = re.compile(r'(\w+)=["\']?([^"\'\s\]]+)["\']?')
+        params = dict(kv_pattern.findall(tag_content))
+        
+        if "type" in params:
+            c_type = params["type"]
+            c_metrics = params.get("metrics", "").split(',') if params.get("metrics") else []
+            c_duration = params.get("duration", "12M")
+            c_period1 = params.get("period1")
+            c_period2 = params.get("period2")
+            
+            print(f"   Extracted CHART tag parameters: {params}")
+            chart_info = generate_dynamic_chart(c_type, c_metrics, c_duration, c_period1, c_period2)
+            
+            if chart_info and chart_info.get("chart_url"):
+                md_image = f"\n![{c_type} chart]({chart_info['chart_url']})\n"
+                final_answer = final_answer[:match.start()] + md_image + final_answer[match.end():]
+            else:
+                # Remove the tag silently if generation fails
+                final_answer = final_answer[:match.start()] + final_answer[match.end():]
+        else:
+            # Tag malformed, remove it silently
+            final_answer = final_answer[:match.start()] + final_answer[match.end():]
+            
+    print("=" * 80 + "\n")
+    
+    return {
+        "messages": [AIMessage(content=final_answer)],
+        "macro_report": final_answer,
+        "Intermediate_message": final_answer,
+        "chart_url": chart_info.get("chart_url"),
+        "chart_filename": chart_info.get("chart_filename")
+    }
+
+def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period1: Optional[str] = None, period2: Optional[str] = None) -> dict:
+    """
+    Generate a dynamic macro chart based on type, metrics, and duration.
+    Returns a dict with 'chart_url' and 'chart_filename'.
+    """
+    try:
+        import plotly.graph_objects as go
+        import pandas as pd
+        import datetime
+        import os
+        from app.utils.macro_utils import load_indicator_data
+        
+        fig = go.Figure()
+        
+        if c_type == "yield_curve":
+            # For yield curve, we forward the specific periods to show snapshot comparison
+            return generate_yield_curve_chart(period1, period2)
+            
+        elif c_type == "spread_trend":
+            if len(c_metrics) < 2:
+                print("spread_trend requires at least 2 metrics")
+                return {"chart_url": None, "chart_filename": None}
+                
+            df1 = load_indicator_data(c_metrics[0])
+            df2 = load_indicator_data(c_metrics[1])
+            
+            if df1 is None or df2 is None or df1.empty or df2.empty:
+                return {"chart_url": None, "chart_filename": None}
+                
+            # Base end_date on the max date found in either dataset to handle lagging/offline data gracefully
+            end_date = max(df1['date'].max(), df2['date'].max())
+            
+            # Determine start date relative to the resolved end_date
+            if c_duration and c_duration.endswith("M"):
+                months = int(c_duration[:-1])
+                start_date = end_date - pd.DateOffset(months=months)
+            elif c_duration and c_duration.endswith("Y"):
+                years = int(c_duration[:-1])
+                start_date = end_date - pd.DateOffset(years=years)
+            else:
+                start_date = end_date - pd.DateOffset(months=12)
+                
+            df1 = df1.set_index('date').sort_index()
+            df2 = df2.set_index('date').sort_index()
+            
+            # Combine the full datasets first, then forward-fill to align dates perfectly
+            df_combined = pd.concat([df1['value'], df2['value']], axis=1, keys=['val1', 'val2']).ffill()
+            
+            # Slice by start_date and drop remaining NaNs (points before both series started)
+            df_combined = df_combined[df_combined.index >= start_date].dropna()
+            
+            if df_combined.empty:
+                print("No overlapping data found in the specified duration")
+                return {"chart_url": None, "chart_filename": None}
+                
+            df_combined['spread'] = df_combined['val1'] - df_combined['val2']
+            
+            fig.add_trace(go.Scatter(
+                x=df_combined.index,
+                y=df_combined['spread'],
+                mode='lines',
+                name=f"{c_metrics[0]} - {c_metrics[1]} Spread",
+                line=dict(color='#d62728', width=3)
+            ))
+            
+            title = f"Yield Spread: {c_metrics[0]} minus {c_metrics[1]} ({c_duration})"
+            y_title = "Spread (%)"
+            
+        elif c_type == "historical_trend":
+            # Find the reference end date across all selected metrics
+            max_dates = []
+            for metric in c_metrics:
+                df = load_indicator_data(metric)
+                if df is not None and not df.empty:
+                    max_dates.append(df['date'].max())
+            
+            end_date = max(max_dates) if max_dates else pd.Timestamp.now()
+            
+            if c_duration and c_duration.endswith("M"):
+                months = int(c_duration[:-1])
+                start_date = end_date - pd.DateOffset(months=months)
+            elif c_duration and c_duration.endswith("Y"):
+                years = int(c_duration[:-1])
+                start_date = end_date - pd.DateOffset(years=years)
+            else:
+                start_date = end_date - pd.DateOffset(months=12)
+                
+            has_data = False
+            for metric in c_metrics:
+                df = load_indicator_data(metric)
+                if df is not None and not df.empty:
+                    # Filter and sort individually
+                    df = df[df['date'] >= start_date].sort_values('date')
+                    if not df.empty:
+                        fig.add_trace(go.Scatter(
+                            x=df['date'],
+                            y=df['value'],
+                            mode='lines',
+                            name=metric,
+                            line=dict(width=2)
+                        ))
+                        has_data = True
+            
+            if not has_data:
+                print("No data found for any of the metrics in the specified duration")
+                return {"chart_url": None, "chart_filename": None}
+                
+            title = f"Historical Trend: {', '.join(c_metrics)} ({c_duration})"
+            y_title = "Value"
+            
+        else:
+            print(f"Unknown chart type: {c_type}")
+            return {"chart_url": None, "chart_filename": None}
+            
+        fig.update_layout(
+            title=title,
+            xaxis_title="Date",
+            yaxis_title=y_title,
+            template="plotly_white",
+            height=500,
+            width=800,
+            hovermode="x unified"
+        )
+        
+        # Save locally
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{c_type}_{timestamp}.png"
+        output_dir = "generated_charts"
+        os.makedirs(output_dir, exist_ok=True)
+        local_path = os.path.join(output_dir, filename)
+        
+        fig.write_image(local_path, width=800, height=500)
+        print(f"✓ Dynamic chart saved locally: {local_path}")
+        
+        # Upload to Cloudinary
+        chart_url = None
+        if os.getenv("CLOUDINARY_CLOUD_NAME"):
+            from app.cloudinary import upload_to_cloudinary
+            print(f"Uploading {c_type} chart to Cloudinary...")
+            result = upload_to_cloudinary(local_path)
+            if result.get("success"):
+                chart_url = result.get("url")
+                print(f"✓ Dynamic chart uploaded: {chart_url}")
+            else:
+                print(f"Cloudinary upload failed: {result.get('error')}")
+                
+        return {
+            "chart_url": chart_url,
+            "chart_filename": filename
+        }
+        
+    except Exception as e:
+        print(f"Dynamic chart generation error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"chart_url": None, "chart_filename": None}
+
+
+def generate_yield_curve_chart(period1: Optional[str] = None, period2: Optional[str] = None) -> dict:
+    """
+    Helper function to generate a Plotly yield curve chart for the specified period(s).
+    Plots maturities from 1-Month to 30-Year.
+    """
+    try:
+        import plotly.graph_objects as go
+        import datetime
+        import os
+        from app.utils.macro_utils import get_macro_comparison
+        
+        maturities = [
+            ("GS1M", "1M"),
+            ("GS3M", "3M"),
+            ("GS6M", "6M"),
+            ("GS1", "1Y"),
+            ("GS2", "2Y"),
+            ("GS3", "3Y"),
+            ("GS5", "5Y"),
+            ("GS7", "7Y"),
+            ("GS10", "10Y"),
+            ("GS20", "20Y"),
+            ("GS30", "30Y")
+        ]
+        
+        x_labels = []
+        y_val1 = []
+        y_val2 = []
+        
+        actual_period1 = None
+        actual_period2 = None
+        
+        for indicator, label in maturities:
+            res = get_macro_comparison(indicator, period1, period2)
+            if "error" not in res:
+                if not actual_period1:
+                    actual_period1 = res.get("period1")
+                if not actual_period2 and period2:
+                    actual_period2 = res.get("period2")
+                
+                x_labels.append(label)
+                y_val1.append(res["val1"])
+                if period2 and "val2" in res:
+                    y_val2.append(res["val2"])
+        
+        if not y_val1:
+            print("No yield curve data found to plot")
+            return {"chart_url": None, "chart_filename": None}
+            
+        fig = go.Figure()
+        
+        # Add primary period line
+        fig.add_trace(go.Scatter(
+            x=x_labels,
+            y=y_val1,
+            mode='lines+markers',
+            name=str(actual_period1 or period1 or "Latest"),
+            line=dict(color='#1f77b4', width=3),
+            marker=dict(size=8, symbol='circle')
+        ))
+        
+        # Add secondary period line if present
+        if y_val2 and len(y_val2) == len(y_val1):
+            fig.add_trace(go.Scatter(
+                x=x_labels,
+                y=y_val2,
+                mode='lines+markers',
+                name=str(actual_period2 or period2),
+                line=dict(color='#ff7f0e', width=3, dash='dash'),
+                marker=dict(size=8, symbol='diamond')
+            ))
+            
+        title = "U.S. Treasury Yield Curve"
+        if actual_period2:
+            title += f": {actual_period1} vs {actual_period2}"
+        elif actual_period1:
+            title += f": {actual_period1}"
+            
+        fig.update_layout(
+            title=title,
+            xaxis_title="Maturity",
+            yaxis_title="Yield (%)",
+            template="plotly_white",
+            height=500,
+            width=800,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            hovermode="x unified"
+        )
+        
+        # Save locally
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"yield_curve_{timestamp}.png"
+        output_dir = "generated_charts"
+        os.makedirs(output_dir, exist_ok=True)
+        local_path = os.path.join(output_dir, filename)
+        
+        fig.write_image(local_path, width=800, height=500)
+        print(f"✓ Yield curve chart saved locally: {local_path}")
+        
+        # Upload to Cloudinary
+        chart_url = None
+        if os.getenv("CLOUDINARY_CLOUD_NAME"):
+            from app.cloudinary import upload_to_cloudinary
+            print("Uploading yield curve chart to Cloudinary...")
+            result = upload_to_cloudinary(local_path)
+            if result.get("success"):
+                chart_url = result.get("url")
+                print(f"✓ Yield curve chart uploaded: {chart_url}")
+            else:
+                print(f"Cloudinary upload failed: {result.get('error')}")
+                
+        return {
+            "chart_url": chart_url,
+            "chart_filename": filename
+        }
+        
+    except Exception as e:
+        print(f"Yield curve chart generation error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"chart_url": None, "chart_filename": None}
+

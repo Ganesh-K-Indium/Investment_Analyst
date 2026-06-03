@@ -72,3 +72,8 @@ class GraphState(TypedDict):
     scenario_mode: bool  # Whether this is a Bull/Bear/Base scenario query
     scenario_data: Dict[str, Any]  # Web-collected data buckets for scenario analysis
     scenario_report: str  # Final scenario report combining all three cases
+    # Macro Framework fields (step-by-step pipeline)
+    macro_mode: bool
+    macro_analysis: Dict[str, Any]        # Step 1 output: structured query understanding (indicator, granularity, periods, comparison_type)
+    macro_calculation_results: List[Dict[str, Any]]  # Step 2 output: deterministic calculation results from Python
+    macro_report: str                      # Step 3 output: LLM-formatted final answer

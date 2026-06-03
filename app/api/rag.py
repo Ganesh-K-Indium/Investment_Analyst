@@ -160,6 +160,8 @@ async def ask_agent(
                 "portfolio_id": portfolio.id,
                 "portfolio_name": portfolio.name,
                 "company_filter": company_tickers,
+                "chart_url": result.get("chart_url"),
+                "chart_filename": result.get("chart_filename"),
                 "vectorstore_searched": result.get("vectorstore_searched", False),
                 "web_searched": result.get("web_searched", False),
                 "vectorstore_quality": result.get("vectorstore_quality", "none"),
@@ -196,6 +198,8 @@ async def ask_agent(
             "portfolio_name": portfolio.name,
             "company_filter": company_tickers,
             "ticker": None,
+            "chart_url": result.get("chart_url"),
+            "chart_filename": result.get("chart_filename"),
             "messages": [
                 {
                     "type": msg.__class__.__name__,

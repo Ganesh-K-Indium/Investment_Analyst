@@ -12,7 +12,9 @@ from rag.graph.nodes import (web_search, retrieve,
                          preprocess_and_analyze_query,
                          generate_comparison_chart,
                          detect_alpha_query, alpha_dimension_retrieve, alpha_generate_report,
-                         detect_scenario_query, scenario_data_retrieve, scenario_generate_report)
+                         detect_scenario_query, scenario_data_retrieve, scenario_generate_report,
+                         detect_macro_query, macro_analyze_query,
+                         macro_fetch_and_calculate, macro_format_answer)
 from rag.graph.edges import (route_question, decide_to_generate,
                          decide_chart_generation,
                          route_alpha_workflow,
@@ -60,6 +62,12 @@ class BuildingGraph:
         workflow.add_node("scenario_retrieve", time_node("scenario_retrieve")(scenario_data_retrieve))
         workflow.add_node("scenario_generate", time_node("scenario_generate")(scenario_generate_report))
         
+        # Add Macro Framework nodes (3-step pipeline)
+        workflow.add_node("detect_macro", time_node("detect_macro")(detect_macro_query))
+        workflow.add_node("macro_analyze", time_node("macro_analyze")(macro_analyze_query))
+        workflow.add_node("macro_calculate", time_node("macro_calculate")(macro_fetch_and_calculate))
+        workflow.add_node("macro_format", time_node("macro_format")(macro_format_answer))
+        
         # Add nodes with timing decorators
         workflow.add_node("web_search", time_node("web_search")(web_search))
         workflow.add_node("retrieve", time_node("retrieve")(retrieve))
@@ -75,13 +83,17 @@ class BuildingGraph:
         # detect_alpha -> detect_scenario (second: check for Bull/Bear/Base scenario queries)
         workflow.add_edge("detect_alpha", "detect_scenario")
 
-        # detect_scenario -> route_alpha_workflow: alpha | scenario | normal
+        # detect_scenario -> detect_macro (third: check for Macro queries)
+        workflow.add_edge("detect_scenario", "detect_macro")
+
+        # detect_macro -> route_alpha_workflow: alpha | scenario | macro | normal
         workflow.add_conditional_edges(
-            "detect_scenario",
+            "detect_macro",
             route_alpha_workflow,
             {
                 "alpha": "alpha_retrieve",
                 "scenario": "scenario_retrieve",
+                "macro": "macro_analyze",
                 "normal": "preprocess",
             },
         )
@@ -101,6 +113,11 @@ class BuildingGraph:
         # Scenario workflow: scenario_retrieve -> scenario_generate -> show_result -> END
         workflow.add_edge("scenario_retrieve", "scenario_generate")
         workflow.add_edge("scenario_generate", "show_result")
+        
+        # Macro workflow: macro_analyze -> macro_calculate -> macro_format -> show_result -> END
+        workflow.add_edge("macro_analyze", "macro_calculate")
+        workflow.add_edge("macro_calculate", "macro_format")
+        workflow.add_edge("macro_format", "show_result")
         
         # Preprocess -> Router (Vectorstore vs WebSearch)
         workflow.add_conditional_edges(
@@ -170,7 +187,7 @@ class BuildingGraph:
             print("Graph compiled successfully (context-free mode)")
         
         return app
-        return app
+    
     
     async def cleanup(self):
         """No cleanup needed in context-free mode""" 
