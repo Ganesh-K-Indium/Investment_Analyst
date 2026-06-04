@@ -56,7 +56,7 @@ COPY docker-entrypoint.sh .
 RUN chmod +x docker-entrypoint.sh
 
 # Expose main API + MCP server ports
-EXPOSE 8000 8565 8566 8567
+EXPOSE 8000 8565 8566 8567 8568
 
 # Start MCP servers (background) then the main FastAPI app
 ENTRYPOINT ["./docker-entrypoint.sh"]
