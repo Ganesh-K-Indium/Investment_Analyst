@@ -3210,7 +3210,16 @@ def macro_format_answer(state):
             c_period1 = params.get("period1")
             c_period2 = params.get("period2")
             
-            print(f"   Extracted CHART tag parameters: {params}")
+            # Fallback to state queries if period parameters are not in the tag
+            if not c_period1 or not c_period2:
+                queries = analysis.get("queries", [])
+                for q in queries:
+                    if not c_period1 and q.get("period1"):
+                        c_period1 = q.get("period1")
+                    if not c_period2 and q.get("period2"):
+                        c_period2 = q.get("period2")
+            
+            print(f"   Extracted CHART tag parameters: {params} | Resolved periods: period1={c_period1}, period2={c_period2}")
             chart_info = generate_dynamic_chart(c_type, c_metrics, c_duration, c_period1, c_period2)
             
             if chart_info and chart_info.get("chart_url"):
@@ -3247,6 +3256,34 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
         
         fig = go.Figure()
         
+        def resolve_chart_dates(max_avail, period_str, duration_str):
+            end_dt = max_avail
+            if period_str:
+                try:
+                    from app.utils.macro_utils import parse_period_str
+                    gran = "quarterly" if "Q" in period_str.upper() else "monthly"
+                    p_end = parse_period_str(period_str, gran)
+                    parsed_end = p_end.to_timestamp(how='start')
+                    if parsed_end <= max_avail:
+                        end_dt = parsed_end
+                except Exception as ex:
+                    print(f"Failed to parse chart end period {period_str}: {ex}")
+            
+            try:
+                if duration_str and duration_str.endswith("M"):
+                    months = int(duration_str[:-1])
+                    start_dt = end_dt - pd.DateOffset(months=months)
+                elif duration_str and duration_str.endswith("Y"):
+                    years = int(duration_str[:-1])
+                    start_dt = end_dt - pd.DateOffset(years=years)
+                else:
+                    start_dt = end_dt - pd.DateOffset(months=12)
+            except ValueError:
+                print(f"Failed to parse duration {duration_str}, defaulting to 12M")
+                start_dt = end_dt - pd.DateOffset(months=12)
+                
+            return start_dt, end_dt
+        
         if c_type == "yield_curve":
             # For yield curve, we forward the specific periods to show snapshot comparison
             return generate_yield_curve_chart(period1, period2)
@@ -3263,17 +3300,8 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
                 return {"chart_url": None, "chart_filename": None}
                 
             # Base end_date on the max date found in either dataset to handle lagging/offline data gracefully
-            end_date = max(df1['date'].max(), df2['date'].max())
-            
-            # Determine start date relative to the resolved end_date
-            if c_duration and c_duration.endswith("M"):
-                months = int(c_duration[:-1])
-                start_date = end_date - pd.DateOffset(months=months)
-            elif c_duration and c_duration.endswith("Y"):
-                years = int(c_duration[:-1])
-                start_date = end_date - pd.DateOffset(years=years)
-            else:
-                start_date = end_date - pd.DateOffset(months=12)
+            max_avail_date = max(df1['date'].max(), df2['date'].max())
+            start_date, end_date = resolve_chart_dates(max_avail_date, period1, c_duration)
                 
             df1 = df1.set_index('date').sort_index()
             df2 = df2.set_index('date').sort_index()
@@ -3281,8 +3309,8 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
             # Combine the full datasets first, then forward-fill to align dates perfectly
             df_combined = pd.concat([df1['value'], df2['value']], axis=1, keys=['val1', 'val2']).ffill()
             
-            # Slice by start_date and drop remaining NaNs (points before both series started)
-            df_combined = df_combined[df_combined.index >= start_date].dropna()
+            # Slice by start_date and end_date, then drop remaining NaNs (points before both series started)
+            df_combined = df_combined[(df_combined.index >= start_date) & (df_combined.index <= end_date)].dropna()
             
             if df_combined.empty:
                 print("No overlapping data found in the specified duration")
@@ -3302,39 +3330,29 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
             y_title = "Spread (%)"
             
         elif c_type == "historical_trend":
-            # Find the reference end date across all selected metrics
-            max_dates = []
+            # Load each metric's DataFrame once and cache it — avoids double disk reads
+            loaded_dfs = {}
             for metric in c_metrics:
                 df = load_indicator_data(metric)
                 if df is not None and not df.empty:
-                    max_dates.append(df['date'].max())
+                    loaded_dfs[metric] = df
             
-            end_date = max(max_dates) if max_dates else pd.Timestamp.now()
-            
-            if c_duration and c_duration.endswith("M"):
-                months = int(c_duration[:-1])
-                start_date = end_date - pd.DateOffset(months=months)
-            elif c_duration and c_duration.endswith("Y"):
-                years = int(c_duration[:-1])
-                start_date = end_date - pd.DateOffset(years=years)
-            else:
-                start_date = end_date - pd.DateOffset(months=12)
+            max_avail_date = max(df['date'].max() for df in loaded_dfs.values()) if loaded_dfs else pd.Timestamp.now()
+            start_date, end_date = resolve_chart_dates(max_avail_date, period1, c_duration)
                 
             has_data = False
-            for metric in c_metrics:
-                df = load_indicator_data(metric)
-                if df is not None and not df.empty:
-                    # Filter and sort individually
-                    df = df[df['date'] >= start_date].sort_values('date')
-                    if not df.empty:
-                        fig.add_trace(go.Scatter(
-                            x=df['date'],
-                            y=df['value'],
-                            mode='lines',
-                            name=metric,
-                            line=dict(width=2)
-                        ))
-                        has_data = True
+            for metric, df in loaded_dfs.items():
+                # Filter and sort using the cached DataFrame
+                df_filtered = df[(df['date'] >= start_date) & (df['date'] <= end_date)].sort_values('date')
+                if not df_filtered.empty:
+                    fig.add_trace(go.Scatter(
+                        x=df_filtered['date'],
+                        y=df_filtered['value'],
+                        mode='lines',
+                        name=metric,
+                        line=dict(width=2)
+                    ))
+                    has_data = True
             
             if not has_data:
                 print("No data found for any of the metrics in the specified duration")
