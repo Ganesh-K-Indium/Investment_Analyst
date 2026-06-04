@@ -47,6 +47,10 @@ COPY alembic.ini .
 COPY static/     ./static/
 COPY settings.py .
 
+# Create data directories so the app starts cleanly before EFS mounts
+# EFS will overlay these at runtime — files written here persist on EFS
+RUN mkdir -p /app/data/macro /app/data
+
 # Copy entrypoint script and make it executable
 COPY docker-entrypoint.sh .
 RUN chmod +x docker-entrypoint.sh
