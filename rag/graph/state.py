@@ -77,3 +77,4 @@ class GraphState(TypedDict):
     macro_analysis: Dict[str, Any]        # Step 1 output: structured query understanding (indicator, granularity, periods, comparison_type)
     macro_calculation_results: List[Dict[str, Any]]  # Step 2 output: deterministic calculation results from Python
     macro_report: str                      # Step 3 output: LLM-formatted final answer
+    qdrant_error: Optional[str]            # Set when Qdrant connection fails (not collection-not-found)

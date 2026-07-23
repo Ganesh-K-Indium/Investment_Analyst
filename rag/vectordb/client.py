@@ -38,7 +38,8 @@ class load_vector_database():
         self.use_hybrid_search = use_hybrid_search
         self.create_if_missing = create_if_missing
         
-        # Initialize embeddings
+        # Not yet done : Initialize embeddings — text-embedding-3-large for financial phrase directionality
+
         self.embeddings = OpenAIEmbeddings()
         self.qdrant_url = os.getenv("QDRANT_URL", "")
         self.qdrant_api_key = os.getenv("QDRANT_API_KEY", '')
@@ -278,13 +279,12 @@ class load_vector_database():
             limit=limit
         )
         
-        # Final query using RRF fusion results
+        # Final query — use RRF fusion result directly (not dense re-rank which discards BM25)
         try:
             response = self.qdrant_client.query_points(
                 collection_name=self.collection_name,
                 prefetch=fusion_prefetch,
-                query=dense_vector,  # Use dense for final scoring
-                using="dense",
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
                 query_filter=global_filter,
                 limit=limit,
                 with_payload=True,
@@ -328,11 +328,13 @@ class load_vector_database():
             'sparse': []
         }
         
-        # Generate dense embeddings (OpenAI)
-        print(f"\nGenerating dense embeddings for {len(texts)} documents...")
-        for text in tqdm(texts, desc="Dense embeddings (OpenAI)", unit="doc"):
-            dense_emb = self.embeddings.embed_query(text)
-            result['dense'].append(dense_emb)
+        # Generate dense embeddings in batches of 100 (OpenAI limit is 2048, stay well under)
+        BATCH_SIZE = 100
+        print(f"\nGenerating dense embeddings for {len(texts)} documents (batch size={BATCH_SIZE})...")
+        for batch_start in tqdm(range(0, len(texts), BATCH_SIZE), desc="Dense embeddings (OpenAI)", unit="batch"):
+            batch = texts[batch_start:batch_start + BATCH_SIZE]
+            batch_embeddings = self.embeddings.embed_documents(batch)
+            result['dense'].extend(batch_embeddings)
         
         # Generate sparse embeddings (BM25)
         if self.sparse_model:

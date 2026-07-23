@@ -95,10 +95,17 @@ def decide_to_generate(state):
 
     Flow:
       grade_documents → decide_to_generate
-        ├─ "generate"              (sufficient grade, or web search already done)
+        ├─ "generate"              (sufficient grade, web search done, or qdrant_error)
         └─ "integrate_web_search"  (partial/insufficient and web search not yet done)
     """
     print("---DECIDE TO GENERATE---")
+
+    # Qdrant connection error — skip web search and go straight to generate
+    # (generate will return the user-facing error message)
+    if state.get("qdrant_error"):
+        print("---DECISION: QDRANT ERROR, ROUTE TO GENERATE FOR USER-FACING MESSAGE---")
+        return "generate"
+
     filtered_documents = state["documents"]
     web_searched = state.get("web_searched", False)
 

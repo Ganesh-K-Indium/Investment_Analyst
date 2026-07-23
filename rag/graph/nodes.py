@@ -712,8 +712,17 @@ def retrieve(state, config):
                         print(f"        No chunks found")
 
                 except Exception as e:
-                     # Likely collection not found (safe to ignore in retrieval)
-                     print(f"       Collection not found or error: {e}")
+                    err_str = str(e).lower()
+                    if any(k in err_str for k in ("not found", "404", "doesn't exist", "does not exist")):
+                        print(f"       Collection not found for {t_ticker} (not yet ingested) — skipping")
+                    else:
+                        print(f"       Qdrant connection error for {t_ticker}: {e}")
+                        return {
+                            "documents": [],
+                            "vectorstore_searched": True,
+                            "sub_query_results": {},
+                            "qdrant_error": f"Vector database is currently unavailable. Please try again shortly."
+                        }
 
             # Deduplicate and Collect results for this sub-query
             companies_found = set()
@@ -795,7 +804,17 @@ def retrieve(state, config):
                     print(f"       Found {current_collection_docs} unique chunks across requested years")
                     
                 except Exception as e:
-                    print(f"      Error searching collection for {target_ticker}: {e}")
+                    err_str = str(e).lower()
+                    if any(k in err_str for k in ("not found", "404", "doesn't exist", "does not exist")):
+                        print(f"      Collection not found for {target_ticker} (not yet ingested) — skipping")
+                    else:
+                        print(f"      Qdrant connection error for {target_ticker}: {e}")
+                        return {
+                            "documents": [],
+                            "vectorstore_searched": True,
+                            "sub_query_results": {},
+                            "qdrant_error": f"Vector database is currently unavailable. Please try again shortly."
+                        }
             
             # Final stats
             content_types = {'text': 0, 'image': 0}
@@ -828,6 +847,12 @@ def generate(state):
     messages = state["messages"]
     question = messages[-1].content
     documents = state["documents"]
+
+    # Short-circuit: surface Qdrant connection errors instead of hallucinating
+    qdrant_error = state.get("qdrant_error")
+    if qdrant_error:
+        print(f" QDRANT ERROR — returning user-facing message: {qdrant_error}")
+        return {"Intermediate_message": qdrant_error, "retry_count": state.get("retry_count", 0) + 1}
     
     # Enhanced logging for debugging
     print(f" Question: {question[:100]}...")

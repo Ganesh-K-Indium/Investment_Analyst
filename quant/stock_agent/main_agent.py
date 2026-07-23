@@ -204,8 +204,20 @@ async def main():
                 
                 # Get the current state to know how many messages exist
                 current_state = await supervisor.aget_state(config={"configurable": {"thread_id": "main_thread"}})
-                messages_before = len(current_state.values.get('messages', [])) if current_state.values else 0
-                
+                current_messages = current_state.values.get('messages', []) if current_state.values else []
+
+                # Trim history to last 20 messages (~10 turns) to prevent context overflow
+                MAX_HISTORY = 20
+                if len(current_messages) > MAX_HISTORY:
+                    print(f" Trimming message history: {len(current_messages)} → {MAX_HISTORY} messages")
+                    await supervisor.aupdate_state(
+                        config={"configurable": {"thread_id": "main_thread"}},
+                        values={"messages": current_messages[-MAX_HISTORY:]}
+                    )
+                    messages_before = MAX_HISTORY
+                else:
+                    messages_before = len(current_messages)
+
                 # Invoke supervisor with thread_id for memory persistence
                 response = await supervisor.ainvoke(
                     {"messages": [HumanMessage(content=user_input)]},
