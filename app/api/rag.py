@@ -536,7 +536,7 @@ async def run_alpha(
             db=db,
             session_id=thread_id,
             role=MessageRole.USER,
-            content=f"Run ALPHA analysis for {', '.join(resolved_tickers)}"
+            content=f"Provide 360 degree ALPHA analysis for {', '.join(resolved_tickers)} stock"
         )
 
         results = []
