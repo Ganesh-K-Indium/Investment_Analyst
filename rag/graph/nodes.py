@@ -43,7 +43,16 @@ TRUSTED_FINANCIAL_DOMAINS = [
     "stockanalysis.com",        # Stock Analysis
     "companiesmarketcap.com",   # Companies Market Cap
     "treasury.gov",        # US Treasury data
-    
+
+]
+
+# Government sources for macro/liquidity data (Liquidity dimension of ALPHA)
+GOVT_SOURCE_DOMAINS = [
+    "fdic.gov",             # FDIC - bank liquidity, deposit, and risk data
+    "federalreserve.gov",   # Federal Reserve - interest rates, monetary policy
+    "treasury.gov",         # US Treasury - yields, debt data
+    "bls.gov",              # Bureau of Labor Statistics - inflation, employment
+    "bea.gov",              # Bureau of Economic Analysis - GDP, macro indicators
 ]
 
 
@@ -1796,89 +1805,110 @@ def detect_alpha_query(state):
     print("="*80)
     print(" ALPHA QUERY DETECTION")
     print("="*80)
-    
-    messages = state["messages"]
-    question = messages[-1].content.lower()
-    
-    # Buy timing patterns
-    alpha_patterns = [
-        "good time to buy",
-        "should i buy",
-        "should i invest in",
-        "entry point",
-        "right time to buy",
-        "buy now",
-        "time to invest",
-        "good buy",
-        "worth buying",
-        "ialpha analysis of",
-        "alpha analysis of",
-        "a 360 degree analysis"
-    ]
-    
-    insider_patterns = [
-        "insider trading",
-        "open-market buying",
-        "open market buying",
-        "promoters",
-        "key management",
-        "form 4",
-        "form4"
-    ]
-    
-    is_insider_query = any(pattern in question for pattern in insider_patterns)
-    
-    # Check if query matches ALPHA pattern
-    is_alpha_query = any(pattern in question for pattern in alpha_patterns) or is_insider_query
-    
-    if is_alpha_query:
-        print(" ALPHA MODE ACTIVATED")
-        print(f"   Query: {question}")
-        
-        # Extract company/ticker from query
-        from app.utils.company_mapping import get_ticker
-        
-        # Try to extract ticker from state first
-        ticker = state.get("ticker")
-        company_filter = state.get("company_filter", [])
-        
-        # If we have a ticker or company_filter, use it
-        if ticker:
-            target_ticker = ticker
-        elif company_filter and len(company_filter) > 0:
-            target_ticker = company_filter[0]
-        else:
-            # Fallback: Try to extract from question
-            # Look for common ticker patterns
-            words = question.split()
-            target_ticker = None
-            for word in words:
-                cleaned = word.strip(',.?!').upper()
-                if len(cleaned) <= 5 and cleaned.isalpha():
-                    # Looks like a ticker
-                    target_ticker = cleaned
-                    break
-        
-        if not target_ticker:
-            print(" WARNING: Could not extract ticker/company")
-            target_ticker = "unknown"
-        
-        print(f"   Target: {target_ticker}")
+
+    # Explicit trigger: a dedicated caller (e.g. the /alpha endpoint) can seed
+    # alpha_mode/ticker directly in the initial state, bypassing keyword
+    # detection entirely. This is the only way ALPHA mode gets activated now.
+    if state.get("alpha_mode") and state.get("ticker"):
+        print(" ALPHA MODE (explicit trigger)")
+        print(f"   Target: {state.get('ticker')}")
         print("="*80 + "\n")
-        
         return {
             "alpha_mode": True,
-            "alpha_pillar": "insider_trading" if is_insider_query else None,
-            "ticker": target_ticker,
+            "alpha_pillar": state.get("alpha_pillar"),
+            "ticker": state.get("ticker"),
             "alpha_dimensions": {},
             "alpha_report": ""
         }
-    else:
-        print(" Normal RAG query (not ALPHA)")
-        print("="*80 + "\n")
-        return {
-            "alpha_mode": False
-        }
+
+    # ------------------------------------------------------------------------
+    # Keyword-based ALPHA detection from free-text chat queries — DISABLED.
+    # ALPHA is now only triggered explicitly (via the dedicated /alpha
+    # endpoint with an explicit ticker), never inferred from general chat
+    # text, to keep general chat responses focused on plain RAG/Q&A.
+    # ------------------------------------------------------------------------
+    # messages = state["messages"]
+    # question = messages[-1].content.lower()
+    #
+    # # Buy timing patterns
+    # alpha_patterns = [
+    #     "good time to buy",
+    #     "should i buy",
+    #     "should i invest in",
+    #     "entry point",
+    #     "right time to buy",
+    #     "buy now",
+    #     "time to invest",
+    #     "good buy",
+    #     "worth buying",
+    #     "ialpha analysis of",
+    #     "alpha analysis of",
+    #     "a 360 degree analysis"
+    # ]
+    #
+    # insider_patterns = [
+    #     "insider trading",
+    #     "open-market buying",
+    #     "open market buying",
+    #     "promoters",
+    #     "key management",
+    #     "form 4",
+    #     "form4"
+    # ]
+    #
+    # is_insider_query = any(pattern in question for pattern in insider_patterns)
+    #
+    # # Check if query matches ALPHA pattern
+    # is_alpha_query = any(pattern in question for pattern in alpha_patterns) or is_insider_query
+    #
+    # if is_alpha_query:
+    #     print(" ALPHA MODE ACTIVATED")
+    #     print(f"   Query: {question}")
+    #
+    #     # Extract company/ticker from query
+    #     from app.utils.company_mapping import get_ticker
+    #
+    #     # Try to extract ticker from state first
+    #     ticker = state.get("ticker")
+    #     company_filter = state.get("company_filter", [])
+    #
+    #     # If we have a ticker or company_filter, use it
+    #     if ticker:
+    #         target_ticker = ticker
+    #     elif company_filter and len(company_filter) > 0:
+    #         target_ticker = company_filter[0]
+    #     else:
+    #         # Fallback: Try to extract from question
+    #         # Look for common ticker patterns
+    #         words = question.split()
+    #         target_ticker = None
+    #         for word in words:
+    #             cleaned = word.strip(',.?!').upper()
+    #             if len(cleaned) <= 5 and cleaned.isalpha():
+    #                 # Looks like a ticker
+    #                 target_ticker = cleaned
+    #                 break
+    #
+    #     if not target_ticker:
+    #         print(" WARNING: Could not extract ticker/company")
+    #         target_ticker = "unknown"
+    #
+    #     print(f"   Target: {target_ticker}")
+    #     print("="*80 + "\n")
+    #
+    #     return {
+    #         "alpha_mode": True,
+    #         "alpha_pillar": "insider_trading" if is_insider_query else None,
+    #         "ticker": target_ticker,
+    #         "alpha_dimensions": {},
+    #         "alpha_report": ""
+    #     }
+
+    print(" Normal RAG query (not ALPHA)")
+    print("="*80 + "\n")
+    return {
+        "alpha_mode": False
+    }
 
 
 def alpha_dimension_retrieve(state):
@@ -1967,13 +1997,16 @@ def alpha_dimension_retrieve(state):
     from langchain_tavily import TavilySearch
     
     vectordb_mgr = get_vectordb_manager()
-    # All web searches restricted to trusted financial domains
-    web_search = TavilySearch(max_results=3, include_domains=TRUSTED_FINANCIAL_DOMAINS)
-    # Trends / notable trends (Horizon) fetched exclusively from SeekingAlpha
-    web_search_seekingalpha = TavilySearch(max_results=3, include_domains=["seekingalpha.com"])
+    _cur_yr = datetime.now().year - 1
+    # All web searches restricted to trusted financial domains, capped to the last 1 year
+    web_search = TavilySearch(max_results=3, include_domains=TRUSTED_FINANCIAL_DOMAINS, time_range="year")
+    # Trends / notable trends (Horizon) fetched exclusively from SeekingAlpha, capped to the last 1 year
+    web_search_seekingalpha = TavilySearch(max_results=3, include_domains=["seekingalpha.com"], time_range="year")
+    # Liquidity: latest macro/rate data straight from FDIC and other government sources
+    web_search_govt = TavilySearch(max_results=3, include_domains=GOVT_SOURCE_DOMAINS, time_range="year")
 
     alpha_dimensions = {}
-    
+
     # -------------------------------------------------------------------------
     # ALIGNMENT: VectorDB (MD&A, Governance) + Form4 Insider Trading
     # -------------------------------------------------------------------------
@@ -1981,11 +2014,11 @@ def alpha_dimension_retrieve(state):
     try:
         db_instance = vectordb_mgr.get_instance(ticker, create_if_missing=False)
 
-        # Query for MD&A and governance documents
+        # Query for MD&A and governance documents — latest filing only
         alignment_queries = [
-            f"{ticker} management discussion analysis MD&A",
-            f"{ticker} governance board independence proxy statement",
-            f"{ticker} related party transactions"
+            f"{ticker} management discussion analysis MD&A latest fiscal year {_cur_yr}",
+            f"{ticker} governance board independence proxy statement latest {_cur_yr}",
+            f"{ticker} related party transactions latest {_cur_yr}"
         ]
 
         alignment_docs = []
@@ -2046,9 +2079,9 @@ def alpha_dimension_retrieve(state):
         alpha_dimensions['alignment'] = {'source': 'vectordb+form4', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
-    # LIQUIDITY: VectorDB (risk factors) + Web (sector trends)
+    # LIQUIDITY: VectorDB (risk factors) + Web (latest FDIC / govt macro data)
     # -------------------------------------------------------------------------
-    print(" [2/5] Liquidity (Macro/Micro Environment) - VectorDB + Web")
+    print(" [2/5] Liquidity (Macro/Micro Environment) - VectorDB + Govt Sources")
     try:
         # VectorDB: Risk factors, commodity exposure
         liquidity_docs = []
@@ -2056,7 +2089,7 @@ def alpha_dimension_retrieve(state):
             f"{ticker} risk factors competitive pressures",
             f"{ticker} commodity input cost exposure raw materials"
         ]
-        
+
         for query in vdb_queries:
             results = db_instance.hybrid_search(query=query, content_type="text", limit=2)
             for point in results:
@@ -2067,51 +2100,51 @@ def alpha_dimension_retrieve(state):
                         metadata=point.payload.get('metadata', {})
                     )
                     liquidity_docs.append(doc)
-        
-        # Web: Sector headwinds, interest rate sensitivity
+
+        # Web: Latest macro/liquidity conditions straight from FDIC and other govt sources
         web_queries = [
-            f"{ticker} sector headwinds tailwinds industry trends",
-            f"{ticker} interest rate sensitivity debt structure"
+            f"latest FDIC bank liquidity deposit risk data affecting {ticker} sector",
+            f"latest Federal Reserve interest rate policy debt structure impact on {ticker}"
         ]
-        
+
         for query in web_queries:
-            web_results = web_search.invoke({"query": query})
+            web_results = web_search_govt.invoke({"query": query})
             # Parse Tavily response using helper
             sources = _parse_tavily_response(web_results, query)
             for source in sources:
                 from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
-                    metadata={'source': 'web_search', 'url': source['url'], 'title': source['title']}
+                    metadata={'source': 'govt_source', 'url': source['url'], 'title': source['title']}
                 )
                 liquidity_docs.append(doc)
-        
+
         alpha_dimensions['liquidity'] = {
-            'source': 'vectordb+web',
+            'source': 'vectordb+govt',
             'documents': liquidity_docs,
             'query_count': len(vdb_queries) + len(web_queries)
         }
-        print(f"    Retrieved {len(liquidity_docs)} chunks (mixed sources)")
-        
+        print(f"    Retrieved {len(liquidity_docs)} chunks (vectordb + govt sources)")
+
     except Exception as e:
         print(f"    Error: {e}")
-        alpha_dimensions['liquidity'] = {'source': 'vectordb+web', 'documents': [], 'query_count': 0}
+        alpha_dimensions['liquidity'] = {'source': 'vectordb+govt', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
-    # PERFORMANCE: VectorDB only (10-year financials)
+    # PERFORMANCE: VectorDB only (current year 10-K vs prior 2 years for comparison)
     # -------------------------------------------------------------------------
     print(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
     try:
-        _cur_yr = datetime.now().year
+        _prior_yr, _prior_yr2 = _cur_yr - 1, _cur_yr - 2
         performance_queries = [
-            f"{ticker} revenue net income latest annual fiscal year {_cur_yr} {_cur_yr + 1} financial results",
-            f"{ticker} operating cash flow free cash flow income statement most recent annual {_cur_yr} {_cur_yr + 1}",
-            f"{ticker} EBITDA margins ROE profitability metrics latest fiscal year {_cur_yr} {_cur_yr + 1}"
+            f"{ticker} revenue net income annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2} financial results comparison",
+            f"{ticker} operating cash flow free cash flow income statement annual {_cur_yr} {_prior_yr} {_prior_yr2}",
+            f"{ticker} EBITDA margins ROE profitability metrics annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2}"
         ]
-        
+
         performance_docs = []
         for query in performance_queries:
-            results = db_instance.hybrid_search(query=query, content_type="text", limit=3)
+            results = db_instance.hybrid_search(query=query, content_type="text", limit=4)
             for point in results:
                 if hasattr(point, 'payload'):
                     from langchain_core.documents import Document
@@ -2120,14 +2153,14 @@ def alpha_dimension_retrieve(state):
                         metadata=point.payload.get('metadata', {})
                     )
                     performance_docs.append(doc)
-        
+
         alpha_dimensions['performance'] = {
             'source': 'vectordb',
-            'documents': performance_docs[:6],
+            'documents': performance_docs[:9],
             'query_count': len(performance_queries)
         }
-        print(f"    Retrieved {len(performance_docs[:6])} chunks")
-        
+        print(f"    Retrieved {len(performance_docs[:9])} chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
+
     except Exception as e:
         print(f"    Error: {e}")
         alpha_dimensions['performance'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
@@ -2175,15 +2208,17 @@ def alpha_dimension_retrieve(state):
     try:
         action_docs = []
 
-        # Domains that reliably display live technical indicators
+        # Domains that reliably display live technical indicators, capped to the last 1 year
         web_search_technical = TavilySearch(
             max_results=3,
-            include_domains=TRUSTED_FINANCIAL_DOMAINS
+            include_domains=TRUSTED_FINANCIAL_DOMAINS,
+            time_range="year"
         )
 
         web_search_technical_stock_price = TavilySearch(
             max_results=5,
-            include_domains=TRUSTED_FINANCIAL_DOMAINS
+            include_domains=TRUSTED_FINANCIAL_DOMAINS,
+            time_range="year"
         )
 
         # -- RSI(14) and current price from web --------------------------------

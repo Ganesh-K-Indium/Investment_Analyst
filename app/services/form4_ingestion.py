@@ -15,6 +15,6 @@ _form4_dir = os.path.join(
 if _form4_dir not in sys.path:
     sys.path.insert(0, _form4_dir)
 
-from ingestion.Form4_Ingestion.ingest import run_form4_ingestion  # noqa: E402
+from ingestion.Form4_Ingestion.ingest import run_form4_ingestion, run_form4_ingestion_multi  # noqa: E402
 
-__all__ = ["run_form4_ingestion"]
+__all__ = ["run_form4_ingestion", "run_form4_ingestion_multi"]

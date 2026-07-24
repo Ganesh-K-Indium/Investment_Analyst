@@ -11,11 +11,23 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
-from app.services.form4_ingestion import run_form4_ingestion
+from app.services.form4_ingestion import run_form4_ingestion, run_form4_ingestion_multi
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/form4", tags=["Form 4 - Insider Trading"])
+
+TICKER_PATTERN = re.compile(r'^[A-Z]{1,5}$')
+
+
+def _validate_ticker(raw: str) -> str:
+    ticker = raw.upper().strip()
+    if not TICKER_PATTERN.match(ticker):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid ticker '{ticker}'. Must be 1–5 uppercase letters (e.g. NVDA).",
+        )
+    return ticker
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,6 +59,27 @@ class Form4IngestResponse(BaseModel):
     message: Optional[str] = Field(None, description="Optional status message.")
 
 
+class Form4BatchIngestRequest(BaseModel):
+    tickers: list[str] = Field(
+        ...,
+        description="Stock ticker symbols to ingest (e.g. ['NVDA', 'AAPL', 'MSFT']). Each must be 1–5 uppercase letters. Duplicates are ignored.",
+        examples=[["NVDA", "AAPL", "MSFT"]],
+        min_length=1,
+    )
+    start_date: Optional[date] = Field(
+        None,
+        description="Fetch filings from this date onward (YYYY-MM-DD), applied to every ticker. Defaults to 2025-01-01.",
+        examples=["2025-01-01"],
+    )
+
+
+class Form4BatchIngestResponse(BaseModel):
+    tickers: list[str] = Field(..., description="Normalized, de-duplicated tickers actually ingested, in order.")
+    results: list[Form4IngestResponse] = Field(..., description="Per-ticker ingestion result, in the same order as `tickers`.")
+    totals: dict = Field(..., description="Aggregate counts summed across all tickers in this batch.")
+    date_range: dict = Field(..., description="Effective start/end dates used for the whole batch.")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
@@ -71,13 +104,7 @@ async def ingest_form4(request: Form4IngestRequest):
     - Deduplicates by SEC accession number — safe to call repeatedly
     - Stores results in `portfolios.db` (`form4_transactions` table)
     """
-    ticker = request.ticker.upper().strip()
-
-    if not re.match(r'^[A-Z]{1,5}$', ticker):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid ticker '{ticker}'. Must be 1–5 uppercase letters (e.g. NVDA).",
-        )
+    ticker = _validate_ticker(request.ticker)
 
     try:
         result = run_form4_ingestion(
@@ -95,4 +122,45 @@ async def ingest_form4(request: Form4IngestRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Ingestion failed for '{ticker}': {exc}",
+        )
+
+
+@router.post(
+    "/ingest/batch",
+    response_model=Form4BatchIngestResponse,
+    summary="Ingest Form 4 data from SEC EDGAR for multiple tickers",
+    description=(
+        "Fetches all available Form 4 (insider trading) filings for each of the given "
+        "tickers directly from SEC EDGAR, sequentially, and aggregates the per-ticker "
+        "results. Same filtering/dedup/persistence behavior as /form4/ingest, just "
+        "looped across tickers with one combined summary."
+    ),
+)
+async def ingest_form4_batch(request: Form4BatchIngestRequest):
+    """
+    Import Form 4 insider trading filings from SEC EDGAR for multiple tickers in one call.
+
+    - Validates and de-duplicates the ticker list up front
+    - Ingests tickers sequentially (each ticker's failure doesn't stop the others)
+    - Returns a per-ticker breakdown plus totals summed across the whole batch
+    - Safe to call repeatedly — dedup by SEC accession number still applies per ticker
+    """
+    tickers = [_validate_ticker(t) for t in request.tickers]
+
+    try:
+        result = run_form4_ingestion_multi(
+            tickers=tickers,
+            start_date=request.start_date,
+        )
+        if result is None:
+            raise RuntimeError("Batch ingestion pipeline returned no result (check logs for details).")
+        return Form4BatchIngestResponse(**result)
+
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Form4 batch ingestion failed for {tickers}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Batch ingestion failed for {tickers}: {exc}",
         )

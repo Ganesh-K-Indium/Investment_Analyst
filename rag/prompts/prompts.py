@@ -1040,7 +1040,11 @@ or "X shares via compensation awards" — never as a dollar purchase at zero pri
 Paragraph 2 — Governance & MD&A:
 Concise assessment of MD&A tone (confident vs. defensive, forward-looking language, risk
 disclosures) and any governance concerns (board independence, compensation, related-party
-transactions) from the retrieved documents. If documents are sparse, note that briefly.
+transactions) from the retrieved documents.
+IMPORTANT — recency: base this paragraph strictly on the LATEST available MD&A/governance
+filing (most recent 10-K or proxy statement). If the retrieved documents span multiple filing
+years, use only the most recent one and ignore older filings — do not blend commentary across
+years. If documents are sparse, note that briefly.
 
 """
 
@@ -1075,10 +1079,17 @@ def get_alpha_liquidity_chain(llm):
 
 **Your Task**: Analyze the Liquidity (Macro/Micro Environment) dimension of the Indium's ALPHA Framework — this assesses whether the external environment is a tailwind or headwind for the stock.
 
-**Focus Areas** (use the most recent data available, current year context: {cur_year}):
-1. **Sector Headwinds/Tailwinds**: Industry growth trends, regulatory tailwinds/headwinds, sector rotation dynamics
-2. **Commodity/Input Cost Exposure**: Raw material prices, supply chain vulnerabilities, pricing power vs. input inflation
-3. **Interest Rate Sensitivity**: Debt maturity profile, capital costs, impact of rate environment on valuation multiples and refinancing risk
+**Data sourcing**: The macro data below is sourced from government/regulatory sources — FDIC (bank
+liquidity, deposit, and risk conditions), the Federal Reserve (interest rate policy, monetary
+conditions), the US Treasury (yields, debt data), BLS (inflation, employment), and BEA (GDP, macro
+indicators) — combined with the company's own risk-factor disclosures. Use only the LATEST
+available data from these sources (most recent ~12 months); do not cite stale, multi-year-old
+macro figures. Current year context: {cur_year}.
+
+**Focus Areas**:
+1. **Bank Liquidity & Credit Conditions**: What do the latest FDIC/Fed data say about credit availability, deposit conditions, and systemic liquidity relevant to this company's sector?
+2. **Interest Rate Sensitivity**: Current Fed policy rate stance and its effect on this company's debt maturity profile, capital costs, and refinancing risk
+3. **Commodity/Input Cost Exposure**: Raw material prices, supply chain vulnerabilities, pricing power vs. input inflation
 4. **Competitive Pressures**: Market share dynamics, new entrants, pricing pressure from 10-K risk factors
 
 **Output Requirements**:
@@ -1092,10 +1103,10 @@ def get_alpha_liquidity_chain(llm):
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Retrieved Documents:
+Retrieved Documents (FDIC / Federal Reserve / Treasury / BLS / BEA + company risk factors):
 {documents}
 
-Analyze the macro/micro environment (Liquidity dimension). Keep response under 100 words.""")
+Analyze the macro/micro environment (Liquidity dimension) using only the latest available government-source data. Keep response under 100 words.""")
     ])
 
     return prompt | structured_llm
@@ -1109,24 +1120,34 @@ def get_alpha_performance_chain(llm):
     from schemas.models import AlphaDimensionOutput
     structured_llm = llm.with_structured_output(AlphaDimensionOutput)
 
-    cur_year = _current_year()
+    # 10-K filings lag the calendar year — e.g. in 2026 the most recent FILED
+    # fiscal year is 2025, not 2026. Anchor the comparison one year back from
+    # "today" so we're not asking for a fiscal year whose 10-K doesn't exist yet.
+    fiscal_year = _current_year() - 1
+    prior_year = fiscal_year - 1
+    prior_year2 = fiscal_year - 2
 
     SYSTEM_PROMPT = f"""You are a senior fundamental analyst specializing in earnings quality and financial statement analysis.
 
 **Your Task**: Analyze the Performance (Earnings & Fundamentals) dimension of the Indium's ALPHA Framework.
+This dimension is a YEAR-OVER-YEAR COMPARISON, not a single-year snapshot: compare the most recently
+FILED fiscal year ({fiscal_year}) against the prior two fiscal years ({prior_year} and {prior_year2}).
+Note: 10-K filings lag the calendar year, so {fiscal_year} — not the current calendar year — is the
+most recent fiscal year for which a 10-K actually exists. Do not assume a more recent fiscal year's
+10-K is available.
 
-**Focus Areas** (always use the MOST RECENT fiscal year available — current year context: {cur_year}):
-1. **Recent Financials**: Lead with the latest fiscal year revenue, net income, operating income, and free cash flow. Do NOT anchor to data older than 2-3 years if more recent data exists.
-2. **Key Metrics**: Revenue CAGR (from most recent available base), EBITDA margin, ROE, FCF yield, operating margin trajectory
+**Focus Areas**:
+1. **3-Year Financial Comparison**: State revenue, net income, operating income, and free cash flow for {fiscal_year} vs. {prior_year} vs. {prior_year2} (or the most recent 3 fiscal years available in the documents). Call out the direction and magnitude of change year over year — do not just report the latest year in isolation.
+2. **Key Metrics Trend**: Revenue CAGR across the 3-year window, EBITDA margin trend, ROE trend, FCF yield, operating margin trajectory — is each metric improving, stable, or deteriorating across the years compared?
 3. **Earnings Quality Check**:
    - RED FLAG: Net Income consistently EXCEEDS Operating Cash Flow for 2+ periods → suggests aggressive accruals or revenue recognition
    - POSITIVE: Operating Cash Flow exceeding Net Income → strong cash conversion quality (NEVER flag this as a concern)
-4. **Non-Recurring Items**: Flag one-time charges, restructuring, goodwill impairment that distort underlying performance
-5. **Trend Direction**: Are margins expanding or contracting? Is growth accelerating or decelerating?
+4. **Non-Recurring Items**: Flag one-time charges, restructuring, goodwill impairment that distort underlying performance in any of the compared years
+5. **Trend Direction**: Across the 3 years compared, are margins expanding or contracting? Is growth accelerating or decelerating?
 
 **Output Requirements**:
-- Maximum 100 words — lead with the most important fundamental signal
-- Include at least 2 specific numerical metrics from the documents
+- Maximum 100 words — lead with the most important year-over-year fundamental signal
+- Include at least 2 specific numerical metrics with their year-over-year comparison from the documents
 - Tone: Quantitative, investment-grade precision
 """
 
@@ -1135,10 +1156,10 @@ def get_alpha_performance_chain(llm):
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Retrieved Documents:
+Retrieved Documents (spanning the most recent fiscal year and the two prior years):
 {documents}
 
-Analyze the PERFORMANCE dimension using the most recent fiscal year data available. Keep response under 100 words.""")
+Analyze the PERFORMANCE dimension as a 3-year (""" + f"{fiscal_year}/{prior_year}/{prior_year2}" + """) comparison. Keep response under 100 words.""")
     ])
 
     return prompt | structured_llm
@@ -1155,6 +1176,10 @@ def get_alpha_horizon_chain(llm):
     SYSTEM_PROMPT = """You are a senior equity analyst specializing in competitive strategy and economic moat assessment.
 
 **Your Task**: Analyze the Horizon (Structural Opportunity & Moat) dimension of the Indium's ALPHA Framework — this assesses the long-term investment durability of the business.
+
+**Recency requirement**: The retrieved documents are capped to the last 12 months of commentary
+(SeekingAlpha coverage). Base this analysis only on that most recent 1-year window — do not
+reference or infer older, stale competitive-positioning data.
 
 **Focus Areas**:
 1. **Operating Margins vs. Industry**: Are margins above or below sector peers? Signals pricing power and competitive moat strength.
@@ -1174,10 +1199,10 @@ def get_alpha_horizon_chain(llm):
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Retrieved Documents:
+Retrieved Documents (last 12 months only):
 {documents}
 
-Analyze the HORIZON dimension — competitive moat, structural opportunities, and long-term investment durability. Keep response under 100 words.""")
+Analyze the HORIZON dimension — competitive moat, structural opportunities, and long-term investment durability — using only the last 1 year of data above. Keep response under 100 words.""")
     ])
 
     return prompt | structured_llm
@@ -1193,7 +1218,9 @@ def get_alpha_action_chain(llm):
 
     SYSTEM_PROMPT = """You are a financial analyst writing the Action section of an Indium's ALPHA Framework report.
 
-All data comes from web-sourced documents below. Extract the exact numeric values and write exactly 4 sentences with proper flow in professional analyst tone. Always use UPPERCASE for the ticker symbol.
+All data comes from web-sourced documents below, capped to the last 12 months so every figure
+reflects current/near-current market conditions — never state a value if it appears to be stale
+or older than the last 1 year. Extract the exact numeric values and write exactly 4 sentences with proper flow in professional analyst tone. Always use UPPERCASE for the ticker symbol.
 
 Sentence 1 — SMA: Extract the current stock price and 200-day SMA from the technical documents. State BOTH exact dollar values. Use "greater than" or "less than".
   Example: "GOOGL's current stock price ($306.52) is greater than its 200-day SMA ($250.15)."

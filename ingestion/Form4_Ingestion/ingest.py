@@ -338,6 +338,111 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
         "date_range": {"start": str(start_date), "end": str(end_date)},
     }
 
+def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None, reset_database=False):
+    """
+    Runs run_form4_ingestion() once per ticker, sequentially, and aggregates the results.
+
+    IMPORTANT: reset_database is applied ONCE up-front (not per ticker) — reset_db()
+    wipes the entire form4_transactions table across ALL tickers, so resetting inside
+    the per-ticker loop would destroy data just ingested for earlier tickers in this
+    same batch.
+
+    Args:
+        tickers: List of stock ticker symbols to fetch filings for (required).
+        start_date: Start date for fetching filings (inclusive). Defaults to Jan 1, 2025 (per-ticker default).
+        end_date: End date for fetching filings (inclusive). Defaults to today.
+        reset_database: If True, resets the database once before ingesting any ticker.
+    """
+    if not tickers:
+        logger.error("No tickers provided. Usage: run_form4_ingestion_multi(tickers=['NVDA', 'AAPL'])")
+        print("\nERROR: No tickers provided. Usage: run_form4_ingestion_multi(tickers=['NVDA', 'AAPL'])")
+        return None
+
+    # Normalize + de-duplicate while preserving the caller's order
+    seen = set()
+    normalized_tickers = []
+    for t in tickers:
+        if not t:
+            continue
+        t_upper = t.strip().upper()
+        if t_upper and t_upper not in seen:
+            seen.add(t_upper)
+            normalized_tickers.append(t_upper)
+
+    if not normalized_tickers:
+        logger.error("No valid tickers after normalization.")
+        return None
+
+    effective_end_date = end_date or date.today()
+    effective_start_date = start_date or date(2026, 2, 10)
+
+    logger.info(
+        f"Starting MULTI-TICKER Ingestion — Tickers: {normalized_tickers}, "
+        f"Date Range: {effective_start_date} to {effective_end_date}"
+    )
+
+    # Reset once, up-front, for the whole batch — never per-ticker.
+    if reset_database:
+        try:
+            reset_db()
+            logger.info("Database reset successfully (applied once for the full batch).")
+        except Exception as e:
+            logger.critical(f"Database reset failed: {e}")
+            return None
+
+    results = []
+    for i, ticker in enumerate(normalized_tickers):
+        logger.info(f"=== [{i+1}/{len(normalized_tickers)}] Ingesting ticker: {ticker} ===")
+        try:
+            result = run_form4_ingestion(
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+                reset_database=False,  # already handled once above
+            )
+        except Exception as e:
+            logger.error(f"Ingestion crashed for ticker {ticker}: {e}")
+            result = None
+
+        if result is None:
+            result = {
+                "ticker": ticker,
+                "total_url_fetched": 0,
+                "forms_with_common_stock": 0,
+                "forms_with_0_common_stock": 0,
+                "transactions_saved_total": 0,
+                "skipped_already_in_db": 0,
+                "failed": 0,
+                "date_range": {"start": str(effective_start_date), "end": str(effective_end_date)},
+                "message": f"Ingestion failed or returned no result for {ticker}.",
+            }
+        results.append(result)
+
+    totals = {
+        "total_url_fetched": sum(r.get("total_url_fetched", 0) for r in results),
+        "forms_with_common_stock": sum(r.get("forms_with_common_stock", 0) for r in results),
+        "forms_with_0_common_stock": sum(r.get("forms_with_0_common_stock", 0) for r in results),
+        "transactions_saved_total": sum(r.get("transactions_saved_total", 0) for r in results),
+        "skipped_already_in_db": sum(r.get("skipped_already_in_db", 0) for r in results),
+        "failed": sum(r.get("failed", 0) for r in results),
+    }
+
+    logger.info("="*50)
+    logger.info("MULTI-TICKER INGESTION SUMMARY")
+    logger.info("="*50)
+    for r in results:
+        logger.info(f"  {r['ticker']}: {r.get('transactions_saved_total', 0)} transactions saved, {r.get('failed', 0)} failed")
+    logger.info(f"TOTALS: {totals}")
+    logger.info("="*50)
+
+    return {
+        "tickers": normalized_tickers,
+        "results": results,
+        "totals": totals,
+        "date_range": {"start": str(effective_start_date), "end": str(effective_end_date)},
+    }
+
+
 if __name__ == "__main__":
     ticker_input = "AAPL" #input("Enter ticker symbol (e.g. NVDA, AAPL, MSFT): ").strip().upper()
     run_form4_ingestion(ticker=ticker_input)

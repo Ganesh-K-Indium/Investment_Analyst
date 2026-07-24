@@ -35,6 +35,12 @@ class CompareInput(BaseModel):
     year: Optional[int] = Field(None, description="Year for comparison (e.g. 2024)")
 
 
+class AlphaInput(BaseModel):
+    tickers: List[str] = Field(..., description="Ticker symbols to run the ALPHA framework for — no free-text query")
+    user_id: str = Field(..., description="User identifier")
+    thread_id: str = Field(..., description="Session thread_id (required for portfolio context)")
+
+
 class HealthStatusResponse(BaseModel):
     status: str
     agent_initialized: bool
@@ -476,6 +482,122 @@ Compare {comparison_str} {year_str}:
         
         return response_data
         
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/alpha")
+async def run_alpha(
+    payload: AlphaInput,
+    db: Session = Depends(get_db_session)
+):
+    """
+    Run the ALPHA framework directly for a list of tickers — no free-text query.
+    Intended for the dedicated ALPHA button in the UI: it just passes the
+    portfolio's ticker symbols and triggers the full 5-dimension analysis
+    per ticker, bypassing the (now-disabled) keyword detection in general chat.
+    """
+    try:
+        if not agent:
+            raise HTTPException(status_code=503, detail="Agent not initialized")
+
+        thread_id = payload.thread_id
+
+        session = PortfolioService.get_session(db, thread_id)
+        if not session:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session not found. Please create a portfolio session first."
+            )
+
+        portfolio = session.portfolio
+
+        resolved_tickers = []
+        for t in payload.tickers:
+            ticker = get_ticker(t) or t.upper()
+            resolved_tickers.append(ticker)
+
+        chat_session = ChatService.create_or_get_chat_session(
+            db=db,
+            session_id=thread_id,
+            user_id=session.user_id,
+            agent_type=AgentType.RAG,
+            portfolio_id=portfolio.id,
+            title=f"ALPHA: {portfolio.name}",
+            session_metadata={
+                "type": "alpha",
+                "portfolio_name": portfolio.name,
+                "tickers": resolved_tickers
+            }
+        )
+
+        ChatService.add_message(
+            db=db,
+            session_id=thread_id,
+            role=MessageRole.USER,
+            content=f"Run ALPHA analysis for {', '.join(resolved_tickers)}"
+        )
+
+        results = []
+        for ticker in resolved_tickers:
+            print(f"Running ALPHA for ticker: {ticker}")
+
+            # Each ticker gets its own checkpointer thread so per-ticker
+            # alpha_dimensions/state don't leak into one another.
+            config = {"configurable": {"thread_id": f"{thread_id}-alpha-{ticker}"}}
+
+            inputs = {
+                "messages": [HumanMessage(content=f"ALPHA analysis for {ticker}")],
+                "vectorstore_searched": False,
+                "web_searched": False,
+                "vectorstore_quality": "none",
+                "needs_web_fallback": False,
+                "retry_count": 0,
+                "document_sources": {},
+                "citation_info": [],
+                "summary_strategy": "single_source",
+                "company_filter": [ticker],
+                "sub_query_analysis": {},
+                "sub_query_results": {},
+                "alpha_mode": True,
+                "alpha_pillar": None,
+                "ticker": ticker,
+                "alpha_dimensions": {},
+                "alpha_report": ""
+            }
+
+            result = await agent.ainvoke(inputs, config)
+            report = result.get("alpha_report") or result["messages"][-1].content
+
+            results.append({
+                "ticker": ticker,
+                "report": report
+            })
+
+            ChatService.add_message(
+                db=db,
+                session_id=thread_id,
+                role=MessageRole.ASSISTANT,
+                content=report,
+                metadata={
+                    "portfolio_id": portfolio.id,
+                    "portfolio_name": portfolio.name,
+                    "ticker": ticker,
+                    "alpha_pillar": None
+                }
+            )
+
+        return {
+            "thread_id": thread_id,
+            "portfolio_id": portfolio.id,
+            "portfolio_name": portfolio.name,
+            "tickers": resolved_tickers,
+            "results": results
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
