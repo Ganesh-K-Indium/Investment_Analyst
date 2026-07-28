@@ -1822,15 +1822,21 @@ def detect_alpha_query(state):
         }
 
     # ------------------------------------------------------------------------
-    # Keyword-based ALPHA detection from free-text chat queries — DISABLED.
-    # ALPHA is now only triggered explicitly (via the dedicated /alpha
-    # endpoint with an explicit ticker), never inferred from general chat
-    # text, to keep general chat responses focused on plain RAG/Q&A.
-    # ------------------------------------------------------------------------
-    # messages = state["messages"]
-    # question = messages[-1].content.lower()
+    # Keyword-based FULL ALPHA (5-dimension buy-timing) detection from
+    # free-text chat queries — DISABLED. That framework only triggers
+    # explicitly now (via the dedicated /alpha endpoint with an explicit
+    # ticker), never inferred from general chat text, since phrases like
+    # "should I buy" were firing the full framework unpredictably.
     #
-    # # Buy timing patterns
+    # The single-pillar INSIDER TRADING (Form 4) lookup is still allowed from
+    # general chat, though — it's a targeted factual lookup (not the
+    # multi-dimension buy/sell recommendation), so accidental triggers are
+    # low-risk and it's genuinely useful as a plain chat question.
+    # ------------------------------------------------------------------------
+    messages = state["messages"]
+    question = messages[-1].content.lower()
+
+    # # Buy timing patterns (disabled — see comment above)
     # alpha_patterns = [
     #     "good time to buy",
     #     "should i buy",
@@ -1845,64 +1851,57 @@ def detect_alpha_query(state):
     #     "alpha analysis of",
     #     "a 360 degree analysis"
     # ]
-    #
-    # insider_patterns = [
-    #     "insider trading",
-    #     "open-market buying",
-    #     "open market buying",
-    #     "promoters",
-    #     "key management",
-    #     "form 4",
-    #     "form4"
-    # ]
-    #
-    # is_insider_query = any(pattern in question for pattern in insider_patterns)
-    #
-    # # Check if query matches ALPHA pattern
-    # is_alpha_query = any(pattern in question for pattern in alpha_patterns) or is_insider_query
-    #
-    # if is_alpha_query:
-    #     print(" ALPHA MODE ACTIVATED")
-    #     print(f"   Query: {question}")
-    #
-    #     # Extract company/ticker from query
-    #     from app.utils.company_mapping import get_ticker
-    #
-    #     # Try to extract ticker from state first
-    #     ticker = state.get("ticker")
-    #     company_filter = state.get("company_filter", [])
-    #
-    #     # If we have a ticker or company_filter, use it
-    #     if ticker:
-    #         target_ticker = ticker
-    #     elif company_filter and len(company_filter) > 0:
-    #         target_ticker = company_filter[0]
-    #     else:
-    #         # Fallback: Try to extract from question
-    #         # Look for common ticker patterns
-    #         words = question.split()
-    #         target_ticker = None
-    #         for word in words:
-    #             cleaned = word.strip(',.?!').upper()
-    #             if len(cleaned) <= 5 and cleaned.isalpha():
-    #                 # Looks like a ticker
-    #                 target_ticker = cleaned
-    #                 break
-    #
-    #     if not target_ticker:
-    #         print(" WARNING: Could not extract ticker/company")
-    #         target_ticker = "unknown"
-    #
-    #     print(f"   Target: {target_ticker}")
-    #     print("="*80 + "\n")
-    #
-    #     return {
-    #         "alpha_mode": True,
-    #         "alpha_pillar": "insider_trading" if is_insider_query else None,
-    #         "ticker": target_ticker,
-    #         "alpha_dimensions": {},
-    #         "alpha_report": ""
-    #     }
+
+    insider_patterns = [
+        "insider trading",
+        "open-market buying",
+        "open market buying",
+        "open-market selling",
+        "open market selling",
+        "promoters",
+        "key management",
+        "form 4",
+        "form4"
+    ]
+
+    is_insider_query = any(pattern in question for pattern in insider_patterns)
+
+    if is_insider_query:
+        print(" ALPHA MODE ACTIVATED (insider_trading pillar)")
+        print(f"   Query: {question}")
+
+        # Try to extract ticker from state first
+        ticker = state.get("ticker")
+        company_filter = state.get("company_filter", [])
+
+        if ticker:
+            target_ticker = ticker
+        elif company_filter and len(company_filter) > 0:
+            target_ticker = company_filter[0]
+        else:
+            # Fallback: Try to extract from question
+            words = question.split()
+            target_ticker = None
+            for word in words:
+                cleaned = word.strip(',.?!').upper()
+                if len(cleaned) <= 5 and cleaned.isalpha():
+                    target_ticker = cleaned
+                    break
+
+        if not target_ticker:
+            print(" WARNING: Could not extract ticker/company")
+            target_ticker = "unknown"
+
+        print(f"   Target: {target_ticker}")
+        print("="*80 + "\n")
+
+        return {
+            "alpha_mode": True,
+            "alpha_pillar": "insider_trading",
+            "ticker": target_ticker,
+            "alpha_dimensions": {},
+            "alpha_report": ""
+        }
 
     print(" Normal RAG query (not ALPHA)")
     print("="*80 + "\n")
