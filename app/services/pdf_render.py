@@ -50,6 +50,21 @@ def _parse_color(value: str) -> Optional[Tuple[int, int, int]]:
     return None
 
 
+_FONT_SIZE_RE = re.compile(r"^([\d.]+)\s*(px|pt)?$")
+
+
+def _parse_font_size(value: str) -> Optional[float]:
+    """Returns a size in fpdf2's pt units. TipTap emits px; 1px = 0.75pt at 96dpi."""
+    if not value:
+        return None
+    m = _FONT_SIZE_RE.match(value.strip())
+    if not m:
+        return None
+    num = float(m.group(1))
+    unit = m.group(2) or "px"
+    return num * 0.75 if unit == "px" else num
+
+
 def _style_dict(tag: Tag) -> dict:
     style_attr = tag.get("style") or ""
     out = {}
@@ -62,9 +77,9 @@ def _style_dict(tag: Tag) -> dict:
 
 
 class Run:
-    __slots__ = ("text", "bold", "italic", "underline", "strike", "color", "highlight")
+    __slots__ = ("text", "bold", "italic", "underline", "strike", "color", "highlight", "size")
 
-    def __init__(self, text, bold=False, italic=False, underline=False, strike=False, color=None, highlight=None):
+    def __init__(self, text, bold=False, italic=False, underline=False, strike=False, color=None, highlight=None, size=None):
         self.text = text
         self.bold = bold
         self.italic = italic
@@ -72,24 +87,25 @@ class Run:
         self.strike = strike
         self.color = color
         self.highlight = highlight
+        self.size = size
 
 
-def _collect_runs(node, bold=False, italic=False, underline=False, strike=False, color=None, highlight=None) -> List[Run]:
+def _collect_runs(node, bold=False, italic=False, underline=False, strike=False, color=None, highlight=None, size=None) -> List[Run]:
     runs: List[Run] = []
     if isinstance(node, NavigableString):
         text = str(node)
         if text:
-            runs.append(Run(text, bold, italic, underline, strike, color, highlight))
+            runs.append(Run(text, bold, italic, underline, strike, color, highlight, size))
         return runs
     if not isinstance(node, Tag):
         return runs
 
     name = node.name.lower()
     if name == "br":
-        runs.append(Run("\n", bold, italic, underline, strike, color, highlight))
+        runs.append(Run("\n", bold, italic, underline, strike, color, highlight, size))
         return runs
 
-    b, i, u, s, c, h = bold, italic, underline, strike, color, highlight
+    b, i, u, s, c, h, sz = bold, italic, underline, strike, color, highlight, size
     if name in _INLINE_BOLD:
         b = True
     if name in _INLINE_ITALIC:
@@ -108,9 +124,12 @@ def _collect_runs(node, bold=False, italic=False, underline=False, strike=False,
         h = parsed_bg
     if style.get("font-weight") in ("bold", "600", "700", "800", "900"):
         b = True
+    parsed_size = _parse_font_size(style.get("font-size", ""))
+    if parsed_size:
+        sz = parsed_size
 
     for child in node.children:
-        runs.extend(_collect_runs(child, b, i, u, s, c, h))
+        runs.extend(_collect_runs(child, b, i, u, s, c, h, sz))
     return runs
 
 
@@ -122,7 +141,7 @@ def _set_font(pdf: FPDF, size: float, run: Run) -> None:
         style += "I"
     if run.underline:
         style += "U"
-    pdf.set_font("Helvetica", style, size)
+    pdf.set_font("Helvetica", style, run.size or size)
     pdf.set_text_color(*(run.color or (26, 26, 26)))
 
 
@@ -132,7 +151,8 @@ def _flow_runs(pdf: FPDF, runs: List[Run], size: float, left: float, right: floa
     equivalent in fpdf2's write_html."""
     if not runs:
         return
-    line_height = max(LINE_HEIGHT, size / 2.2)
+    max_size = max((r.size or size for r in runs), default=size)
+    line_height = max(LINE_HEIGHT, max_size / 2.2)
     pdf.set_x(left)
     for run in runs:
         for seg_idx, seg in enumerate(run.text.split("\n")):
@@ -172,7 +192,8 @@ def _cell_style(td: Tag) -> Tuple[str, "FontFace"]:
     fill = next((r.highlight for r in runs if r.highlight), None) or (255, 255, 255)
     if td.name == "th" and fill == (255, 255, 255):
         fill = (240, 240, 240)
-    style = FontFace(emphasis="B" if bold else "", color=color, fill_color=fill)
+    size_pt = next((r.size for r in runs if r.size), None)
+    style = FontFace(emphasis="B" if bold else "", color=color, fill_color=fill, size_pt=size_pt)
     return text, style
 
 

@@ -25,7 +25,7 @@ _ALLOWED_ATTRIBUTES = {
 # Only these CSS properties survive in a sanitized style="..." attribute.
 _ALLOWED_STYLE_PROPS = {
     "color", "background-color", "font-weight",
-    "text-decoration", "text-align", "font-style",
+    "text-decoration", "text-align", "font-style", "font-size",
 }
 _STYLE_DECL_RE = re.compile(r"([a-zA-Z-]+)\s*:\s*([^;]+)")
 
