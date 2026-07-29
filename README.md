@@ -168,9 +168,11 @@ docs/                  TECHNICAL_GUIDE.md — the full architectural reference
 
 ## Known limitations (see the technical guide for detail)
 
-- **Auth is opt-in, not global.** Only `/auth/me`, `/auth/logout`, and `PUT /auth/me` require a JWT. Every other router (portfolios, chats, reports, integrations, rag, quant, edgar, form4) currently accepts `user_id` as a plain client-supplied field with no token verification.
 - **`FRED_API_KEY` and Cloudinary/JWT vars aren't in `.env.example`** despite being required/used in code — add them manually per the table above.
 - Native-PDF tables now extract with real column structure (`ingestion/table_extractor.py`); image-embedded charts/tables go through OCR + GPT-4o vision. Flattened prose extraction is still the fallback when neither applies.
+- The semantic cache (`rag/graph/semantic_cache.py`) exists and is correctness-fixed but isn't wired into any live code path yet.
+
+Every endpoint requires a valid JWT (auth is enforced app-wide, not opt-in) — see [docs/TECHNICAL_GUIDE.md §13](docs/TECHNICAL_GUIDE.md#13-known-limitations-and-architectural-notes) for the full list of what was audited and fixed.
 
 ---
 
