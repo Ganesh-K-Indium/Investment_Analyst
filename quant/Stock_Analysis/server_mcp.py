@@ -1,3 +1,4 @@
+import logging
 from typing import Optional, List
 import pandas as pd
 import yfinance as yf
@@ -22,6 +23,10 @@ import datetime
 from cloud_storage import upload_chart_to_cloudinary
 from dotenv import load_dotenv
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger("quant.Stock_Analysis.server_mcp")
+
 # Initialize FastMCP server
 technicalanalysis_server = FastMCP(
     "technicalanalysis",
@@ -99,7 +104,7 @@ async def save_figure_as_base64(fig: go.Figure, filename: str, width: int = 1000
                     "source": "cloudinary"
                 }
             else:
-                print(f"Cloudinary upload failed: {result.get('error')}. Falling back to local storage.")
+                logger.warning("Cloudinary upload failed: %s. Falling back to local storage.", result.get('error'))
         
         # Fallback to local storage
         loop = asyncio.get_event_loop()    
@@ -804,7 +809,7 @@ async def get_chart_summary(file_path:str) -> dict:
                 model = "gemini-2.0-flash"  # Using a more stable model
 
                 if len(image_bytes) > 7 * 1024 * 1024:
-                        print("Warning: image >7MB, consider using Files API for better reliability.")
+                        logger.warning("Warning: image >7MB, consider using Files API for better reliability.")
 
                 system_prompt = (
                         "You are an expert financial technical analyst. Produce a structured, "
@@ -1410,5 +1415,5 @@ if __name__ == "__main__":
         if sys.platform.startswith("win"):
                 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-        print("Launching TradingView MCP Server...")
+        logger.info("Launching TradingView MCP Server...")
         technicalanalysis_server.run(transport="streamable-http", port=8566)

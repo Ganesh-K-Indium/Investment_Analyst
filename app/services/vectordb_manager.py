@@ -4,6 +4,9 @@ Manages ticker-specific vector database instances
 """
 from rag.vectordb.client import load_vector_database
 from typing import Dict, Optional, Tuple
+import logging
+
+logger = logging.getLogger("app.services.vectordb_manager")
 
 
 class VectorDBManager:
@@ -43,7 +46,7 @@ class VectorDBManager:
         if ticker_key in self._instances:
             return self._instances[ticker_key]
         
-        print(f"Initializing Vector DB for ticker: {ticker} (create_if_missing={create_if_missing})")
+        logger.info(f"Initializing Vector DB for ticker: {ticker} (create_if_missing={create_if_missing})")
         collection_name = f"ticker_{ticker_key}"
         
         # Create DB instance
@@ -64,7 +67,7 @@ class VectorDBManager:
         if "legacy_unified" in self._instances:
             return self._instances["legacy_unified"]
             
-        print("Initializing Legacy Unified Vector DB")
+        logger.info("Initializing Legacy Unified Vector DB")
         inst = load_vector_database(use_hybrid_search=True, collection_name="unified_rag_db_hybrid")
         self._instances["legacy_unified"] = inst
         return inst
@@ -82,7 +85,7 @@ class VectorDBManager:
         Register a session to portfolio mapping.
         """
         self._session_to_portfolio[thread_id] = portfolio_id
-        print(f"Registered session {thread_id} to portfolio {portfolio_id}")
+        logger.info(f"Registered session {thread_id} to portfolio {portfolio_id}")
     
     def get_portfolio_id_for_session(self, thread_id: str) -> Optional[int]:
         """Get portfolio ID for a session."""

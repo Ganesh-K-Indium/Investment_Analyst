@@ -100,7 +100,7 @@ async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset
     """
     if not ticker:
         logger.error("No ticker or company mentioned. Please provide a ticker symbol (e.g. 'NVDA', 'AAPL').")
-        print("\nERROR: No ticker or company mentioned. Usage: run_form4_ingestion(ticker='NVDA')")
+        logger.error("\nERROR: No ticker or company mentioned. Usage: run_form4_ingestion(ticker='NVDA')")
         return
 
     if start_date is None:
@@ -355,7 +355,7 @@ async def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None
     """
     if not tickers:
         logger.error("No tickers provided. Usage: run_form4_ingestion_multi(tickers=['NVDA', 'AAPL'])")
-        print("\nERROR: No tickers provided. Usage: run_form4_ingestion_multi(tickers=['NVDA', 'AAPL'])")
+        logger.error("\nERROR: No tickers provided. Usage: run_form4_ingestion_multi(tickers=['NVDA', 'AAPL'])")
         return None
 
     # Normalize + de-duplicate while preserving the caller's order

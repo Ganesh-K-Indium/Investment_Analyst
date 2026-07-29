@@ -5,6 +5,7 @@ The LLM's role is ONLY to convert pre-computed structured analytics into natural
 institutional-style insights. All numerical analysis happens in the MCP server.
 """
 import asyncio
+import logging
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.tools import load_mcp_tools
@@ -13,6 +14,8 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 load_dotenv()
+
+logger = logging.getLogger("quant.stock_agent.stock_exchange_agent.subagents.options_agent.langgraph_agent")
 
 MCP_URL = "http://localhost:8568/mcp"
 
@@ -137,7 +140,7 @@ async def wait_for_server(url: str, timeout: int = 10) -> bool:
             result = sock.connect_ex((host, port))
             sock.close()
             if result == 0:
-                print(f" Options Intelligence MCP server is up at {url}")
+                logger.info(" Options Intelligence MCP server is up at %s", url)
                 return True
         except Exception:
             pass

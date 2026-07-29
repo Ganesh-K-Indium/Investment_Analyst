@@ -3,6 +3,7 @@ this module is used for loading the unified RAG database with hybrid search capa
 """
 
 import asyncio
+import logging
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore, RetrievalMode
@@ -12,6 +13,8 @@ from qdrant_client.http.models import PayloadSchemaType
 from tqdm import tqdm
 import os
 
+logger = logging.getLogger("rag.vectordb.client")
+
 load_dotenv()
 
 # Try to import FastEmbed for sparse embeddings
@@ -20,7 +23,7 @@ try:
     SPARSE_EMBEDDING_AVAILABLE = True
 except ImportError:
     SPARSE_EMBEDDING_AVAILABLE = False
-    print("Warning: fastembed not available. Install with: pip install fastembed")
+    logger.warning("Warning: fastembed not available. Install with: pip install fastembed")
 
 class load_vector_database():
     """Unified vector database loader with advanced hybrid search capabilities"""
@@ -51,7 +54,7 @@ class load_vector_database():
                 self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
                 # print("BM25 sparse embeddings initialized") # Reduced log noise
             except Exception as e:
-                print(f"Warning: Failed to initialize sparse embeddings: {e}")
+                logger.warning(f"Warning: Failed to initialize sparse embeddings: {e}")
         
         # Try cloud Qdrant first, fallback to local
         try:
@@ -60,16 +63,16 @@ class load_vector_database():
             # self.qdrant_client.get_collections() # Avoid extra call if not needed
             # print(f"Successfully connected to Qdrant at {self.qdrant_url}")
         except Exception as e:
-            print(f"Failed to connect to cloud Qdrant: {e}")
-            print("Falling back to local Qdrant at http://localhost:6333")
+            logger.error(f"Failed to connect to cloud Qdrant: {e}")
+            logger.warning("Falling back to local Qdrant at http://localhost:6333")
             self.qdrant_url = "http://localhost:6333"
             self.qdrant_api_key = ''
             try:
                 self.qdrant_client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=60)
                 # self.qdrant_client.get_collections()
-                print(f"Successfully connected to local Qdrant")
+                logger.info(f"Successfully connected to local Qdrant")
             except Exception as local_error:
-                print(f"Failed to connect to local Qdrant: {local_error}")
+                logger.error(f"Failed to connect to local Qdrant: {local_error}")
                 raise ConnectionError("Unable to connect to Qdrant instances.")
 
         # Ensure collection exists with correct config
@@ -108,7 +111,7 @@ class load_vector_database():
             }
 
             if not exists:
-                print(f"Collection '{self.collection_name}' does not exist. Creating with hybrid config...")
+                logger.info(f"Collection '{self.collection_name}' does not exist. Creating with hybrid config...")
 
                 # Dense embedding size (OpenAI text-embedding-3-large)
                 dense_size = 3072
@@ -130,14 +133,14 @@ class load_vector_database():
                 )
 
                 for field_name, schema in payload_fields.items():
-                    print(f"Creating index for {field_name} ({schema})...")
+                    logger.info(f"Creating index for {field_name} ({schema})...")
                     self.qdrant_client.create_payload_index(
                         collection_name=self.collection_name,
                         field_name=field_name,
                         field_schema=schema,
                     )
 
-                print(f" Collection '{self.collection_name}' created successfully with hybrid search and indexes.")
+                logger.info(f" Collection '{self.collection_name}' created successfully with hybrid search and indexes.")
             else:
                 # Collection already exists (e.g. created before a new payload field was
                 # introduced, such as metadata.filing_type) — backfill any missing indexes.
@@ -146,7 +149,7 @@ class load_vector_database():
                 )
                 for field_name, schema in payload_fields.items():
                     if field_name not in existing_indexes:
-                        print(f"Backfilling missing index for {field_name} ({schema}) on '{self.collection_name}'...")
+                        logger.info(f"Backfilling missing index for {field_name} ({schema}) on '{self.collection_name}'...")
                         self.qdrant_client.create_payload_index(
                             collection_name=self.collection_name,
                             field_name=field_name,
@@ -154,7 +157,7 @@ class load_vector_database():
                         )
 
         except Exception as e:
-            print(f"Error ensuring collection exists: {e}")
+            logger.error(f"Error ensuring collection exists: {e}")
             # Don't raise, might interfere with read-only operations if strict permissions logic
 
     def _check_exists(self):
@@ -163,9 +166,9 @@ class load_vector_database():
             collections = self.qdrant_client.get_collections().collections
             exists = any(c.name == self.collection_name for c in collections)
             if not exists:
-                print(f" Collection '{self.collection_name}' does not exist (read-only mode).")
+                logger.warning(f" Collection '{self.collection_name}' does not exist (read-only mode).")
         except Exception as e:
-            print(f"Error checking collection existence: {e}")
+            logger.error(f"Error checking collection existence: {e}")
 
     
     def get_unified_vectorstore(self):
@@ -228,7 +231,7 @@ class load_vector_database():
                         values=sparse_emb.values.tolist()
                     )
             except Exception as e:
-                print(f"Warning: Failed to generate sparse embedding: {e}")
+                logger.warning(f"Warning: Failed to generate sparse embedding: {e}")
         
         # Build filter conditions
         filter_conditions = []
@@ -342,7 +345,7 @@ class load_vector_database():
             return response.points
 
         except Exception as e:
-            print(f"Error in hybrid search: {e}")
+            logger.error(f"Error in hybrid search: {e}")
             # Fallback to simple dense search
             return await self._fallback_search(dense_vector, global_filter, limit)
 
@@ -359,7 +362,7 @@ class load_vector_database():
             )
             return response.points
         except Exception as e:
-            print(f"Error in fallback search: {e}")
+            logger.error(f"Error in fallback search: {e}")
             return []
     
     async def generate_embeddings_for_ingestion(self, texts: list[str]) -> dict:
@@ -381,14 +384,14 @@ class load_vector_database():
         # all batches concurrently rather than one at a time.
         BATCH_SIZE = 100
         batches = [texts[i:i + BATCH_SIZE] for i in range(0, len(texts), BATCH_SIZE)]
-        print(f"\nGenerating dense embeddings for {len(texts)} documents ({len(batches)} batch(es) of {BATCH_SIZE}, concurrent)...")
+        logger.info(f"\nGenerating dense embeddings for {len(texts)} documents ({len(batches)} batch(es) of {BATCH_SIZE}, concurrent)...")
         batch_results = await asyncio.gather(*(self.embeddings.aembed_documents(batch) for batch in batches))
         for batch_embeddings in batch_results:
             result['dense'].extend(batch_embeddings)
         
         # Generate sparse embeddings (BM25)
         if self.sparse_model:
-            print(f"\nGenerating sparse embeddings for {len(texts)} documents...")
+            logger.info(f"\nGenerating sparse embeddings for {len(texts)} documents...")
             try:
                 # Use tqdm with the generator
                 sparse_embeddings = []
@@ -406,12 +409,12 @@ class load_vector_database():
                         )
                     )
             except Exception as e:
-                print(f"Warning: Failed to generate sparse embeddings: {e}")
+                logger.warning(f"Warning: Failed to generate sparse embeddings: {e}")
                 result['sparse'] = [None] * len(texts)
         else:
             result['sparse'] = [None] * len(texts)
-        
-        print(f"Generated embeddings: {len(result['dense'])} dense, {len([s for s in result['sparse'] if s is not None])} sparse")
+
+        logger.info(f"Generated embeddings: {len(result['dense'])} dense, {len([s for s in result['sparse'] if s is not None])} sparse")
         return result
     def get_collection_files(self):
         """Get all unique source files in the unified collection."""

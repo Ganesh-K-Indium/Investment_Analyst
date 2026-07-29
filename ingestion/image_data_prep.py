@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import fitz
 import json
@@ -14,6 +15,8 @@ from dotenv import load_dotenv
 import pytesseract
 
 load_dotenv()
+
+logger = logging.getLogger("ingestion.image_data_prep")
 
 # Use the explicit binary path if set (required for Docker/ECS environments)
 _tesseract_cmd = os.environ.get("TESSERACT_CMD")
@@ -69,9 +72,9 @@ class ImageDescription:
         except Exception as e:
             # If Tesseract not installed, gracefully degrade
             if "TesseractNotFoundError" in str(type(e).__name__):
-                print(f"     Tesseract OCR not installed - using vision-only mode")
+                logger.warning("     Tesseract OCR not installed - using vision-only mode")
                 return "[OCR unavailable - using GPT-4o vision only]"
-            print(f"     OCR extraction failed for {os.path.basename(image_path)}: {e}")
+            logger.error("     OCR extraction failed for %s: %s", os.path.basename(image_path), e)
             return ""
     
     def calculate_image_content_hash(self, image_data: bytes) -> str:
@@ -79,7 +82,7 @@ class ImageDescription:
         try:
             return hashlib.sha256(image_data).hexdigest()
         except Exception as e:
-            print(f"Error calculating image content hash: {e}")
+            logger.error("Error calculating image content hash: %s", e)
             return ""
     
     def get_pdf_data(self):
@@ -118,7 +121,7 @@ class ImageDescription:
             
             # Skip tiny images (likely decorative)
             if min_dimension < 50 or max_dimension < 50:
-                print(f"Skipping very small image: {original_size}")
+                logger.warning("Skipping very small image: %s", original_size)
                 return None, None
             
             # Multi-stage enhancement for financial documents
@@ -129,12 +132,12 @@ class ImageDescription:
                 # Scale up small images significantly for better OCR/analysis
                 scale_factor = 512 / min_dimension
                 target_size = (int(img.size[0] * scale_factor), int(img.size[1] * scale_factor))
-                print(f"Upscaling image from {original_size} to {target_size}")
+                logger.info("Upscaling image from %s to %s", original_size, target_size)
             elif max_dimension > 2048:
                 # Scale down very large images but keep good detail
                 scale_factor = 2048 / max_dimension
                 target_size = (int(img.size[0] * scale_factor), int(img.size[1] * scale_factor))
-                print(f"Downscaling image from {original_size} to {target_size}")
+                logger.info("Downscaling image from %s to %s", original_size, target_size)
             
             if target_size:
                 img = img.resize(target_size, Image.Resampling.LANCZOS)
@@ -158,11 +161,11 @@ class ImageDescription:
             # Save with high quality settings (lower compression for better detail)
             img.save(img_path, "PNG", optimize=True, compress_level=3)
             
-            print(f"✓ Enhanced image: {os.path.basename(img_path)} (final size: {img.size})")
+            logger.info("✓ Enhanced image: %s (final size: %s)", os.path.basename(img_path), img.size)
             return img_path, xref
-            
+
         except Exception as e:
-            print(f"Error processing image {xref}: {e}")
+            logger.error("Error processing image %s: %s", xref, e)
             return None, None
     
     def get_comprehensive_image_context(self, xref, page, text_blocks):
@@ -261,7 +264,7 @@ class ImageDescription:
             return final_context
             
         except Exception as e:
-            print(f"Error extracting context for image {xref}: {e}")
+            logger.error("Error extracting context for image %s: %s", xref, e)
             return ""
     
 
@@ -285,7 +288,7 @@ class ImageDescription:
         processed_images = 0
         
         try:
-            print(f"\n  Processing PDF: {os.path.basename(self.pdf_path)}")
+            logger.info("\n  Processing PDF: %s", os.path.basename(self.pdf_path))
             
             # Process each page with progress bar
             for page_num in tqdm(range(len(pdf_document)), desc="Scanning pages for images", unit="page"):
@@ -322,19 +325,19 @@ class ImageDescription:
                                     "path": img_path
                                 }
                         except Exception as e:
-                            print(f"Warning: Could not hash image {xref}: {e}")
+                            logger.warning("Could not hash image %s: %s", xref, e)
                         
                         # Get clean context text around the image
                         context_text = self.get_comprehensive_image_context(xref, page, text_blocks)
                         image_details[img_path] = context_text
                         processed_images += 1
                     
-            print(f"Successfully processed {processed_images}/{total_images} images")
-            print(f"Generated {len(image_hashes)} image hashes")
+            logger.info("Successfully processed %d/%d images", processed_images, total_images)
+            logger.info("Generated %d image hashes", len(image_hashes))
             return image_details, image_hashes  # Return both details and hashes
-            
+
         except Exception as e:
-            print(f"Error during image extraction: {e}")
+            logger.error("Error during image extraction: %s", e)
             return image_details, image_hashes
         finally:
             pdf_document.close()
@@ -365,7 +368,7 @@ class ImageDescription:
             return base64.b64encode(img_bytes).decode("utf-8")
             
         except Exception as e:
-            print(f"Error encoding image {image_path}: {e}")
+            logger.error("Error encoding image %s: %s", image_path, e)
             return None
 
     async def analyze_image_with_context(self, image_path, context_text):
@@ -378,13 +381,13 @@ class ImageDescription:
             
         try:
             # Step 1: Extract ALL text using OCR
-            print(f"    Running OCR on {os.path.basename(image_path)}...")
+            logger.info("    Running OCR on %s...", os.path.basename(image_path))
             ocr_text = self.extract_text_from_image_ocr(image_path)
-            
+
             if ocr_text:
-                print(f"    OCR extracted {len(ocr_text)} characters")
+                logger.info("    OCR extracted %d characters", len(ocr_text))
             else:
-                print(f"     OCR found no text")
+                logger.warning("     OCR found no text")
             
             # Step 2: Encode image for GPT-4o
             image_base64 = self.encode_image(image_path)
@@ -550,8 +553,8 @@ class ImageDescription:
             
             # Debug logging
             if not result or len(result) < 10:
-                print(f"\n  WARNING: Got very short/empty response for {os.path.basename(image_path)}")
-                print(f"Response length: {len(result)}, Content: '{result[:100]}'")
+                logger.warning("\n  WARNING: Got very short/empty response for %s", os.path.basename(image_path))
+                logger.warning("Response length: %d, Content: '%s'", len(result), result[:100])
             
             # Only skip if explicitly marked invalid (and only if it's truly a logo/decoration)
             if "INVALID_IMAGE" in result and len(result) < 50:
@@ -564,7 +567,7 @@ class ImageDescription:
             return result
                 
         except Exception as e:
-            print(f"Error analyzing image {image_path}: {e}")
+            logger.error("Error analyzing image %s: %s", image_path, e)
             return f"Error analyzing image: {str(e)}"
     
 
@@ -577,7 +580,7 @@ class ImageDescription:
         image_analyses = {}
         output_file = os.path.splitext(self.pdf_path)[0] + "_analysis.json"
 
-        print(f"\n Analyzing {len(contexts)} images with GPT-4o...")
+        logger.info("\n Analyzing %d images with GPT-4o...", len(contexts))
         processed_count = 0
         skipped_count = 0
 
@@ -599,14 +602,14 @@ class ImageDescription:
 
         for image_path, result, error in analysis_results:
             if error is not None:
-                print(f"\n Error analyzing {image_path}: {error}")
+                logger.error("\n Error analyzing %s: %s", image_path, error)
                 image_analyses[image_path] = f"[Analysis error: {str(error)}]"
                 continue
 
             # Only skip if explicitly None (truly invalid decoration)
             if result is None:
                 skipped_count += 1
-                print(f"\n  Skipped decorative image: {os.path.basename(image_path)}")
+                logger.warning("\n  Skipped decorative image: %s", os.path.basename(image_path))
                 continue
 
             # Store result even if it contains INVALID_IMAGE string (might have other data)
@@ -616,7 +619,7 @@ class ImageDescription:
 
             # Warn if result seems insufficient
             if len(result) < 50:
-                print(f"\n  Short description for {os.path.basename(image_path)}: {len(result)} chars")
+                logger.warning("\n  Short description for %s: %d chars", os.path.basename(image_path), len(result))
 
         # Save simple analysis results
         analysis_data = {
@@ -631,10 +634,10 @@ class ImageDescription:
         with open(output_file, "w", encoding="utf-8") as json_file:
             json.dump(analysis_data, json_file, ensure_ascii=False, indent=2)
         
-        print(f"\n Analysis complete:")
-        print(f"   • Successfully analyzed: {processed_count}/{len(contexts)} images")
-        print(f"   • Skipped (decorative/invalid): {skipped_count} images")
-        print(f"   • Results saved to: {output_file}")
+        logger.info("\n Analysis complete:")
+        logger.info("   • Successfully analyzed: %d/%d images", processed_count, len(contexts))
+        logger.info("   • Skipped (decorative/invalid): %d images", skipped_count)
+        logger.info("   • Results saved to: %s", output_file)
         
         # Return the dictionary of image analyses for ingestion
         return image_analyses
@@ -676,7 +679,7 @@ class ImageDescription:
             }
             return image_metadata
         except Exception as e:
-            print(f"Error creating image metadata: {e}")
+            logger.error("Error creating image metadata: %s", e)
             return {
                 "source_file": self.pdf_path,
                 "image": image_path,

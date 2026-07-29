@@ -1,10 +1,13 @@
 import os
 import json
+import logging
 import time
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+
+logger = logging.getLogger("rag.graph.semantic_cache")
 
 load_dotenv()
 
@@ -31,19 +34,19 @@ class SemanticCache:
         self.qdrant_api_key = os.getenv("QDRANT_API_KEY", '')
         
         try:
-            print(f" SemanticCache: Connecting to Qdrant at {self.qdrant_url}...")
+            logger.info(f" SemanticCache: Connecting to Qdrant at {self.qdrant_url}...")
             self.client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=10)
             self.client.get_collections() # Test connection
-            print(" SemanticCache: Connected to Cloud Qdrant")
+            logger.info(" SemanticCache: Connected to Cloud Qdrant")
         except Exception as e:
-            print(f" SemanticCache: Cloud connection failed ({e}). Trying local...")
+            logger.warning(f" SemanticCache: Cloud connection failed ({e}). Trying local...")
             self.qdrant_url = "http://localhost:6333"
             self.qdrant_api_key = ''
             try:
                 self.client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=5)
-                print("SemanticCache: Connected to Local Qdrant")
+                logger.info("SemanticCache: Connected to Local Qdrant")
             except Exception as local_e:
-                print(f" SemanticCache: Failed to connect to Qdrant. Caching disabled. {local_e}")
+                logger.error(f" SemanticCache: Failed to connect to Qdrant. Caching disabled. {local_e}")
                 self.client = None
                 
         # Ensure collection exists
@@ -57,7 +60,7 @@ class SemanticCache:
             exists = any(c.name == self.collection_name for c in collections)
             
             if not exists:
-                print(f" SemanticCache: Creating collection '{self.collection_name}'...")
+                logger.info(f" SemanticCache: Creating collection '{self.collection_name}'...")
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=models.VectorParams(
@@ -65,17 +68,17 @@ class SemanticCache:
                         distance=models.Distance.COSINE
                     )
                 )
-                print(f" SemanticCache: Collection created.")
-            
+                logger.info(f" SemanticCache: Collection created.")
+
             # Ensure payload index for thread_id (required for filtering)
             self.client.create_payload_index(
                 collection_name=self.collection_name,
                 field_name="thread_id",
                 field_schema=models.PayloadSchemaType.KEYWORD
             )
-            print(" SemanticCache: Thread ID index ensured.")
+            logger.info(" SemanticCache: Thread ID index ensured.")
         except Exception as e:
-            print(f" SemanticCache: Error ensuring collection: {e}")
+            logger.error(f" SemanticCache: Error ensuring collection: {e}")
 
     @staticmethod
     def _filter_signature(ticker: str = None, requested_years: list = None, filing_type: str = None) -> str:
@@ -124,12 +127,12 @@ class SemanticCache:
 
         # Check for keywords
         if any(kw in query_lower for kw in bypass_keywords):
-            print(f" SemanticCache: Bypassing cache for context-dependent query: '{query}'")
+            logger.info(f" SemanticCache: Bypassing cache for context-dependent query: '{query}'")
             return None
 
         # Check for very short queries (likely follow-ups)
         if len(query.split()) < 3:
-            print(f" SemanticCache: Bypassing cache for short query: '{query}'")
+            logger.info(f" SemanticCache: Bypassing cache for short query: '{query}'")
             return None
 
         try:
@@ -167,17 +170,17 @@ class SemanticCache:
                 # scored above threshold, refuse a hit whose stored filters
                 # don't exactly match this request's resolved filters.
                 if hit.payload.get("filter_signature") != filter_sig:
-                    print(f" SemanticCache: MISS (filter signature mismatch — cached='{hit.payload.get('filter_signature')}' requested='{filter_sig}')")
+                    logger.info(f" SemanticCache: MISS (filter signature mismatch — cached='{hit.payload.get('filter_signature')}' requested='{filter_sig}')")
                     return None
-                print(f" SemanticCache: HIT (Score: {hit.score:.4f}, Thread: {thread_id}, Filters: {filter_sig})")
+                logger.info(f" SemanticCache: HIT (Score: {hit.score:.4f}, Thread: {thread_id}, Filters: {filter_sig})")
                 return hit.payload
             else:
                 scope_msg = f"Thread: {thread_id}" if thread_id else "Global"
-                print(f" SemanticCache: MISS ({scope_msg})")
+                logger.info(f" SemanticCache: MISS ({scope_msg})")
                 return None
 
         except Exception as e:
-            print(f" SemanticCache: Lookup error: {e}")
+            logger.error(f" SemanticCache: Lookup error: {e}")
             return None
 
     def update(self, query: str, response_data: dict, thread_id: str = None, ticker: str = None,
@@ -220,7 +223,7 @@ class SemanticCache:
                     )
                 ]
             )
-            print(f" SemanticCache: Saved response for '{query[:30]}...' (filters: {filter_sig})")
+            logger.info(f" SemanticCache: Saved response for '{query[:30]}...' (filters: {filter_sig})")
 
         except Exception as e:
-            print(f" SemanticCache: Update error: {e}")
+            logger.error(f" SemanticCache: Update error: {e}")

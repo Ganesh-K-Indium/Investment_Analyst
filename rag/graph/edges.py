@@ -1,7 +1,10 @@
 "his modules has all info about the graph edges"
+import logging
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from rag.vectordb.client import load_vector_database
+
+logger = logging.getLogger("rag.graph.edges")
 
 
 def route_alpha_workflow(state):
@@ -22,16 +25,16 @@ def route_alpha_workflow(state):
     macro_mode = state.get("macro_mode", False)
 
     if alpha_mode:
-        print(" Routing to ALPHA Framework workflow")
+        logger.info(" Routing to ALPHA Framework workflow")
         return "alpha"
     elif scenario_mode:
-        print(" Routing to Scenario (Bull/Bear/Base) workflow")
+        logger.info(" Routing to Scenario (Bull/Bear/Base) workflow")
         return "scenario"
     elif macro_mode:
-        print(" Routing to Macro Data workflow")
+        logger.info(" Routing to Macro Data workflow")
         return "macro"
     else:
-        print(" Routing to normal RAG workflow")
+        logger.info(" Routing to normal RAG workflow")
         return "normal"
 
 
@@ -44,10 +47,10 @@ def route_after_alpha_retrieve(state):
     """
     pillar = state.get("alpha_pillar")
     if pillar == "insider_trading":
-        print("---INSIDER TRADING: BYPASSING GENERATE → SHOW RESULT---")
+        logger.info("---INSIDER TRADING: BYPASSING GENERATE → SHOW RESULT---")
         return "show_result"
     if pillar:
-        print(f"---SINGLE PILLAR ({pillar}): DIRECT TO GENERATE---")
+        logger.info(f"---SINGLE PILLAR ({pillar}): DIRECT TO GENERATE---")
         return "generate"
     return "alpha_generate"
 
@@ -63,7 +66,7 @@ def route_question(state):
     
     The heavy lifting (verification, scoring, fallback) happens in the retrieve node.
     """
-    print("---ROUTE QUESTION---")
+    logger.info("---ROUTE QUESTION---")
     messages = state["messages"]
     question = messages[-1].content
     
@@ -71,7 +74,7 @@ def route_question(state):
     companies_detected = state.get("companies_detected", [])
     
     if companies_detected:
-        print(f"Company query detected: {companies_detected} → vectorstore")
+        logger.info(f"Company query detected: {companies_detected} → vectorstore")
         return "vectorstore"
     
     # Check for explicit real-time requests (only case for web_search)
@@ -82,11 +85,11 @@ def route_question(state):
     
     question_lower = question.lower()
     if any(keyword in question_lower for keyword in realtime_keywords): 
-        print("Real-time data request → web_search")
+        logger.info("Real-time data request → web_search")
         return "web_search"
     
     # Default: go to vectorstore (let retrieval and grading decide quality)
-    print("Default → vectorstore")
+    logger.info("Default → vectorstore")
     return "vectorstore"
     
 def decide_to_generate(state):
@@ -98,46 +101,46 @@ def decide_to_generate(state):
         ├─ "generate"              (sufficient grade, web search done, or qdrant_error)
         └─ "integrate_web_search"  (partial/insufficient and web search not yet done)
     """
-    print("---DECIDE TO GENERATE---")
+    logger.info("---DECIDE TO GENERATE---")
 
     # Qdrant connection error — skip web search and go straight to generate
     # (generate will return the user-facing error message)
     if state.get("qdrant_error"):
-        print("---DECISION: QDRANT ERROR, ROUTE TO GENERATE FOR USER-FACING MESSAGE---")
+        logger.error("---DECISION: QDRANT ERROR, ROUTE TO GENERATE FOR USER-FACING MESSAGE---")
         return "generate"
 
     filtered_documents = state["documents"]
     web_searched = state.get("web_searched", False)
 
     doc_count = len(filtered_documents) if filtered_documents else 0
-    print(f"Chunks: {doc_count}, Web searched: {web_searched}")
+    logger.info(f"Chunks: {doc_count}, Web searched: {web_searched}")
 
     # Web search already done → generate with whatever we have
     if web_searched:
-        print("---DECISION: WEB SEARCH DONE, GENERATE---")
+        logger.info("---DECISION: WEB SEARCH DONE, GENERATE---")
         return "generate"
 
     # No documents → go get them
     if not filtered_documents:
-        print("---DECISION: NO DOCUMENTS, INTEGRATE WEB SEARCH---")
+        logger.info("---DECISION: NO DOCUMENTS, INTEGRATE WEB SEARCH---")
         return "integrate_web_search"
 
     financial_grading = state.get("financial_grading", {})
 
     if not financial_grading or "overall_grade" not in financial_grading:
-        print("  No financial grading found, generating with available docs")
+        logger.info("  No financial grading found, generating with available docs")
         return "generate" if doc_count >= 3 else "integrate_web_search"
 
     overall_grade = financial_grading.get("overall_grade")
     can_answer = financial_grading.get("can_answer", False)
-    print(f"Grade: {overall_grade} | Can Answer: {can_answer}")
+    logger.info(f"Grade: {overall_grade} | Can Answer: {can_answer}")
 
     if overall_grade == "sufficient" and can_answer:
-        print("---DECISION: SUFFICIENT, GENERATE---")
+        logger.info("---DECISION: SUFFICIENT, GENERATE---")
         return "generate"
 
     if overall_grade in ["partial", "insufficient"]:
-        print(f"---DECISION: {overall_grade.upper()}, INTEGRATE WEB SEARCH---")
+        logger.info(f"---DECISION: {overall_grade.upper()}, INTEGRATE WEB SEARCH---")
         return "integrate_web_search"
 
     return "generate" if doc_count >= 2 else "integrate_web_search"
@@ -180,7 +183,7 @@ def route_after_retrieve(state):
     """
     if _is_direct_vectordb_mode(state):
         query_type = state.get("sub_query_analysis", {}).get("query_type", "comparison")
-        print(f"---{query_type.upper()} MODE: SKIPPING GRADING, DIRECT TO GENERATE---")
+        logger.info(f"---{query_type.upper()} MODE: SKIPPING GRADING, DIRECT TO GENERATE---")
         return "generate"
     else:
         return "grade_documents"
@@ -197,12 +200,12 @@ def decide_chart_generation(state):
     Returns:
         str: Next node to call
     """
-    print("---DECIDE CHART GENERATION---")
+    logger.info("---DECIDE CHART GENERATION---")
     is_comparison_mode = state.get("is_comparison_mode", False)
     
     if is_comparison_mode:
-        print("---DECISION: COMPARISON MODE ENABLED, GENERATE CHART---")
+        logger.info("---DECISION: COMPARISON MODE ENABLED, GENERATE CHART---")
         return "generate_chart"
     else:
-        print("---DECISION: NOT COMPARISON MODE, SKIP CHART---")
+        logger.info("---DECISION: NOT COMPARISON MODE, SKIP CHART---")
         return "show_result"

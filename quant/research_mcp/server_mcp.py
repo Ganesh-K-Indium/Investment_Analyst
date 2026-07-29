@@ -8,6 +8,7 @@ generating bull/bear scenarios, sentiment analysis, and summarization.
 import os
 import json
 import asyncio
+import logging
 import traceback
 import hashlib
 from datetime import datetime, timedelta
@@ -25,6 +26,9 @@ import aiohttp
 from textblob import TextBlob
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger("quant.research_mcp.server_mcp")
 
 # Initialize FastMCP server
 research_server = FastMCP(
@@ -1217,7 +1221,7 @@ async def _analyze_mda_sentiment_impl(
         
         # Auto-extract MD&A if not provided
         if auto_extract and not current_quarter_text and symbol:
-            print(f"Auto-extracting current quarter MD&A for {symbol}...")
+            logger.info("Auto-extracting current quarter MD&A for %s...", symbol)
             current_extraction = await _extract_mda_from_web(symbol, "latest")
             if not current_extraction.get("success"):
                 return current_extraction
@@ -1293,7 +1297,7 @@ Respond with a JSON object:
         
         # Auto-extract previous quarter if not provided
         if auto_extract and not previous_quarter_text and symbol:
-            print(f"Auto-extracting previous quarter MD&A for {symbol}...")
+            logger.info("Auto-extracting previous quarter MD&A for %s...", symbol)
             previous_extraction = await _extract_mda_from_web(symbol, "previous")
             if previous_extraction.get("success"):
                 previous_quarter_text = previous_extraction["extracted_text"]
@@ -1509,7 +1513,7 @@ async def comprehensive_research(
         all_sources = []
         
         # Step 1: Search for analyst ratings
-        print(f"Searching for analyst ratings for {symbol}...")
+        logger.info("Searching for analyst ratings for %s...", symbol)
         ratings_search = await _search_analyst_ratings_impl(symbol, company_name)
         results["ratings_search"] = {
             "success": ratings_search.get("success"),
@@ -1530,7 +1534,7 @@ async def comprehensive_research(
                     })
         
         # Step 2: Aggregate ratings
-        print(f"Aggregating ratings for {symbol}...")
+        logger.info("Aggregating ratings for %s...", symbol)
         if ratings_search.get("success") and ratings_search.get("results"):
             aggregated = await _aggregate_ratings_impl(symbol, ratings_search.get("results"))
             results["aggregated_ratings"] = aggregated
@@ -1538,7 +1542,7 @@ async def comprehensive_research(
             results["aggregated_ratings"] = {"success": False, "error": "No ratings found to aggregate"}
         
         # Step 3: Analyze sentiment of combined content
-        print(f" Analyzing sentiment for {symbol}...")
+        logger.info(" Analyzing sentiment for %s...", symbol)
         if ratings_search.get("results"):
             combined_text = " ".join([r.get("content", "") for r in ratings_search.get("results", [])[:5]])
             if combined_text:
@@ -1546,7 +1550,7 @@ async def comprehensive_research(
                 results["sentiment"] = sentiment
         
         # Step 4: Generate summary
-        print(f"Generating summary for {symbol}...")
+        logger.info("Generating summary for %s...", symbol)
         if ratings_search.get("results"):
             combined_content = "\n\n".join([r.get("content", "") for r in ratings_search.get("results", [])[:5]])
             if combined_content:
@@ -1555,7 +1559,7 @@ async def comprehensive_research(
         
         # Step 5: Generate scenarios
         if include_scenarios:
-            print(f" Generating bull/bear scenarios for {symbol}...")
+            logger.info(" Generating bull/bear scenarios for %s...", symbol)
             news_summary = results.get("summary", {}).get("summary", "")
             # Extract source_urls for backward compatibility
             all_source_urls = [s['url'] for s in all_sources]
@@ -1600,19 +1604,19 @@ async def comprehensive_research(
 if __name__ == "__main__":
     import uvicorn
     
-    print(" Starting Research MCP Server...")
-    print("=" * 60)
-    print(" Available Tools:")
-    print("  • web_search - General web search via Tavily")
-    print("  • search_analyst_ratings - Find analyst ratings")
-    print("  • aggregate_ratings - Normalize and aggregate ratings")
-    print("  • analyze_sentiment - Sentiment analysis")
-    print("  • analyze_mda_sentiment - MD&A sentiment analysis with Q/Q comparison")
-    print("  • summarize_content - Summarize articles")
-    print("  • generate_scenarios - Bull/bear scenario generation")
-    print("  • get_cached_research - Retrieve cached data")
-    print("  • comprehensive_research - Full research pipeline")
-    print("=" * 60)
+    logger.info(" Starting Research MCP Server...")
+    logger.info("=" * 60)
+    logger.info(" Available Tools:")
+    logger.info("  • web_search - General web search via Tavily")
+    logger.info("  • search_analyst_ratings - Find analyst ratings")
+    logger.info("  • aggregate_ratings - Normalize and aggregate ratings")
+    logger.info("  • analyze_sentiment - Sentiment analysis")
+    logger.info("  • analyze_mda_sentiment - MD&A sentiment analysis with Q/Q comparison")
+    logger.info("  • summarize_content - Summarize articles")
+    logger.info("  • generate_scenarios - Bull/bear scenario generation")
+    logger.info("  • get_cached_research - Retrieve cached data")
+    logger.info("  • comprehensive_research - Full research pipeline")
+    logger.info("=" * 60)
     
     # Run the MCP server
     research_server.run(transport="streamable-http", host="0.0.0.0", port=8567)

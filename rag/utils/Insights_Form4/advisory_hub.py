@@ -210,18 +210,18 @@ async def get_advisory_report(ticker: str, start_date: date = None, end_date: da
         return {"error": f"Analysis failed: {str(e)}"}
 def print_report(ticker: str, report: dict):
     """Prints the advisory report in the exact required format."""
-    print("\n--- Running Advisory Analysis --- \n")
-    
+    logger.info("\n--- Running Advisory Analysis --- \n")
+
     if "error" in report:
-        print(f"ERROR: {report['error']}")
-        return
-        
-    if report.get("status") == "no_data":
-        print(f"NOTICE: {report['message']}")
-        print("To ingest data, please run the separate ingestion pipeline: python ingest.py")
+        logger.error(f"ERROR: {report['error']}")
         return
 
-    print("=== Analyst Report === \n")
+    if report.get("status") == "no_data":
+        logger.warning(f"NOTICE: {report['message']}")
+        logger.warning("To ingest data, please run the separate ingestion pipeline: python ingest.py")
+        return
+
+    logger.info("=== Analyst Report === \n")
     
     for issuer, detail in report.items():
         if issuer in ["error", "status", "message"]: continue
@@ -243,9 +243,9 @@ def print_report(ticker: str, report: dict):
         # print(f"Total Disposed (Dollars): ${detail.get('Total_Sold', 0):,.2f} \n")
         # print(f"Transactions (Disposed): {detail.get('Disposed_Txn_Count', 0)} \n")
         # print(f"Average Disposed Price: ${detail.get('Avg_Disposed_Price', 0):,.2f} \n")
-        print("  --- AI Analysis --- \n")
+        logger.info("  --- AI Analysis --- \n")
         reason = detail.get('Reason', 'No analysis available')
-        print(f"{reason}\n")
+        logger.info(f"{reason}\n")
 
 if __name__ == "__main__":
     import asyncio
@@ -253,7 +253,7 @@ if __name__ == "__main__":
 
     ticker = "GOOGL"
     if not ticker:
-        print("No ticker provided.")
+        logger.warning("No ticker provided.")
         sys.exit(1)
 
     result = asyncio.run(get_advisory_report(ticker))

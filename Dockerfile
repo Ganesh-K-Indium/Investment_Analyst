@@ -25,6 +25,11 @@ RUN apt-get update && apt-get install -y \
 ENV PYPPETEER_CHROMIUM_REVISION=1263111
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
+# Unbuffered stdout/stderr so log output (and any remaining print()) appears
+# immediately in `docker logs` instead of sitting in Python's block buffer
+# until it fills up or the process exits.
+ENV PYTHONUNBUFFERED=1
+
 # Explicit Tesseract binary path - overridable via ECS task definition env vars
 # Debian slim puts tesseract at /usr/bin/tesseract
 ENV TESSERACT_CMD=/usr/bin/tesseract

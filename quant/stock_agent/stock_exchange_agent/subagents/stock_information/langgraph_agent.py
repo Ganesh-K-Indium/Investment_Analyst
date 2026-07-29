@@ -4,6 +4,7 @@ Handles stock information queries using MCP tools via LangGraph React Agent
 """
 import asyncio
 import aiohttp
+import logging
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain.agents import create_agent
@@ -13,6 +14,8 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
+
+logger = logging.getLogger("quant.stock_agent.stock_exchange_agent.subagents.stock_information.langgraph_agent")
 
 
 async def wait_for_server(url: str, timeout: int = 10):
@@ -33,7 +36,7 @@ async def wait_for_server(url: str, timeout: int = 10):
             result = sock.connect_ex((host, port))
             sock.close()
             if result == 0:
-                print(f" Stock Information MCP server is up at {url}")
+                logger.info(" Stock Information MCP server is up at %s", url)
                 return True
         except:
             pass

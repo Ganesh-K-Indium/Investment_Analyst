@@ -19,8 +19,16 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+#
+# disable_existing_loggers=False is required here: alembic.ini's [loggers]
+# section only declares root/sqlalchemy/alembic, and fileConfig() defaults to
+# disabling every OTHER already-registered logger. Since migrations run
+# in-process during FastAPI startup (after app.main and every app/rag/quant
+# module has already called logging.getLogger(...)), the default would
+# permanently silence all of those loggers — including the per-request
+# "api" logger — for the rest of the process's life.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

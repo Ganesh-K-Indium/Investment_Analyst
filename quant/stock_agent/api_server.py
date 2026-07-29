@@ -4,6 +4,7 @@ Exposes the supervisor agent functionality via REST API
 """
 
 import asyncio
+import logging
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +28,9 @@ from langchain_openai import ChatOpenAI
 from langgraph_supervisor import create_supervisor
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import HumanMessage
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger("quant.stock_agent.api_server")
 
 # Pydantic models for API requests/responses
 class ChatRequest(BaseModel):
@@ -61,9 +65,9 @@ async def lifespan(app: FastAPI):
     if saver_cm is not None:
         try:
             await saver_cm.__aexit__(None, None, None)
-            print(" Memory saver cleaned up successfully")
+            logger.info(" Memory saver cleaned up successfully")
         except Exception as e:
-            print(f" Error cleaning up memory saver: {e}")
+            logger.error(" Error cleaning up memory saver: %s", e)
 
 # FastAPI app
 app = FastAPI(
@@ -91,41 +95,41 @@ async def initialize_agents():
         return
 
     try:
-        print(" Initializing Stock Analysis Supervisor Agent...")
-        
+        logger.info(" Initializing Stock Analysis Supervisor Agent...")
+
         # Initialize memory saver
-        print(" Initializing SQLite memory...")
+        logger.info(" Initializing SQLite memory...")
         db_path = os.getenv("SQLITE_DB_PATH", "sqlite:///checkpoints.db")
-        print(f" Using database path: {db_path}")
-        
+        logger.info(" Using database path: %s", db_path)
+
         try:
             saver_cm = AsyncSqliteSaver.from_conn_string(db_path)
-            print(" Created AsyncSqliteSaver context manager")
+            logger.info(" Created AsyncSqliteSaver context manager")
             saver = await saver_cm.__aenter__()
-            print(" Entered saver context manager")
+            logger.info(" Entered saver context manager")
             await saver.setup()  # Creates tables if needed
-            print(" Memory initialized successfully")
+            logger.info(" Memory initialized successfully")
         except Exception as saver_error:
-            print(f" Failed to initialize saver: {str(saver_error)}")
-            print(f" Database path: {db_path}")
+            logger.error(" Failed to initialize saver: %s", str(saver_error))
+            logger.error(" Database path: %s", db_path)
             import traceback
             traceback.print_exc()
             raise
 
         # Wait for MCP servers to be ready
-        print(" Waiting for MCP servers...")
+        logger.info(" Waiting for MCP servers...")
         await wait_for_server("http://localhost:8565/mcp")  # Stock Information
         await wait_for_server("http://localhost:8566/mcp")  # Technical Analysis
         await wait_for_server("http://localhost:8567/mcp")  # Research
 
         # Create sub-agents
-        print(" Creating sub-agents...")
+        logger.info(" Creating sub-agents...")
         stock_info_agent = await create_stock_information_agent(checkpointer=saver)
         technical_agent = await create_technical_analysis_agent(checkpointer=saver)
         ticker_finder = await create_ticker_finder_agent(checkpointer=saver)
         research_agent = await create_research_agent(checkpointer=saver)
 
-        print(" Sub-agents created successfully")
+        logger.info(" Sub-agents created successfully")
 
         # Create supervisor
         supervisor_prompt = """You are a stock analysis supervisor managing 4 agents:
@@ -163,10 +167,10 @@ CRITICAL:
         supervisor.recursion_limit = 50
 
         agents_initialized = True
-        print(" Supervisor agent initialized successfully")
+        logger.info(" Supervisor agent initialized successfully")
 
     except Exception as e:
-        print(f" Failed to initialize agents: {str(e)}")
+        logger.error(" Failed to initialize agents: %s", str(e))
         import traceback
         traceback.print_exc()
         raise
@@ -210,7 +214,7 @@ async def health_check():
             sock.close()
             return result == 0
         except Exception as e:
-            print(f" Server check failed for {url}: {str(e)}")
+            logger.error(" Server check failed for %s: %s", url, str(e))
             return False
 
     # Check all MCP servers
@@ -253,7 +257,7 @@ async def chat_with_agent(request: ChatRequest, background_tasks: BackgroundTask
         # Generate session ID if not provided
         session_id = request.session_id or f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        print(f" Processing request for session {session_id}: {request.message[:100]}...")
+        logger.info(" Processing request for session %s: %s...", session_id, request.message[:100])
 
         # Get the current state to know how many messages exist
         current_state = await supervisor.aget_state(config={"configurable": {"thread_id": session_id}})
@@ -293,7 +297,7 @@ async def chat_with_agent(request: ChatRequest, background_tasks: BackgroundTask
         )
 
     except Exception as e:
-        print(f" Error processing request: {str(e)}")
+        logger.error(" Error processing request: %s", str(e))
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
@@ -326,9 +330,9 @@ def save_response_to_file(response, session_id):
         filepath = os.path.join(responses_dir, filename)
         with open(filepath, "w") as f:
             json.dump(serialize_response(response), f, indent=4)
-        print(f" API response saved to {filepath}")
+        logger.info(" API response saved to %s", filepath)
     except Exception as e:
-        print(f" Failed to save response: {str(e)}")
+        logger.error(" Failed to save response: %s", str(e))
 
 
 @app.get("/capabilities", tags=["Info"])
@@ -410,9 +414,9 @@ if __name__ == "__main__":
     # the one wired into app/main.py (that's app.services.stock_agent) — but
     # it previously bound 8568, colliding with the Options Intelligence MCP
     # server if both were ever run at once.
-    print(" Starting Stock Analysis Supervisor API Server...")
-    print(" API will be available at: http://localhost:8569")
-    print(" API documentation at: http://localhost:8569/docs")
+    logger.info(" Starting Stock Analysis Supervisor API Server...")
+    logger.info(" API will be available at: http://localhost:8569")
+    logger.info(" API documentation at: http://localhost:8569/docs")
 
     uvicorn.run(
         "api_server:app",

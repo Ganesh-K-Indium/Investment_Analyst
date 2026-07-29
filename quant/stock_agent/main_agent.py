@@ -7,6 +7,7 @@ Uses langgraph-supervisor to coordinate work between agents.
 
 import asyncio
 import aiohttp
+import logging
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.tools import load_mcp_tools
 
@@ -28,6 +29,9 @@ import json
 
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger("quant.stock_agent.main_agent")
+
 
 async def wait_for_server(url: str, timeout: int = 10):
     """Wait until the MCP server is ready to accept connections."""
@@ -47,7 +51,7 @@ async def wait_for_server(url: str, timeout: int = 10):
             result = sock.connect_ex((host, port))
             sock.close()
             if result == 0:
-                print(f" MCP server is up at {url}")
+                logger.info(" MCP server is up at %s", url)
                 return True
         except:
             pass
@@ -58,33 +62,33 @@ async def wait_for_server(url: str, timeout: int = 10):
 async def main():
     """Main supervisor agent that coordinates stock analysis sub-agents."""
     
-    print(" Initializing Stock Analysis Supervisor Agent...")
-    print("=" * 80)
-    
+    logger.info(" Initializing Stock Analysis Supervisor Agent...")
+    logger.info("=" * 80)
+
     # Initialize memory saver
-    print(" Initializing SQLite memory...")
+    logger.info(" Initializing SQLite memory...")
     db_path = os.getenv("SQLITE_DB_PATH", "sqlite:///checkpoints.db")
-    
+
     async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
         await saver.setup()  # Creates tables if needed
-        print(" Memory initialized successfully")
-        
+        logger.info(" Memory initialized successfully")
+
         # Wait for MCP servers to be ready
-        print(" Waiting for MCP servers...")
+        logger.info(" Waiting for MCP servers...")
         await wait_for_server("http://localhost:8565/mcp")  # Stock Information
         await wait_for_server("http://localhost:8566/mcp")  # Technical Analysis
         await wait_for_server("http://localhost:8567/mcp")  # Research
         await wait_for_server("http://localhost:8568/mcp")  # Options Intelligence
 
         # Create sub-agents
-        print(" Creating sub-agents...")
+        logger.info(" Creating sub-agents...")
         stock_info_agent = await create_stock_information_agent(checkpointer=saver)
         technical_agent = await create_technical_analysis_agent(checkpointer=saver)
         ticker_finder = await create_ticker_finder_agent(checkpointer=saver)
         research_agent = await create_research_agent(checkpointer=saver)
         options_agent = await create_options_agent(checkpointer=saver)
 
-        print(" Sub-agents created successfully")
+        logger.info(" Sub-agents created successfully")
 
         supervisor_graph = create_supervisor(
             model=ChatOpenAI(temperature=0, model_name="gpt-4o"),
@@ -138,69 +142,69 @@ async def main():
         # Set recursion limit for the supervisor to prevent infinite loops
         supervisor.recursion_limit = 50
         
-        print("\n" + "="*80)
-        print(" STOCK ANALYSIS SUPERVISOR AGENT - Ready for Commands")
-        print("="*80)
-        print("\n OPTIONS INTELLIGENCE (NEW):")
-        print("  • Options chain analysis (put/call ratio, OI heatmap)")
-        print("  • Bullish/bearish concentration zones from open interest")
-        print("  • Max pain calculation per expiration")
-        print("  • Smart money detection (long-dated unusual OI)")
-        print("  • Unusual options activity (volume/OI spikes)")
-        print("  • Support & resistance levels derived from OI")
-        print("\n What I can help you with:")
-        print("\n FUNDAMENTAL ANALYSIS:")
-        print("  • Current stock prices and market data")
-        print("  • Historical price charts and trends")
-        print("  • Financial news and sentiment analysis")
-        print("  • Dividends, stock splits, and corporate actions")
-        print("  • Financial statements and company financials")
-        print("  • Analyst recommendations and price targets")
-        print("  • Holder information and institutional ownership")
-        print("  • 5-year projections and growth estimates")
-        
-        print("\n TECHNICAL ANALYSIS:")
-        print("  • Moving averages (SMA, EMA)")
-        print("  • RSI and momentum indicators")
-        print("  • Bollinger Bands and volatility")
-        print("  • MACD and trend analysis")
-        print("  • Volume analysis")
-        print("  • Support and resistance levels")
-        print("  • Comprehensive technical charting")
-        
-        print("\n RESEARCH & SCENARIOS:")
-        print("  • Web search for analyst ratings and news")
-        print("  • Aggregated analyst consensus and price targets")
-        print("  • Sentiment analysis of market commentary")
-        print("  • Bull case scenarios with catalysts")
-        print("  • Bear case scenarios with risks")
-        print("  • Comprehensive investment research")
-        print("  • Upgrades, downgrades, and rating changes")
-        
-        print("\n TICKER LOOKUP:")
-        print("  • Find ticker symbols from company names")
-        print("  • Support for US and international stocks")
-        
-        print("\n INTELLIGENT FEATURES:")
-        print("  • Automatic ticker resolution from company names")
-        print("  • Context-aware conversation (remembers previous tickers)")
-        print("  • Multi-part query handling (fundamentals + technicals + research)")
-        print("  • Smart routing to specialized agents")
-        
-        print("\nEnter your command (or 'quit' to exit): ")
+        logger.info("\n" + "="*80)
+        logger.info(" STOCK ANALYSIS SUPERVISOR AGENT - Ready for Commands")
+        logger.info("="*80)
+        logger.info("\n OPTIONS INTELLIGENCE (NEW):")
+        logger.info("  • Options chain analysis (put/call ratio, OI heatmap)")
+        logger.info("  • Bullish/bearish concentration zones from open interest")
+        logger.info("  • Max pain calculation per expiration")
+        logger.info("  • Smart money detection (long-dated unusual OI)")
+        logger.info("  • Unusual options activity (volume/OI spikes)")
+        logger.info("  • Support & resistance levels derived from OI")
+        logger.info("\n What I can help you with:")
+        logger.info("\n FUNDAMENTAL ANALYSIS:")
+        logger.info("  • Current stock prices and market data")
+        logger.info("  • Historical price charts and trends")
+        logger.info("  • Financial news and sentiment analysis")
+        logger.info("  • Dividends, stock splits, and corporate actions")
+        logger.info("  • Financial statements and company financials")
+        logger.info("  • Analyst recommendations and price targets")
+        logger.info("  • Holder information and institutional ownership")
+        logger.info("  • 5-year projections and growth estimates")
+
+        logger.info("\n TECHNICAL ANALYSIS:")
+        logger.info("  • Moving averages (SMA, EMA)")
+        logger.info("  • RSI and momentum indicators")
+        logger.info("  • Bollinger Bands and volatility")
+        logger.info("  • MACD and trend analysis")
+        logger.info("  • Volume analysis")
+        logger.info("  • Support and resistance levels")
+        logger.info("  • Comprehensive technical charting")
+
+        logger.info("\n RESEARCH & SCENARIOS:")
+        logger.info("  • Web search for analyst ratings and news")
+        logger.info("  • Aggregated analyst consensus and price targets")
+        logger.info("  • Sentiment analysis of market commentary")
+        logger.info("  • Bull case scenarios with catalysts")
+        logger.info("  • Bear case scenarios with risks")
+        logger.info("  • Comprehensive investment research")
+        logger.info("  • Upgrades, downgrades, and rating changes")
+
+        logger.info("\n TICKER LOOKUP:")
+        logger.info("  • Find ticker symbols from company names")
+        logger.info("  • Support for US and international stocks")
+
+        logger.info("\n INTELLIGENT FEATURES:")
+        logger.info("  • Automatic ticker resolution from company names")
+        logger.info("  • Context-aware conversation (remembers previous tickers)")
+        logger.info("  • Multi-part query handling (fundamentals + technicals + research)")
+        logger.info("  • Smart routing to specialized agents")
+
+        logger.info("\nEnter your command (or 'quit' to exit): ")
         
         while True:
             try:
                 user_input = input("\n>>> ").strip()
                 if user_input.lower() in ['quit', 'exit', 'q']:
-                    print(" Goodbye!")
+                    logger.info(" Goodbye!")
                     break
-                
+
                 if not user_input:
                     continue
-                
-                print(f"\n Processing: {user_input}")
-                print("-" * 50)
+
+                logger.info("\n Processing: %s", user_input)
+                logger.info("-" * 50)
                 
                 # Get the current state to know how many messages exist
                 current_state = await supervisor.aget_state(config={"configurable": {"thread_id": "main_thread"}})
@@ -209,7 +213,7 @@ async def main():
                 # Trim history to last 20 messages (~10 turns) to prevent context overflow
                 MAX_HISTORY = 20
                 if len(current_messages) > MAX_HISTORY:
-                    print(f" Trimming message history: {len(current_messages)} → {MAX_HISTORY} messages")
+                    logger.info(" Trimming message history: %d → %d messages", len(current_messages), MAX_HISTORY)
                     await supervisor.aupdate_state(
                         config={"configurable": {"thread_id": "main_thread"}},
                         values={"messages": current_messages[-MAX_HISTORY:]}
@@ -241,8 +245,8 @@ async def main():
                 elif final_message is None:
                     final_message = all_messages[-1]
                 
-                print("\n Response:")
-                print(final_message.content)
+                logger.info("\n Response:")
+                logger.info(final_message.content)
 
                 def serialize_response(obj):
                     try:
@@ -268,18 +272,18 @@ async def main():
                 filepath = os.path.join(responses_dir, filename)
                 with open(filepath, "w") as f:
                     json.dump(serialize_response(response), f, indent=4)
-                print(f" Response saved to {filepath}")
-                
+                logger.info(" Response saved to %s", filepath)
+
             except KeyboardInterrupt:
-                print("\n Goodbye!")
+                logger.info("\n Goodbye!")
                 break
             except Exception as e:
-                print(f"\n Error: {str(e)}")
+                logger.error("\n Error: %s", str(e))
                 import traceback
                 traceback.print_exc()
                 continue
-        
-        print(" Memory saved successfully")
+
+        logger.info(" Memory saved successfully")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 import os
 import time
 import asyncio
+import logging
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage
@@ -21,6 +22,9 @@ from rag.graph.edges import (route_question, decide_to_generate,
                          route_after_retrieve,
                          route_after_alpha_retrieve)
 from rag.graph.benchmark import time_node, node_timer
+
+logger = logging.getLogger("rag.graph.builder")
+
 load_dotenv()
 os.environ["GROQ_API_KEY"]=os.getenv("GROQ_API_KEY")
 os.environ["TAVILY_API_KEY"]=os.getenv("TAVILY_API_KEY")
@@ -42,7 +46,7 @@ class BuildingGraph:
         Returns:
             app :- compiled graph
         """
-        print("Building context-free RAG graph...")
+        logger.info("Building context-free RAG graph...")
         
         workflow = StateGraph(GraphState)
 
@@ -181,10 +185,10 @@ class BuildingGraph:
             app = workflow.compile(
                 checkpointer=checkpointer
             )
-            print("Graph compiled successfully (WITH Checkpointer/Memory)")
+            logger.info("Graph compiled successfully (WITH Checkpointer/Memory)")
         else:
             app = workflow.compile()
-            print("Graph compiled successfully (context-free mode)")
+            logger.info("Graph compiled successfully (context-free mode)")
         
         return app
     
@@ -230,10 +234,10 @@ async def main():
         # Print timing summary
         node_timer.print_summary()
         
-        print("\n" + "="*50)
-        print("FINAL RESULT:")
-        print("="*50)
-        print(messages["messages"][-1].content)
+        logger.info("\n" + "="*50)
+        logger.info("FINAL RESULT:")
+        logger.info("="*50)
+        logger.info(messages["messages"][-1].content)
         
     finally:
         # Always cleanup

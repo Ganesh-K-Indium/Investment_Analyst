@@ -12,6 +12,7 @@ Example:
 import sys
 import os
 import argparse
+import logging
 from pathlib import Path
 
 # Add project root directory to path for imports
@@ -22,6 +23,8 @@ sys.path.insert(0, project_root)
 sys.path.insert(0, current_dir)
 
 from ingestion.pdf_processor1 import process_pdf_and_get_result
+
+logger = logging.getLogger("ingestion.ingest_pdf")
 
 
 def format_result(result: dict) -> str:
@@ -103,11 +106,11 @@ async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None,
             "images_processed": False,
         }
     
-    print(f"Ingesting PDF: {pdf_path}")
+    logger.info("Ingesting PDF: %s", pdf_path)
     if ticker:
-        print(f"Ticker: {ticker}")
+        logger.info("Ticker: %s", ticker)
     if filing_type:
-        print(f"Filing type: {filing_type}")
+        logger.info("Filing type: %s", filing_type)
 
     result = await process_pdf_and_get_result(pdf_path, ticker=ticker, filing_type=filing_type, period_end_date=period_end_date)
     return result
@@ -136,7 +139,7 @@ async def main():
     result = await ingest_pdf(args.pdf_path, args.ticker, filing_type=args.filing_type, period_end_date=args.period_end_date)
 
     # Display formatted result
-    print(format_result(result))
+    logger.info(format_result(result))
 
     # Return appropriate exit code
     sys.exit(0 if result['success'] else 1)

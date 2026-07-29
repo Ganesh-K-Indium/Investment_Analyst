@@ -4,6 +4,7 @@ Manages initialization and lifecycle of the stock analysis multi-agent system
 """
 import asyncio
 import socket
+import logging
 from urllib.parse import urlparse
 from typing import Optional
 from langchain_openai import ChatOpenAI
@@ -12,6 +13,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 import os
 from dotenv import load_dotenv
 load_dotenv()
+
+logger = logging.getLogger("app.services.stock_agent")
 
 # Global references
 _stock_supervisor = None
@@ -44,13 +47,13 @@ async def wait_for_server(url: str, timeout: int = 10) -> bool:
             result = sock.connect_ex((host, port))
             sock.close()
             if result == 0:
-                print(f"MCP server is up at {url}")
+                logger.info(f"MCP server is up at {url}")
                 return True
         except:
             pass
         await asyncio.sleep(1)
-    
-    print(f"WARNING: MCP server at {url} did not respond within {timeout} seconds")
+
+    logger.warning(f"WARNING: MCP server at {url} did not respond within {timeout} seconds")
     return False
 
 
@@ -69,24 +72,24 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
     global _stock_supervisor, _stock_saver, _agents_initialized
 
     if _agents_initialized and _stock_supervisor is not None:
-        print("Stock agents already initialized, reusing...")
+        logger.info("Stock agents already initialized, reusing...")
         return _stock_supervisor, True
 
     if checkpointer is None:
-        print("ERROR: initialize_stock_agents() requires a shared checkpointer (none was provided)")
+        logger.error("ERROR: initialize_stock_agents() requires a shared checkpointer (none was provided)")
         _agents_initialized = False
         return None, False
 
     try:
-        print("\nInitializing Stock Analysis Supervisor Agent...")
-        print("="*70)
+        logger.info("\nInitializing Stock Analysis Supervisor Agent...")
+        logger.info("="*70)
 
         # Shared checkpointer (same Postgres-backed saver as the RAG graph) —
         # already set up (tables created) by the caller, nothing to do here.
         _stock_saver = checkpointer
 
         # Wait for MCP servers to be ready (with timeout)
-        print("Checking MCP servers...")
+        logger.info("Checking MCP servers...")
         servers = [
             ("http://localhost:8565/mcp", "Stock Information"),
             ("http://localhost:8566/mcp", "Technical Analysis"),
@@ -101,15 +104,15 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             server_status[name] = ready
             servers_ready.append(ready)
             if not ready:
-                print(f"WARNING: {name} server not responding at {url}")
-        
+                logger.warning(f"WARNING: {name} server not responding at {url}")
+
         if not all(servers_ready):
-            print("WARNING: Some MCP servers are not ready. Stock analysis may have limited functionality.")
-            print("   To enable full functionality, start the MCP servers:")
-            print("   - Stock Information: port 8565")
-            print("   - Technical Analysis: port 8566")
-            print("   - Research: port 8567")
-            print("   - Options Intelligence: port 8568")
+            logger.warning("WARNING: Some MCP servers are not ready. Stock analysis may have limited functionality.")
+            logger.warning("   To enable full functionality, start the MCP servers:")
+            logger.warning("   - Stock Information: port 8565")
+            logger.warning("   - Technical Analysis: port 8566")
+            logger.warning("   - Research: port 8567")
+            logger.warning("   - Options Intelligence: port 8568")
         
         # Import here to avoid circular dependencies
         try:
@@ -126,98 +129,98 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             from stock_exchange_agent.subagents.options_agent.langgraph_agent import create_options_agent
             from langgraph_supervisor import create_supervisor
         except ImportError as e:
-            print(f"ERROR: Failed to import stock agent modules: {e}")
-            print("   Make sure the quant/ directory structure is correct")
-            print(f"   Tried to add: {quant_dir}")
+            logger.error(f"ERROR: Failed to import stock agent modules: {e}")
+            logger.error("   Make sure the quant/ directory structure is correct")
+            logger.error(f"   Tried to add: {quant_dir}")
             import traceback
             traceback.print_exc()
             raise
-        
+
         # Create sub-agents with error handling for each
-        print("Creating sub-agents...")
+        logger.info("Creating sub-agents...")
         agents_created = []
         
         # Stock Information Agent
         if server_status.get("Stock Information"):
             try:
-                print("   Creating stock_information_agent...")
+                logger.info("   Creating stock_information_agent...")
                 stock_info_agent = await create_stock_information_agent(checkpointer=_stock_saver)
                 agents_created.append("stock_info")
-                print("   stock_information_agent created")
+                logger.info("   stock_information_agent created")
             except Exception as e:
-                print(f"   WARNING: Failed to create stock_information_agent: {e}")
+                logger.warning(f"   WARNING: Failed to create stock_information_agent: {e}")
                 stock_info_agent = None
         else:
-            print("   Skipping stock_information_agent (MCP server not ready)")
+            logger.info("   Skipping stock_information_agent (MCP server not ready)")
             stock_info_agent = None
         
         # Technical Analysis Agent
         if server_status.get("Technical Analysis"):
             try:
-                print("   Creating technical_analysis_agent...")
+                logger.info("   Creating technical_analysis_agent...")
                 technical_agent = await create_technical_analysis_agent(checkpointer=_stock_saver)
                 agents_created.append("technical")
-                print("   technical_analysis_agent created")
+                logger.info("   technical_analysis_agent created")
             except Exception as e:
-                print(f"   WARNING: Failed to create technical_analysis_agent: {e}")
-                print(f"   -> Technical Analysis MCP server may not be running (port 8566)")
+                logger.warning(f"   WARNING: Failed to create technical_analysis_agent: {e}")
+                logger.warning(f"   -> Technical Analysis MCP server may not be running (port 8566)")
                 technical_agent = None
         else:
-            print("   Skipping technical_analysis_agent (MCP server not ready)")
+            logger.info("   Skipping technical_analysis_agent (MCP server not ready)")
             technical_agent = None
         
         # Ticker Finder Agent (doesn't need MCP server)
         try:
-            print("   Creating ticker_finder_agent...")
+            logger.info("   Creating ticker_finder_agent...")
             ticker_finder = await create_ticker_finder_agent(checkpointer=_stock_saver)
             agents_created.append("ticker_finder")
-            print("   ticker_finder_agent created")
+            logger.info("   ticker_finder_agent created")
         except Exception as e:
-            print(f"   WARNING: Failed to create ticker_finder_agent: {e}")
+            logger.warning(f"   WARNING: Failed to create ticker_finder_agent: {e}")
             ticker_finder = None
         
         # Research Agent
         if server_status.get("Research"):
             try:
-                print("   Creating research_agent...")
+                logger.info("   Creating research_agent...")
                 research_agent = await create_research_agent(checkpointer=_stock_saver)
                 agents_created.append("research")
-                print("   research_agent created")
+                logger.info("   research_agent created")
             except Exception as e:
-                print(f"   WARNING: Failed to create research_agent: {e}")
-                print(f"   -> Research MCP server may not be running (port 8567)")
+                logger.warning(f"   WARNING: Failed to create research_agent: {e}")
+                logger.warning(f"   -> Research MCP server may not be running (port 8567)")
                 research_agent = None
         else:
-            print("   Skipping research_agent (MCP server not ready)")
+            logger.info("   Skipping research_agent (MCP server not ready)")
             research_agent = None
 
         # Options Intelligence Agent
         if server_status.get("Options Intelligence"):
             try:
-                print("   Creating options_intelligence_agent...")
+                logger.info("   Creating options_intelligence_agent...")
                 options_agent = await create_options_agent(checkpointer=_stock_saver)
                 agents_created.append("options_intelligence")
-                print("   options_intelligence_agent created")
+                logger.info("   options_intelligence_agent created")
             except Exception as e:
-                print(f"   WARNING: Failed to create options_intelligence_agent: {e}")
-                print(f"   -> Options Intelligence MCP server may not be running (port 8568)")
+                logger.warning(f"   WARNING: Failed to create options_intelligence_agent: {e}")
+                logger.warning(f"   -> Options Intelligence MCP server may not be running (port 8568)")
                 options_agent = None
         else:
-            print("   Skipping options_intelligence_agent (MCP server not ready)")
+            logger.info("   Skipping options_intelligence_agent (MCP server not ready)")
             options_agent = None
 
-        print(f"Created {len(agents_created)}/5 sub-agents: {', '.join(agents_created)}")
+        logger.info(f"Created {len(agents_created)}/5 sub-agents: {', '.join(agents_created)}")
         
         # Check if we have at least one working agent
         available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent] if a is not None]
         
         if len(available_agents) == 0:
-            print("ERROR: No agents were successfully created")
-            print("   Stock analysis system cannot be initialized")
+            logger.error("ERROR: No agents were successfully created")
+            logger.error("   Stock analysis system cannot be initialized")
             _agents_initialized = False
             return None, False
-        
-        print(f"\nInitializing supervisor with {len(available_agents)} available agents...")
+
+        logger.info(f"\nInitializing supervisor with {len(available_agents)} available agents...")
         
         # Create supervisor with only available agents
         agent_names = []
@@ -273,14 +276,14 @@ CRITICAL:
         _stock_supervisor.recursion_limit = 50
         
         _agents_initialized = True
-        print("Stock Analysis Supervisor initialized successfully")
-        print(f"   Active agents: {', '.join(agent_names)}")
-        print("="*70 + "\n")
+        logger.info("Stock Analysis Supervisor initialized successfully")
+        logger.info(f"   Active agents: {', '.join(agent_names)}")
+        logger.info("="*70 + "\n")
         
         return _stock_supervisor, True
         
     except Exception as e:
-        print(f"ERROR: Failed to initialize stock agents: {str(e)}")
+        logger.error(f"ERROR: Failed to initialize stock agents: {str(e)}")
         import traceback
         traceback.print_exc()
         _agents_initialized = False
@@ -298,7 +301,7 @@ async def cleanup_stock_agents():
     _stock_supervisor = None
     _stock_saver = None
     _agents_initialized = False
-    print("Stock agents cleaned up")
+    logger.info("Stock agents cleaned up")
 
 
 def get_stock_supervisor():

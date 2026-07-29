@@ -4,6 +4,7 @@ import uuid
 import re
 import hashlib
 import asyncio
+import logging
 import traceback
 from datetime import datetime
 import fitz  # PyMuPDF
@@ -28,6 +29,8 @@ if project_root not in sys.path:
 from app.utils.company_mapping import TICKER_TO_COMPANY, get_company_name, get_ticker
 
 load_dotenv()
+
+logger = logging.getLogger("ingestion.pdf_processor1")
 
 
 def init_vector_stores(collection_name: str = None, use_hybrid_search: bool = None):
@@ -203,7 +206,7 @@ def extract_cover_page_info(pdf_document, max_pages: int = 3) -> dict:
                 break
             cover_text += page.get_text("text") + "\n"
     except Exception as e:
-        print(f"Warning: Could not read cover-page text for filing_type/period_end_date detection: {e}")
+        logger.warning("Could not read cover-page text for filing_type/period_end_date detection: %s", e)
         return result
 
     if not cover_text.strip():
@@ -231,7 +234,7 @@ def extract_cover_page_info(pdf_document, max_pages: int = 3) -> dict:
             parsed_date = date_parser.parse(date_match.group(1), fuzzy=True)
             result["period_end_date"] = parsed_date.date().isoformat()
         except Exception as e:
-            print(f"Warning: Found a period-end date phrase but couldn't parse '{date_match.group(1)}': {e}")
+            logger.warning("Found a period-end date phrase but couldn't parse '%s': %s", date_match.group(1), e)
 
     return result
 
@@ -282,7 +285,7 @@ def calculate_content_hash(pdf_path: str) -> str:
             
         return content_hash.hexdigest()
     except Exception as e:
-        print(f"Error calculating content hash: {e}")
+        logger.error("Error calculating content hash: %s", e)
         return ""
 
 def calculate_image_content_hash(image_data: bytes) -> str:
@@ -290,7 +293,7 @@ def calculate_image_content_hash(image_data: bytes) -> str:
     try:
         return hashlib.sha256(image_data).hexdigest()
     except Exception as e:
-        print(f"Error calculating image content hash: {e}")
+        logger.error("Error calculating image content hash: %s", e)
         return ""
 
 def generate_doc_id(doc_metadata: dict, index: int, doc_type: str = "text") -> str:
@@ -318,8 +321,8 @@ async def check_document_exists(db_loader, source_file_name: str, doc_type: str 
         tuple[bool, list]: (exists, existing_points)
     """
     try:
-        print(f"\n=== Checking existence of {source_file_name} ({doc_type}) ===")
-        print(f"Collection name: {db_loader.collection_name}")
+        logger.info("\n=== Checking existence of %s (%s) ===", source_file_name, doc_type)
+        logger.info("Collection name: %s", db_loader.collection_name)
 
         client = db_loader.async_qdrant_client
         collection_name = db_loader.collection_name
@@ -355,7 +358,7 @@ async def check_document_exists(db_loader, source_file_name: str, doc_type: str 
                 )
 
                 if count_response.count > 0:
-                    print(f"Found existing image with hash {img_info['hash'][:16]}...")
+                    logger.info("Found existing image with hash %s...", img_info['hash'][:16])
                     points = (await client.scroll(
                         collection_name=collection_name,
                         scroll_filter=individual_filter,
@@ -364,7 +367,7 @@ async def check_document_exists(db_loader, source_file_name: str, doc_type: str 
                     ))[0]
                     return True, points
 
-            print("No individual image hashes found, checking by PDF content hash...")
+            logger.info("No individual image hashes found, checking by PDF content hash...")
 
         if content_hash:
             filter_conditions.append(
@@ -387,7 +390,7 @@ async def check_document_exists(db_loader, source_file_name: str, doc_type: str 
             collection_name=collection_name,
             count_filter=search_filter
         )
-        print(f"\nDebug: Found {count_response.count} matching points")
+        logger.info("\nDebug: Found %d matching points", count_response.count)
 
         if count_response.count > 0:
             points = (await client.scroll(
@@ -402,7 +405,7 @@ async def check_document_exists(db_loader, source_file_name: str, doc_type: str 
         return False, []
 
     except Exception as e:
-        print(f"Error checking document existence: {e}")
+        logger.error("Error checking document existence: %s", e)
         return False, []
 
 async def find_new_image_hashes(db_loader, image_hashes: dict) -> dict:
@@ -431,7 +434,7 @@ async def find_new_image_hashes(db_loader, image_hashes: dict) -> dict:
                 )
                 return img_id, count_response.count == 0
             except Exception as e:
-                print(f"Warning: could not check existence of image hash {img_info['hash'][:16]}...: {e}; treating as new")
+                logger.warning("Could not check existence of image hash %s...: %s; treating as new", img_info['hash'][:16], e)
                 return img_id, True
 
     results = await asyncio.gather(*(_check_one(img_id, info) for img_id, info in image_hashes.items()))
@@ -639,7 +642,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
         
         # Calculate content hash for duplicate detection
         content_hash = calculate_content_hash(uploaded_pdf_path)
-        print(f"\nDebug: Content hash for {source_file_name}: {content_hash}")
+        logger.info("\nDebug: Content hash for %s: %s", source_file_name, content_hash)
         
         # --- Text ingestion ---
         text_already_exists = False
@@ -651,7 +654,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
 
         if not text_already_exists:
             documents = []
-            print(f"\n Extracting text from {len(pdf_document)} pages...")
+            logger.info("\n Extracting text from %d pages...", len(pdf_document))
             for page_num, page in enumerate(tqdm(pdf_document, desc="Extracting text", unit="page")):
                 text = page.get_text("text")
 
@@ -666,7 +669,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                     if tables_md:
                         text = text + "\n\n[TABLES]\n" + tables_md
                 except Exception as e:
-                    print(f"Warning: table extraction failed on page {page_num + 1}: {e}")
+                    logger.warning("Table extraction failed on page %d: %s", page_num + 1, e)
 
                 if text.strip():
                     metadata = {
@@ -686,12 +689,12 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
 
             if documents:
                 yield f"Extracted {len(documents)} text segments from PDF."
-                print(f"\n  Splitting text into chunks...")
+                logger.info("\n  Splitting text into chunks...")
                 text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
                     chunk_size=1024, chunk_overlap=300
                 )
                 text_chunks = text_splitter.split_documents(documents)
-                print(f"Created {len(text_chunks)} text chunks")
+                logger.info("Created %d text chunks", len(text_chunks))
 
                 # Generate deterministic UUIDs using the common function
                 ids = [generate_doc_id(doc.metadata, i, "text") for i, doc in enumerate(text_chunks)]

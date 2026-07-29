@@ -1,10 +1,14 @@
 import json
+import logging
 import pandas as pd
 from enum import Enum
 import yfinance as yf
 from textblob import TextBlob
 from datetime import datetime
 from fastmcp import FastMCP
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger("quant.yahoo_finance_mcp.server")
 
 # Define an enum for the type of financial statement
 class FinancialType(str, Enum):
@@ -92,10 +96,10 @@ async def get_historical_stock_prices(
     company = yf.Ticker(ticker)
     try:
         if company.isin is None:
-            print(f"Company ticker {ticker} not found.")
+            logger.warning(f"Company ticker {ticker} not found.")
             return f"Company ticker {ticker} not found."
     except Exception as e:
-        print(f"Error: getting historical stock prices for {ticker}: {e}")
+        logger.error(f"Error: getting historical stock prices for {ticker}: {e}")
         return f"Error: getting historical stock prices for {ticker}: {e}"
 
     hist_data = company.history(period=period, interval=interval)
@@ -119,10 +123,10 @@ async def get_stock_info(ticker: str) -> str:
     company = yf.Ticker(ticker)
     try:
         if company.isin is None:
-            print(f"Company ticker {ticker} not found.")
+            logger.warning(f"Company ticker {ticker} not found.")
             return f"Company ticker {ticker} not found."
     except Exception as e:
-        print(f"Error: getting stock information for {ticker}: {e}")
+        logger.error(f"Error: getting stock information for {ticker}: {e}")
         return f"Error: getting stock information for {ticker}: {e}"
     info = company.info
     return json.dumps(info)
@@ -147,15 +151,15 @@ async def get_yahoo_finance_news(ticker: str) -> str:
     company = yf.Ticker(ticker)
     try:
         if company.isin is None:
-            print(f"Company ticker {ticker} not found.")
+            logger.warning(f"Company ticker {ticker} not found.")
             return f"Company ticker {ticker} not found."
     except Exception as e:
-        print(f"Error: getting news for {ticker}: {e}")
+        logger.error(f"Error: getting news for {ticker}: {e}")
         return f"Error: getting news for {ticker}: {e}"
     try:
         news = company.news
     except Exception as e:
-        print(f"Error: getting news for {ticker}: {e}")
+        logger.error(f"Error: getting news for {ticker}: {e}")
         return f"Error: getting news for {ticker}: {e}"
 
     news_list = []
@@ -169,7 +173,7 @@ async def get_yahoo_finance_news(ticker: str) -> str:
                 f"Title: {title}\nSummary: {summary}\nDescription: {description}\nURL: {url}"
             )
     if not news_list:
-        print(f"No news found for company that searched with {ticker} ticker.")
+        logger.warning(f"No news found for company that searched with {ticker} ticker.")
         return f"No news found for company that searched with {ticker} ticker."
     return "\n\n".join(news_list)
 
@@ -188,7 +192,7 @@ async def get_stock_actions(ticker: str) -> str:
     try:
         company = yf.Ticker(ticker)
     except Exception as e:
-        print(f"Error: getting stock actions for {ticker}: {e}")
+        logger.error(f"Error: getting stock actions for {ticker}: {e}")
         return f"Error: getting stock actions for {ticker}: {e}"
     actions_df = company.actions
     actions_df = actions_df.reset_index(names="Date")
@@ -212,10 +216,10 @@ async def get_financial_statement(ticker: str, financial_type: str) -> str:
     company = yf.Ticker(ticker)
     try:
         if company.isin is None:
-            print(f"Company ticker {ticker} not found.")
+            logger.warning(f"Company ticker {ticker} not found.")
             return f"Company ticker {ticker} not found."
     except Exception as e:
-        print(f"Error: getting financial statement for {ticker}: {e}")
+        logger.error(f"Error: getting financial statement for {ticker}: {e}")
         return f"Error: getting financial statement for {ticker}: {e}"
 
     if financial_type == FinancialType.income_stmt:
@@ -265,10 +269,10 @@ async def get_holder_info(ticker: str, holder_type: str) -> str:
     company = yf.Ticker(ticker)
     try:
         if company.isin is None:
-            print(f"Company ticker {ticker} not found.")
+            logger.warning(f"Company ticker {ticker} not found.")
             return f"Company ticker {ticker} not found."
     except Exception as e:
-        print(f"Error: getting holder info for {ticker}: {e}")
+        logger.error(f"Error: getting holder info for {ticker}: {e}")
         return f"Error: getting holder info for {ticker}: {e}"
 
     if holder_type == HolderType.major_holders:
@@ -302,10 +306,10 @@ async def get_option_expiration_dates(ticker: str) -> str:
     company = yf.Ticker(ticker)
     try:
         if company.isin is None:
-            print(f"Company ticker {ticker} not found.")
+            logger.warning(f"Company ticker {ticker} not found.")
             return f"Company ticker {ticker} not found."
     except Exception as e:
-        print(f"Error: getting option expiration dates for {ticker}: {e}")
+        logger.error(f"Error: getting option expiration dates for {ticker}: {e}")
         return f"Error: getting option expiration dates for {ticker}: {e}"
     return json.dumps(company.options)
 
@@ -338,10 +342,10 @@ async def get_option_chain(ticker: str, expiration_date: str, option_type: str) 
     company = yf.Ticker(ticker)
     try:
         if company.isin is None:
-            print(f"Company ticker {ticker} not found.")
+            logger.warning(f"Company ticker {ticker} not found.")
             return f"Company ticker {ticker} not found."
     except Exception as e:
-        print(f"Error: getting option chain for {ticker}: {e}")
+        logger.error(f"Error: getting option chain for {ticker}: {e}")
         return f"Error: getting option chain for {ticker}: {e}"
 
     if expiration_date not in company.options:
@@ -377,10 +381,10 @@ async def get_recommendations(ticker: str, recommendation_type: str, months_back
     company = yf.Ticker(ticker)
     try:
         if company.isin is None:
-            print(f"Company ticker {ticker} not found.")
+            logger.warning(f"Company ticker {ticker} not found.")
             return f"Company ticker {ticker} not found."
     except Exception as e:
-        print(f"Error: getting recommendations for {ticker}: {e}")
+        logger.error(f"Error: getting recommendations for {ticker}: {e}")
         return f"Error: getting recommendations for {ticker}: {e}"
     try:
         if recommendation_type == RecommendationType.recommendations:
@@ -395,7 +399,7 @@ async def get_recommendations(ticker: str, recommendation_type: str, months_back
             latest_by_firm = upgrades_downgrades.drop_duplicates(subset=["Firm"])
             return latest_by_firm.to_json(orient="records", date_format="iso")
     except Exception as e:
-        print(f"Error: getting recommendations for {ticker}: {e}")
+        logger.error(f"Error: getting recommendations for {ticker}: {e}")
         return f"Error: getting recommendations for {ticker}: {e}"
 
 
@@ -592,10 +596,10 @@ async def get_pe_ratios(
     company = yf.Ticker(ticker)
     try:
         if company.info is None or company.isin is None:
-            print(f"Company ticker {ticker} not found.")
+            logger.warning(f"Company ticker {ticker} not found.")
             return f"Company ticker {ticker} not found."
     except Exception as e:
-        print(f"Error: getting P/E ratios for {ticker}: {e}")
+        logger.error(f"Error: getting P/E ratios for {ticker}: {e}")
         return f"Error: getting P/E ratios for {ticker}: {e}"
 
     info = company.info
@@ -621,5 +625,5 @@ async def get_pe_ratios(
 
 
 if __name__ == "__main__":
-    print("Starting Yahoo Finance MCP server...")
+    logger.info("Starting Yahoo Finance MCP server...")
     yfinance_server.run(transport="streamable-http", port=8565)

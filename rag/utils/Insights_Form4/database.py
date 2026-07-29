@@ -5,8 +5,11 @@ This module re-exports the Form4Transaction model and the main application's
 async engine/session (app.database.connection) — the Form4 pipeline shares
 the same async Postgres engine as the rest of the app, not a separate one.
 """
+import logging
 import os
 import sys
+
+logger = logging.getLogger("rag.utils.form4.database")
 
 # Ensure project root is on sys.path so we can import from app.*
 _project_root = os.path.dirname(
@@ -50,4 +53,4 @@ async def reset_db():
             return inspect(sync_conn).get_table_names()
 
         tables = await conn.run_sync(_list_tables)
-        print(f"Database reset complete. Active tables: {tables}")
+        logger.info(f"Database reset complete. Active tables: {tables}")

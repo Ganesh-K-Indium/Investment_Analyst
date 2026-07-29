@@ -6,6 +6,7 @@ Panel 1 (top): Volume / OI distribution by strike (calls green, puts red)
 Panel 2 (bottom): Notional dollar flow by strike ($M) — shows where REAL money sits.
 """
 import asyncio
+import logging
 import traceback
 from datetime import datetime
 
@@ -13,6 +14,8 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
 from cloud_storage import upload_chart_to_cloudinary
+
+logger = logging.getLogger("quant.options_mcp.visualization")
 
 
 async def build_oi_chart(chain_data: dict) -> dict:
@@ -214,9 +217,9 @@ async def _save_figure(fig: go.Figure, filename: str) -> dict:
         result = await upload_chart_to_cloudinary(fig, filename, width=1200, height=720)
         if result.get("success"):
             return {"chart_url": result["cloud_url"], "chart_generated": True, "storage": "cloudinary"}
-        print(f"Cloudinary upload failed: {result.get('error')}. Using local fallback.")
+        logger.warning("Cloudinary upload failed: %s. Using local fallback.", result.get('error'))
     except Exception as e:
-        print(f"Cloudinary error: {e}")
+        logger.error("Cloudinary error: %s", e)
 
     try:
         local_path = f"/tmp/{filename}"

@@ -38,6 +38,7 @@ Examples:
 
 import argparse
 import json
+import logging
 import os
 import sys
 import traceback
@@ -50,6 +51,13 @@ sys.path.insert(0, current_dir)
 
 from tqdm import tqdm
 from ingestion.ingest_pdf import ingest_pdf
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("ingestion.batch_ingest")
 
 VALID_FILING_TYPES = ("10-K", "10-Q", "8-K")
 
@@ -120,16 +128,16 @@ async def main():
         entries = build_entries_from_dir(args.dir, args.ticker, args.filing_type)
 
     if not entries:
-        print("No PDF files found to ingest.")
+        logger.warning("No PDF files found to ingest.")
         sys.exit(0)
 
     progress_path = args.progress_file or default_progress_path(args.manifest, args.dir)
     progress = load_progress(progress_path)
-    print(f"Progress file: {progress_path}")
+    logger.info("Progress file: %s", progress_path)
     if progress:
         done = sum(1 for v in progress.values() if v.get("status") == "success")
         failed = sum(1 for v in progress.values() if v.get("status") == "failed")
-        print(f"Resuming: {done} already succeeded, {failed} previously failed.")
+        logger.info("Resuming: %d already succeeded, %d previously failed.", done, failed)
 
     to_process = []
     for entry in entries:
@@ -142,10 +150,10 @@ async def main():
         to_process.append(entry)
 
     skipped = len(entries) - len(to_process)
-    print(f"{len(entries)} total file(s), {skipped} skipped (already done), {len(to_process)} to process.\n")
+    logger.info("%d total file(s), %d skipped (already done), %d to process.\n", len(entries), skipped, len(to_process))
 
     if not to_process:
-        print("Nothing to do — all files already ingested successfully. Use --retry-failed to reattempt failures.")
+        logger.info("Nothing to do — all files already ingested successfully. Use --retry-failed to reattempt failures.")
         sys.exit(0)
 
     newly_failed = []
@@ -165,7 +173,7 @@ async def main():
             }
             save_progress(progress_path, progress)
             newly_failed.append((path, "File not found"))
-            print(f"\n[FAILED] {path}\n  File not found")
+            logger.error("\n[FAILED] %s\n  File not found", path)
             if args.stop_on_error:
                 break
             continue
@@ -181,7 +189,7 @@ async def main():
             }
             save_progress(progress_path, progress)
             newly_failed.append((path, tb.strip().splitlines()[-1]))
-            print(f"\n[FAILED] {path}\n{tb}")
+            logger.error("\n[FAILED] %s\n%s", path, tb)
             if args.stop_on_error:
                 break
             continue
@@ -207,23 +215,23 @@ async def main():
             }
             save_progress(progress_path, progress)
             newly_failed.append((path, error))
-            print(f"\n[FAILED] {path}\n  {error}")
+            logger.error("\n[FAILED] %s\n  %s", path, error)
             if args.stop_on_error:
                 break
 
-    print("\n" + "=" * 60)
-    print("BATCH INGESTION SUMMARY")
-    print("=" * 60)
-    print(f"Newly succeeded: {len(newly_succeeded)}")
-    print(f"Newly failed:    {len(newly_failed)}")
-    print(f"Skipped (already done): {skipped}")
-    print(f"Progress file:   {progress_path}")
+    logger.info("\n" + "=" * 60)
+    logger.info("BATCH INGESTION SUMMARY")
+    logger.info("=" * 60)
+    logger.info("Newly succeeded: %d", len(newly_succeeded))
+    logger.info("Newly failed:    %d", len(newly_failed))
+    logger.info("Skipped (already done): %d", skipped)
+    logger.info("Progress file:   %s", progress_path)
 
     if newly_failed:
-        print("\nFailures (re-run the same command to retry, add --retry-failed):")
+        logger.warning("\nFailures (re-run the same command to retry, add --retry-failed):")
         for path, error in newly_failed:
             first_line = error.strip().splitlines()[0] if error else "Unknown error"
-            print(f"  - {path}\n      {first_line}")
+            logger.warning("  - %s\n      %s", path, first_line)
         sys.exit(1)
 
 

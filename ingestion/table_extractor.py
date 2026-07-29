@@ -25,7 +25,11 @@ scanned pages, img2table-based raster table detection, and document-type
 classification.
 """
 
+import logging
+
 import fitz
+
+logger = logging.getLogger("ingestion.table_extractor")
 
 
 def get_vertical_lines(page) -> list:
@@ -159,7 +163,7 @@ def extract_page_tables(page, page_num: int) -> list:
                     tables.append(table)
 
     except Exception as e:
-        print(f"Warning: table extraction failed on page {page_num}: {e}")
+        logger.warning("Table extraction failed on page %s: %s", page_num, e)
     return tables
 
 

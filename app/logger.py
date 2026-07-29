@@ -2,6 +2,9 @@
 import os
 import json
 import datetime
+import logging
+
+logger = logging.getLogger("app.logger")
 
 def format_graph_output(data: dict) -> str:
     """Format RAG graph output into Markdown with clear headings."""
@@ -186,4 +189,4 @@ def log_response(payload: dict, data: dict, folder: str = "responses") -> None:
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(md_content)
     
-    print(f" Response logged to: {filepath}")
+    logger.info(f" Response logged to: {filepath}")

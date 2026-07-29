@@ -1,4 +1,5 @@
 "This module contains all info about about the nodes in the graph"
+import logging
 import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -17,6 +18,9 @@ from rag.prompts.prompts import (get_rag_chain,
                                                           MACRO_FEW_SHOT)
 from rag.vectordb.client import load_vector_database
 from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company
+
+logger = logging.getLogger("rag.graph.nodes")
+
 load_dotenv()
 
 # Trusted financial data domains for web search
@@ -110,7 +114,7 @@ def extract_financial_metrics_from_documents(documents, metrics_list):
                                 'raw': matches[0],
                                 'source': doc.metadata.get('title', 'Unknown') if hasattr(doc, 'metadata') else 'Unknown'
                             }
-                            print(f"   ✓ Found {metric_lower}: ${value} (from {extracted_data[metric_lower]['source']})")
+                            logger.info(f"   ✓ Found {metric_lower}: ${value} (from {extracted_data[metric_lower]['source']})")
                             break
                     except ValueError:
                         continue
@@ -207,8 +211,8 @@ def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
             f"{company} Item 1A risk factors risks and uncertainties that could affect our business {year}"
         )
 
-    print(f"[FIXED QUERIES] Generated {len(sub_queries)} optimized sub-queries for {len(companies)} companies")
-    print(f"[FIXED QUERIES] Skipped LLM query generation - using 10-K-optimized templates")
+    logger.info(f"[FIXED QUERIES] Generated {len(sub_queries)} optimized sub-queries for {len(companies)} companies")
+    logger.warning(f"[FIXED QUERIES] Skipped LLM query generation - using 10-K-optimized templates")
 
     return {
         "needs_sub_queries": True,
@@ -393,9 +397,9 @@ def generate_segment_subqueries(companies: list, question: str = "") -> dict:
             f"{company} segment performance discussion MD&A segment results drivers of segment growth segment margins segment trends segment outlook {year_suffix}"
         )
 
-    print(f"[SEGMENT QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
-    print(f"[SEGMENT QUERIES] Requested years: {requested_years}")
-    print(f"[SEGMENT QUERIES] Skipped LLM query generation - using 10-K segment templates")
+    logger.info(f"[SEGMENT QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
+    logger.info(f"[SEGMENT QUERIES] Requested years: {requested_years}")
+    logger.warning(f"[SEGMENT QUERIES] Skipped LLM query generation - using 10-K segment templates")
 
     return {
         "needs_sub_queries": True,
@@ -443,9 +447,9 @@ def generate_geographic_subqueries(companies: list, question: str = "") -> dict:
             f"{company} major customers by region customer concentration geography market concentration regional demand geographic market share {year_suffix}"
         )
 
-    print(f"[GEOGRAPHIC QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
-    print(f"[GEOGRAPHIC QUERIES] Requested years: {requested_years}")
-    print(f"[GEOGRAPHIC QUERIES] Skipped LLM query generation - using 10-K geographic templates")
+    logger.info(f"[GEOGRAPHIC QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
+    logger.info(f"[GEOGRAPHIC QUERIES] Requested years: {requested_years}")
+    logger.warning(f"[GEOGRAPHIC QUERIES] Skipped LLM query generation - using 10-K geographic templates")
 
     return {
         "needs_sub_queries": True,
@@ -473,7 +477,7 @@ def preprocess_and_analyze_query(state):
     SEGMENT / GEOGRAPHIC MODE OPTIMIZATION:
     - For segment or geographic queries, uses pre-optimized templates instead of LLM
     """
-    print("---QUERY ANALYSIS---")
+    logger.info("---QUERY ANALYSIS---")
     messages = state["messages"]
     question = messages[-1].content
     question_lower = question.lower()
@@ -484,7 +488,7 @@ def preprocess_and_analyze_query(state):
     is_comparison_mode = state.get("is_comparison_mode", False)
 
     if is_comparison_mode:
-        print(" COMPARISON MODE DETECTED - Using pre-optimized 10-K queries")
+        logger.info(" COMPARISON MODE DETECTED - Using pre-optimized 10-K queries")
 
         # Extract companies from state
         comparison_companies = []
@@ -495,11 +499,11 @@ def preprocess_and_analyze_query(state):
         if state.get("comparison_company3"):
             comparison_companies.append(state["comparison_company3"])
 
-        print(f" Companies: {', '.join(comparison_companies)}")
+        logger.info(f" Companies: {', '.join(comparison_companies)}")
 
         # Generate fixed sub-queries using the year from state (fallback to current year)
         comparison_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
-        print(f" Comparison year: {comparison_year}")
+        logger.info(f" Comparison year: {comparison_year}")
         sub_query_analysis = generate_comparison_subqueries(comparison_companies, year=comparison_year)
 
         return {
@@ -529,10 +533,10 @@ def preprocess_and_analyze_query(state):
 
         if companies:
             if seg_geo_type == "segment":
-                print(f" SEGMENT QUERY DETECTED - Using pre-optimized segment templates for {companies}")
+                logger.info(f" SEGMENT QUERY DETECTED - Using pre-optimized segment templates for {companies}")
                 sub_query_analysis = generate_segment_subqueries(companies, question=question)
             else:
-                print(f" GEOGRAPHIC QUERY DETECTED - Using pre-optimized geographic templates for {companies}")
+                logger.info(f" GEOGRAPHIC QUERY DETECTED - Using pre-optimized geographic templates for {companies}")
                 sub_query_analysis = generate_geographic_subqueries(companies, question=question)
 
             return {
@@ -544,14 +548,14 @@ def preprocess_and_analyze_query(state):
                 "requested_fiscal_quarter": extract_fiscal_quarter_from_question(question)
             }
         else:
-            print(f"  {seg_geo_type.upper()} query detected but no companies identified, falling through to LLM analysis")
+            logger.info(f"  {seg_geo_type.upper()} query detected but no companies identified, falling through to LLM analysis")
 
     # -------------------------------------------------------------
     # NORMAL MODE: Continue with existing logic
     # -------------------------------------------------------------
 
     # UNIVERSAL APPROACH: Single LLM call for sub-query analysis
-    print("---UNIVERSAL SUB-QUERY ANALYSIS---")
+    logger.info("---UNIVERSAL SUB-QUERY ANALYSIS---")
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
     from rag.prompts.prompts import get_universal_sub_query_analyzer
@@ -575,19 +579,19 @@ def preprocess_and_analyze_query(state):
     }
 
     # Log analysis results
-    print(f"[ANALYSIS] Query Type: {analysis.query_type}")
-    print(f"[ANALYSIS] Companies: {analysis.companies_detected if analysis.companies_detected else 'None'}")
-    print(f"[ANALYSIS] Needs Sub-Queries: {analysis.needs_sub_queries}")
-    print(f"[ANALYSIS] Requested Years: {analysis.requested_years}")
-    print(f"[ANALYSIS] Filing Type: {filing_type or 'unresolved (search all)'}")
+    logger.info(f"[ANALYSIS] Query Type: {analysis.query_type}")
+    logger.info(f"[ANALYSIS] Companies: {analysis.companies_detected if analysis.companies_detected else 'None'}")
+    logger.info(f"[ANALYSIS] Needs Sub-Queries: {analysis.needs_sub_queries}")
+    logger.info(f"[ANALYSIS] Requested Years: {analysis.requested_years}")
+    logger.info(f"[ANALYSIS] Filing Type: {filing_type or 'unresolved (search all)'}")
 
     if analysis.needs_sub_queries:
-        print(f"[ANALYSIS] Generated {len(analysis.sub_queries)} sub-queries:")
+        logger.info(f"[ANALYSIS] Generated {len(analysis.sub_queries)} sub-queries:")
         for i, sq in enumerate(analysis.sub_queries, 1):
-            print(f"   {i}. {sq}")
-        print(f"[ANALYSIS] Reasoning: {analysis.reasoning}")
+            logger.info(f"   {i}. {sq}")
+        logger.info(f"[ANALYSIS] Reasoning: {analysis.reasoning}")
     else:
-        print(f"[ANALYSIS] Direct retrieval recommended: {analysis.reasoning}")
+        logger.info(f"[ANALYSIS] Direct retrieval recommended: {analysis.reasoning}")
 
     # Return state updates
     return {
@@ -664,7 +668,7 @@ async def _hybrid_search_with_quarter_fallback(db_instance, fiscal_quarter: Opti
         results = await db_instance.hybrid_search(fiscal_quarter=fiscal_quarter, **kwargs)
         if results:
             return results
-        print(f"    No results with fiscal_quarter={fiscal_quarter} filter (likely un-tagged older data) — retrying without it")
+        logger.info(f"    No results with fiscal_quarter={fiscal_quarter} filter (likely un-tagged older data) — retrying without it")
     return await db_instance.hybrid_search(**kwargs)
 
 
@@ -673,9 +677,9 @@ async def retrieve(state, config):
     Retrieve documents relevant to the question using ticker-based collections.
     Supports multi-company retrieval by querying separate collections.
     """
-    print("="*80)
-    print(" TICKER-BASED RETRIEVAL (TEXT + IMAGES)")
-    print("="*80)
+    logger.info("="*80)
+    logger.info(" TICKER-BASED RETRIEVAL (TEXT + IMAGES)")
+    logger.info("="*80)
     
     messages = state["messages"]
     question = messages[-1].content
@@ -741,7 +745,7 @@ async def retrieve(state, config):
             if year_span == 2:
                 comparison_spans_multiple_filings = False
                 requested_years = [requested_years[-1]]
-                print(f" Span=2y → querying only [{requested_years[0]}] (single 10-K covers all 3 years)")
+                logger.info(f" Span=2y → querying only [{requested_years[0]}] (single 10-K covers all 3 years)")
             elif year_span > 2:
                 comparison_spans_multiple_filings = True
                 comparison_span_details = (
@@ -750,11 +754,11 @@ async def retrieve(state, config):
                     f"{requested_years[-1]} 10-Ks together to cover the full range."
                 )
                 requested_years = [requested_years[0], requested_years[-1]]
-                print(f" Span={year_span}y → querying [{requested_years[0]}, {requested_years[-1]}] (first+last 10-K covers full range)")
+                logger.info(f" Span={year_span}y → querying [{requested_years[0]}, {requested_years[-1]}] (first+last 10-K covers full range)")
         elif filing_type == "10-Q":
             # No 3-year comparative window on a 10-Q — query each requested
             # year/quarter individually rather than collapsing.
-            print(f" filing_type=10-Q → no 3-year window collapse, querying each requested year individually: {requested_years}")
+            logger.info(f" filing_type=10-Q → no 3-year window collapse, querying each requested year individually: {requested_years}")
             if len(requested_years) > 1:
                 comparison_spans_multiple_filings = True
                 comparison_span_details = (
@@ -764,7 +768,7 @@ async def retrieve(state, config):
         elif filing_type == "8-K":
             # Single point-in-time event — a multi-year span is a no-op here,
             # just keep the requested years as-is (no comparative structure to collapse).
-            print(f" filing_type=8-K → single-event filing, no window collapse applied: {requested_years}")
+            logger.info(f" filing_type=8-K → single-event filing, no window collapse applied: {requested_years}")
 
     target_tickers = set()
 
@@ -808,7 +812,7 @@ async def retrieve(state, config):
                     if 2 <= len(company_name) <= 5 and company_name.isupper():
                         target_tickers.add(company_name.lower())
 
-    print(f" Identified Target Tickers: {list(target_tickers) or 'None'}")
+    logger.info(f" Identified Target Tickers: {list(target_tickers) or 'None'}")
 
     # If primary_ticker was empty, set it to the first found ticker for downstream consistency
     if not primary_ticker and target_tickers:
@@ -839,7 +843,7 @@ async def retrieve(state, config):
             comparison_span_details = (
                 f"{comparison_span_details} {note}" if comparison_span_details else note
             )
-            print(f" Fiscal quarter misalignment detected: {note}")
+            logger.info(f" Fiscal quarter misalignment detected: {note}")
 
     # Only meaningful (and only ever tagged) on 10-Q chunks — applying it
     # when filing_type isn't resolved to "10-Q" would incorrectly exclude
@@ -854,11 +858,11 @@ async def retrieve(state, config):
     seen_doc_ids = set()
     
     if needs_sub_queries and sub_queries:
-        print(f"\n SUB-QUERY MODE: {len(sub_queries)} data points")
-        print("-" * 80)
+        logger.info(f"\n SUB-QUERY MODE: {len(sub_queries)} data points")
+        logger.info("-" * 80)
         
         for i, sq in enumerate(sub_queries, 1):
-            print(f"\n {i}/{len(sub_queries)}: {sq}")
+            logger.info(f"\n {i}/{len(sub_queries)}: {sq}")
 
             # Intelligently detect which tickers are mentioned in THIS sub-query
             sq_tickers_for_step = detect_tickers_in_query(sq, target_tickers)
@@ -866,13 +870,13 @@ async def retrieve(state, config):
             # If no specific ticker detected, query ALL allowed tickers
             # (This handles cases where the sub-query doesn't explicitly mention a company)
             if not sq_tickers_for_step:
-                print(f"     No specific company detected, querying all: {list(target_tickers)}")
+                logger.info(f"     No specific company detected, querying all: {list(target_tickers)}")
                 sq_tickers_for_step = target_tickers
             else:
-                print(f"    Detected companies: {list(sq_tickers_for_step)}")
+                logger.info(f"    Detected companies: {list(sq_tickers_for_step)}")
             
             if not sq_tickers_for_step:
-                print(f"    No allowed tickers found. Skipping vector search.")
+                logger.warning(f"    No allowed tickers found. Skipping vector search.")
                 sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
                 continue
             
@@ -881,7 +885,7 @@ async def retrieve(state, config):
             for t_ticker in sq_tickers_for_step:
                 try:
                     company_name = map_ticker_to_company(t_ticker.lower())
-                    print(f"    Querying ticker_{t_ticker.lower()} ({company_name})...")
+                    logger.info(f"    Querying ticker_{t_ticker.lower()} ({company_name})...")
 
                     # Get instance for this ticker (DO NOT CREATE if missing)
                     db_instance = vectordb_mgr.get_instance(t_ticker, create_if_missing=False)
@@ -913,16 +917,16 @@ async def retrieve(state, config):
                                 docs_from_ticker += 1
 
                     if docs_from_ticker > 0:
-                        print(f"       Found {docs_from_ticker} chunks")
+                        logger.info(f"       Found {docs_from_ticker} chunks")
                     else:
-                        print(f"        No chunks found")
+                        logger.info(f"        No chunks found")
 
                 except Exception as e:
                     err_str = str(e).lower()
                     if any(k in err_str for k in ("not found", "404", "doesn't exist", "does not exist")):
-                        print(f"       Collection not found for {t_ticker} (not yet ingested) — skipping")
+                        logger.error(f"       Collection not found for {t_ticker} (not yet ingested) — skipping")
                     else:
-                        print(f"       Qdrant connection error for {t_ticker}: {e}")
+                        logger.error(f"       Qdrant connection error for {t_ticker}: {e}")
                         return {
                             "documents": [],
                             "vectorstore_searched": True,
@@ -955,28 +959,28 @@ async def retrieve(state, config):
             }
 
             if len(step_docs) > 0:
-                print(f"    Total: {len(step_docs)} chunks from {len(companies_found)} companies")
+                logger.info(f"    Total: {len(step_docs)} chunks from {len(companies_found)} companies")
             else:
-                print(f"    No chunks found for this sub-query")
+                logger.info(f"    No chunks found for this sub-query")
 
     else:
         # ============================================================================
         # DIRECT MODE: Retrieval from one or more collections
         # ============================================================================
-        print(f"\n DIRECT RETRIEVAL MODE")
-        print("-" * 80)
+        logger.info(f"\n DIRECT RETRIEVAL MODE")
+        logger.info("-" * 80)
         
         if not target_tickers:
-             print(" No target tickers identified. Cannot perform vector search.")
-             print(" Returning EMPTY (will trigger web search)")
+             logger.info(" No target tickers identified. Cannot perform vector search.")
+             logger.info(" Returning EMPTY (will trigger web search)")
              all_documents = []
         else:
-            print(f" Searching collections for tickers: {', '.join(target_tickers)}")
+            logger.info(f" Searching collections for tickers: {', '.join(target_tickers)}")
             
             # Iterate through all identified tickers and merge results
             for target_ticker in target_tickers:
                 try:
-                    print(f"    Querying collection: ticker_{target_ticker}")
+                    logger.info(f"    Querying collection: ticker_{target_ticker}")
                     # DO NOT CREATE if missing
                     db_instance = vectordb_mgr.get_instance(target_ticker, create_if_missing=False)
                     
@@ -1010,14 +1014,14 @@ async def retrieve(state, config):
                                     all_documents.append(doc)
                                     current_collection_docs += 1
                                     
-                    print(f"       Found {current_collection_docs} unique chunks across requested years")
+                    logger.info(f"       Found {current_collection_docs} unique chunks across requested years")
                     
                 except Exception as e:
                     err_str = str(e).lower()
                     if any(k in err_str for k in ("not found", "404", "doesn't exist", "does not exist")):
-                        print(f"      Collection not found for {target_ticker} (not yet ingested) — skipping")
+                        logger.error(f"      Collection not found for {target_ticker} (not yet ingested) — skipping")
                     else:
-                        print(f"      Qdrant connection error for {target_ticker}: {e}")
+                        logger.error(f"      Qdrant connection error for {target_ticker}: {e}")
                         return {
                             "documents": [],
                             "vectorstore_searched": True,
@@ -1034,14 +1038,14 @@ async def retrieve(state, config):
                     content_types[ctype] = content_types.get(ctype, 0) + 1
                     companies_found.add(doc.metadata.get('company', 'Unknown'))
 
-            print(f"\nRetrieved {len(all_documents)} chunks total from {len(target_tickers)} collections")
-            print(f"    {content_types['text']} text,  {content_types['image']} images")
-            print(f"    {', '.join(sorted(companies_found))}")
+            logger.info(f"\nRetrieved {len(all_documents)} chunks total from {len(target_tickers)} collections")
+            logger.info(f"    {content_types['text']} text,  {content_types['image']} images")
+            logger.info(f"    {', '.join(sorted(companies_found))}")
 
     # Final summary
-    print(f"\n{'='*80}")
-    print(f" FINAL: {len(all_documents)} chunks ready")
-    print(f"{'='*80}\n")
+    logger.info(f"\n{'='*80}")
+    logger.info(f" FINAL: {len(all_documents)} chunks ready")
+    logger.info(f"{'='*80}\n")
     
     return {
         "documents": all_documents,
@@ -1056,7 +1060,7 @@ async def retrieve(state, config):
 
 
 def generate(state):
-    print("---GENERATE---")
+    logger.info("---GENERATE---")
     messages = state["messages"]
     question = messages[-1].content
     documents = state["documents"]
@@ -1064,12 +1068,12 @@ def generate(state):
     # Short-circuit: surface Qdrant connection errors instead of hallucinating
     qdrant_error = state.get("qdrant_error")
     if qdrant_error:
-        print(f" QDRANT ERROR — returning user-facing message: {qdrant_error}")
+        logger.error(f" QDRANT ERROR — returning user-facing message: {qdrant_error}")
         return {"Intermediate_message": qdrant_error, "retry_count": state.get("retry_count", 0) + 1}
     
     # Enhanced logging for debugging
-    print(f" Question: {question[:100]}...")
-    print(f" Number of chunks: {len(documents) if documents else 0}")
+    logger.info(f" Question: {question[:100]}...")
+    logger.info(f" Number of chunks: {len(documents) if documents else 0}")
 
     # Log chunk content preview for debugging
     if documents:
@@ -1078,14 +1082,14 @@ def generate(state):
                 content_preview = doc.page_content[:200].replace('\n', ' ')
             else:
                 content_preview = str(doc)[:200].replace('\n', ' ')
-            print(f" Chunk {i+1} preview: {content_preview}...")
+            logger.info(f" Chunk {i+1} preview: {content_preview}...")
     else:
-        print(" WARNING: No chunks available for generation!")
+        logger.warning(" WARNING: No chunks available for generation!")
     
     # Context-free mode - no conversation memory
     enriched_question = question
     
-    print("---USING STANDARD GENERATION---")
+    logger.info("---USING STANDARD GENERATION---")
     
     # CRITICAL: Smart truncate documents to prevent context overflow
     # GPT-4o has 128k token limit (~96k chars safe limit)
@@ -1093,7 +1097,7 @@ def generate(state):
     MAX_TOTAL_CHARS = 150000  # Safe limit for generation
     
     if total_chars > MAX_TOTAL_CHARS:
-        print(f"[DOC SIZE] {total_chars:,} chars exceeds limit ({MAX_TOTAL_CHARS:,}). Truncating ONLY web search documents.")
+        logger.info(f"[DOC SIZE] {total_chars:,} chars exceeds limit ({MAX_TOTAL_CHARS:,}). Truncating ONLY web search documents.")
         
         # separate docs by source
         vector_docs = []
@@ -1110,11 +1114,11 @@ def generate(state):
         
         if remaining_budget <= 0:
             # If vector docs alone exceed budget (very rare), we have to proportionally truncate everything
-            print(f"[DOC SIZE] WARNING: Vectorstore docs exceed total budget ({vector_chars:,} chars). Absolute truncation required.")
+            logger.warning(f"[DOC SIZE] WARNING: Vectorstore docs exceed total budget ({vector_chars:,} chars). Absolute truncation required.")
             budget_per_doc = MAX_TOTAL_CHARS // max(len(vector_docs), 1)
             documents = [Document(page_content=d.page_content[:budget_per_doc], metadata=d.metadata) for d in vector_docs]
         elif web_docs:
-            print(f"[DOC SIZE] Vectorstore docs take {vector_chars:,} chars. Truncating {len(web_docs)} web chunks into remaining {remaining_budget:,} chars.")
+            logger.info(f"[DOC SIZE] Vectorstore docs take {vector_chars:,} chars. Truncating {len(web_docs)} web chunks into remaining {remaining_budget:,} chars.")
             budget_per_web_doc = remaining_budget // len(web_docs)
             truncated_web = []
             for doc in web_docs:
@@ -1128,9 +1132,9 @@ def generate(state):
             documents = vector_docs + truncated_web
             
         total_chars = sum(len(doc.page_content) for doc in documents)
-        print(f"[DOC SIZE] After truncation: {total_chars:,} chars")
+        logger.info(f"[DOC SIZE] After truncation: {total_chars:,} chars")
     else:
-        print(f"[DOC SIZE] {total_chars:,} chars (limit: {MAX_TOTAL_CHARS:,})")
+        logger.info(f"[DOC SIZE] {total_chars:,} chars (limit: {MAX_TOTAL_CHARS:,})")
     
     llm = ChatOpenAI(
         model="gpt-4o",
@@ -1145,7 +1149,7 @@ def generate(state):
     alpha_pillar = state.get("alpha_pillar")  # e.g. "insider_trading", "alignment", etc.
 
     if alpha_pillar:
-        print(f" [GENERATE] Alpha pillar mode: {alpha_pillar}")
+        logger.info(f" [GENERATE] Alpha pillar mode: {alpha_pillar}")
 
     comparison_span_note = state.get("comparison_span_details") if state.get("comparison_spans_multiple_filings") else None
     rag_chain = get_rag_chain(llm, query_type=query_type, alpha_pillar=alpha_pillar, comparison_span_note=comparison_span_note)
@@ -1174,7 +1178,7 @@ def grade_documents(state):
     3. Identifies which metrics are MISSING
     4. Returns grading result used by decide_to_generate
     """
-    print("---FINANCIAL ANALYST CHUNK GRADING---")
+    logger.info("---FINANCIAL ANALYST CHUNK GRADING---")
     messages = state["messages"]
     question = messages[-1].content
     documents = state["documents"]
@@ -1185,7 +1189,7 @@ def grade_documents(state):
     query_type = sub_query_analysis.get("query_type", "single_company")
     companies_detected = sub_query_analysis.get("companies_detected", [])
     
-    print(f"Query Type: {query_type}")
+    logger.info(f"Query Type: {query_type}")
     
     # Context-aware Company Detection
     # If no companies detected in question, use context from portfolio/state
@@ -1195,18 +1199,18 @@ def grade_documents(state):
         
         if ctx_ticker:
             companies_detected = [ctx_ticker]
-            print(f"Using context ticker: {ctx_ticker}")
+            logger.info(f"Using context ticker: {ctx_ticker}")
         elif ctx_filter:
             companies_detected = ctx_filter
-            print(f"Using portfolio context companies: {ctx_filter}")
+            logger.info(f"Using portfolio context companies: {ctx_filter}")
             
-    print(f"Companies Detected: {companies_detected}")
-    print(f"Chunks to grade: {len(documents)}")
+    logger.info(f"Companies Detected: {companies_detected}")
+    logger.info(f"Chunks to grade: {len(documents)}")
 
     # CRITICAL: Handle empty chunks case (e.g., company not in DB)
     if not documents or len(documents) == 0:
-        print(" NO CHUNKS TO GRADE")
-        print(" Returning INSUFFICIENT grade → Will trigger web search")
+        logger.info(" NO CHUNKS TO GRADE")
+        logger.info(" Returning INSUFFICIENT grade → Will trigger web search")
 
         return {
             "documents": [],
@@ -1256,7 +1260,7 @@ def grade_documents(state):
         total_chars += len(preview)
 
     doc_preview_text = "\n".join(doc_previews)
-    print(f"  Sending {len(doc_previews)} documents ({total_chars} chars) to gpt-4o grader...")
+    logger.info(f"  Sending {len(doc_previews)} documents ({total_chars} chars) to gpt-4o grader...")
 
     sub_queries = "\n".join([f"- {sq}" for sq in sub_query_analysis.get("sub_queries", [])]) if sub_query_analysis.get("sub_queries") else "None"
 
@@ -1268,10 +1272,10 @@ def grade_documents(state):
             "doc_content": doc_preview_text
         })
         
-        print(f"\n FINANCIAL ANALYST GRADE:")
-        print(f"  Is Sufficient: {grade.is_sufficient}")
+        logger.info(f"\n FINANCIAL ANALYST GRADE:")
+        logger.info(f"  Is Sufficient: {grade.is_sufficient}")
         if grade.missing_data_summary:
-            print(f"  Missing Data: {grade.missing_data_summary}")
+            logger.warning(f"  Missing Data: {grade.missing_data_summary}")
         
         overall_grade = "sufficient" if grade.is_sufficient else "insufficient"
         
@@ -1284,8 +1288,8 @@ def grade_documents(state):
             "documents_graded_count": len(doc_previews)
         }
 
-        print(f"\n GRADING COMPLETE: {len(documents)} chunks evaluated")
-        print(f"   Next: Decision node will use this grading to determine if web search needed")
+        logger.info(f"\n GRADING COMPLETE: {len(documents)} chunks evaluated")
+        logger.info(f"   Next: Decision node will use this grading to determine if web search needed")
 
         return {
             "documents": documents,
@@ -1293,8 +1297,8 @@ def grade_documents(state):
     }
 
     except Exception as e:
-        print(f" Financial analyst grading failed: {e}")
-        print("  Falling back to keeping all chunks")
+        logger.error(f" Financial analyst grading failed: {e}")
+        logger.error("  Falling back to keeping all chunks")
 
         # Fallback: keep all chunks
         return {
@@ -1315,7 +1319,7 @@ def web_search(state):
     - Individual searches for each sub-query with deduplication
     - Tracks missing data for fallback handling
     """
-    print("---WEB SEARCH (TRUSTED FINANCIAL DOMAINS ONLY)---")
+    logger.info("---WEB SEARCH (TRUSTED FINANCIAL DOMAINS ONLY)---")
     messages = state["messages"]
     question = messages[-1].content
     enriched_query = state.get("enriched_query", question)
@@ -1336,7 +1340,7 @@ def web_search(state):
     target_company = companies_detected[0] if companies_detected else None
 
     if is_sec_filing_query and target_company:
-        print(f"---SEC FILING QUERY DETECTED FOR {target_company.upper()}---")
+        logger.info(f"---SEC FILING QUERY DETECTED FOR {target_company.upper()}---")
         import re
         years = re.findall(r'\b(20\d{2})\b', question)
 
@@ -1350,7 +1354,7 @@ def web_search(state):
             search_query = f"{target_company} MD&A Management Discussion Analysis {' '.join(years) if years else ''} SEC {detected_filing_type} site:sec.gov"
         else:
             search_query = f"{target_company} {detected_filing_type} {' '.join(years) if years else ''} site:sec.gov"
-        print(f"✓ Optimized search: {search_query}")
+        logger.info(f"✓ Optimized search: {search_query}")
     
     # UNIVERSAL SUB-QUERY WEB SEARCH
     web_search_tool = TavilySearch(
@@ -1363,11 +1367,11 @@ def web_search(state):
     total_chars = 0
     
     if sub_queries:
-        print(f"---SUB-QUERY MODE: Searching individually for {len(sub_queries)} specific data points---")
+        logger.info(f"---SUB-QUERY MODE: Searching individually for {len(sub_queries)} specific data points---")
         seen_doc_ids = set()
         
         for i, sq in enumerate(sub_queries, 1):
-            print(f"   {i}. Web searching for: {sq}")
+            logger.info(f"   {i}. Web searching for: {sq}")
             
             # Search specifically for this data point
             docs = web_search_tool.invoke({"query": sq})
@@ -1394,17 +1398,17 @@ def web_search(state):
                     documents.append(doc)
                     total_chars += len(source['content'])
             
-            print(f"      → Found {len(sources)} sources, {len(documents)} chunks unique total")
+            logger.info(f"      → Found {len(sources)} sources, {len(documents)} chunks unique total")
 
-        print(f" ✓ Retrieved {len(documents)} unique chunks across all sub-queries")
+        logger.info(f" ✓ Retrieved {len(documents)} unique chunks across all sub-queries")
     else:
         # Standard single search
         if search_query != question:
-            print(f"Using optimized query for web search: {search_query[:150]}")
+            logger.info(f"Using optimized query for web search: {search_query[:150]}")
         else:
-            print(f"Using original question for web search: {search_query[:150]}")
+            logger.info(f"Using original question for web search: {search_query[:150]}")
 
-        print(f" Restricting search to {len(TRUSTED_FINANCIAL_DOMAINS)} trusted financial domains")
+        logger.info(f" Restricting search to {len(TRUSTED_FINANCIAL_DOMAINS)} trusted financial domains")
         docs = web_search_tool.invoke({"query": search_query})
 
         # Parse Tavily response into source chunks
@@ -1427,15 +1431,15 @@ def web_search(state):
             documents.append(doc)
             total_chars += len(source['content'])
 
-        print(f"Web search produced {len(documents)} chunks ({total_chars} total chars)")
+        logger.info(f"Web search produced {len(documents)} chunks ({total_chars} total chars)")
     
     if not documents or total_chars < 100:
-        print("WARNING: Web search returned minimal content, response may be incomplete")
+        logger.warning("WARNING: Web search returned minimal content, response may be incomplete")
 
     # Track sub-query results from web search
     sub_query_results = state.get("sub_query_results", {})
     if sub_queries and documents:
-        print("---EXTRACTING SUB-QUERY RESULTS FROM WEB SEARCH---")
+        logger.info("---EXTRACTING SUB-QUERY RESULTS FROM WEB SEARCH---")
         for sq in sub_queries:
             if sq not in sub_query_results:
                 sub_query_results[sq] = {"found": False, "doc_count": 0, "sources": []}
@@ -1453,7 +1457,7 @@ def web_search(state):
                 sub_query_results[sq]["doc_count"] = matched_docs
         
         found_count = sum(1 for sq_data in sub_query_results.values() if isinstance(sq_data, dict) and sq_data.get("found", False))
-        print(f" Updated sub-query results: {found_count}/{len(sub_queries)} have data")
+        logger.info(f" Updated sub-query results: {found_count}/{len(sub_queries)} have data")
 
     return {
         "documents": documents,
@@ -1471,7 +1475,7 @@ def _parse_tavily_response(docs, query):
     sources = []
     
     # Debug: Log raw response type
-    print(f"Tavily response type: {type(docs)}")
+    logger.info(f"Tavily response type: {type(docs)}")
 
     # ── Error detection ────────────────────────────────────────────────────────
     # TavilySearch wraps API / network errors as {'error': <Exception>} instead
@@ -1520,7 +1524,7 @@ def _parse_tavily_response(docs, query):
                         "url": url,
                         "content": content
                     })
-                    print(f"  Source {i}: {title[:50]}... ({len(content)} chars)")
+                    logger.info(f"  Source {i}: {title[:50]}... ({len(content)} chars)")
     
     elif isinstance(docs, list):
         # Handle list of results directly
@@ -1542,7 +1546,7 @@ def _parse_tavily_response(docs, query):
                         "url": url,
                         "content": content
                     })
-                    print(f"  Source {i}: {title[:50]}... ({len(content)} chars)")
+                    logger.info(f"  Source {i}: {title[:50]}... ({len(content)} chars)")
             elif isinstance(d, str):
                 sources.append({
                     "title": "Web Search Result",
@@ -1552,7 +1556,7 @@ def _parse_tavily_response(docs, query):
     
     if not sources:
         # Fallback: convert entire response to string
-        print("WARNING: Could not parse Tavily response structure, using raw output")
+        logger.warning("WARNING: Could not parse Tavily response structure, using raw output")
         return [{"title": "Web Search Result", "url": "", "content": str(docs)}]
     
     return sources
@@ -1563,7 +1567,7 @@ def integrate_web_search(state):
     WEB SEARCH INTEGRATION: Builds a single query from missing data + ticker + company name,
     executes one search, and combines results with existing vectorstore documents.
     """
-    print("---INTEGRATE WEB SEARCH---")
+    logger.info("---INTEGRATE WEB SEARCH---")
     messages = state["messages"]
     question = messages[-1].content
     existing_documents = state.get("documents", [])
@@ -1595,7 +1599,7 @@ def integrate_web_search(state):
     if missing_summary:
         missing_summary_str = str(missing_summary).strip()
         
-    print(f"  [DEBUG] grading missing_summary: {repr(missing_summary)}")
+    logger.warning(f"  [DEBUG] grading missing_summary: {repr(missing_summary)}")
     
     # Is there a valid missing data summary? (Not None, not empty, and not specifically 'no chunks found in vector database')
     has_valid_missing_target = (
@@ -1606,15 +1610,15 @@ def integrate_web_search(state):
 
     if has_valid_missing_target:
         # Missing data summary is the target - use it directly
-        print("  [DEBUG] Using missing data summary for web search target.")
+        logger.warning("  [DEBUG] Using missing data summary for web search target.")
         query_parts.append(missing_summary_str)
     else:
         # Fallback to the original question only if there is no explicit missing data summary
-        print("  [DEBUG] Using original question for web search fallback.")
+        logger.info("  [DEBUG] Using original question for web search fallback.")
         query_parts.append(question)
 
     search_query = " ".join(query_parts)
-    print(f"  Search query: {search_query}")
+    logger.info(f"  Search query: {search_query}")
 
     web_search_tool = TavilySearch(
         max_results=5,
@@ -1629,7 +1633,7 @@ def integrate_web_search(state):
     try:
         docs = web_search_tool.invoke({"query": search_query})
         sources = _parse_tavily_response(docs, search_query)
-        print(f"  Found {len(sources)} sources")
+        logger.info(f"  Found {len(sources)} sources")
 
         for source in sources:
             doc_id = source["url"] if source["url"] else source["content"][:100]
@@ -1651,10 +1655,10 @@ def integrate_web_search(state):
             ))
             total_chars += len(source["content"])
     except Exception as e:
-        print(f"  ERROR during web search: {e}")
+        logger.error(f"  ERROR during web search: {e}")
 
     combined_documents = existing_documents + web_documents
-    print(f"  Existing chunks: {len(existing_documents)} | New web chunks: {len(web_documents)} | Total: {len(combined_documents)}")
+    logger.info(f"  Existing chunks: {len(existing_documents)} | New web chunks: {len(web_documents)} | Total: {len(combined_documents)}")
 
     return {
         "documents": combined_documents,
@@ -1663,10 +1667,10 @@ def integrate_web_search(state):
 
 
 def show_result(state):
-    print("---SHOW RESULT---")
+    logger.info("---SHOW RESULT---")
     Final_answer = AIMessage(content=state["Intermediate_message"])
 
-    print(f'SHOWING THE RESULTS: {Final_answer}')
+    logger.info(f'SHOWING THE RESULTS: {Final_answer}')
     return {
         "messages": Final_answer
     }
@@ -1712,8 +1716,8 @@ def parse_markdown_table(text):
                         else:
                             break  # Stop counting when we hit comparison/notes columns
                     
-                    print(f" Detected {num_companies} company/companies in table")
-                    print(f"  Header columns: {cells}")
+                    logger.info(f" Detected {num_companies} company/companies in table")
+                    logger.info(f"  Header columns: {cells}")
                     continue
                 
                 # Process data rows
@@ -1739,7 +1743,7 @@ def parse_markdown_table(text):
                         }
                     elif num_companies >= 3 and len(cells) >= 4:
                         # Fallback for edge cases
-                        print(f" Processing 3-company row: {metric_name}")
+                        logger.info(f" Processing 3-company row: {metric_name}")
                         metrics_data[metric_name] = {
                             'company1': cells[1].strip(),
                             'company2': cells[2].strip(),
@@ -1747,14 +1751,14 @@ def parse_markdown_table(text):
                         }
     
     if metrics_data:
-        print(f"✓ Successfully parsed {len(metrics_data)} metrics from table")
+        logger.info(f"✓ Successfully parsed {len(metrics_data)} metrics from table")
         # Debug: check first metric to see company3 data
         if metrics_data:
             first_metric = list(metrics_data.keys())[0]
             first_data = metrics_data[first_metric]
-            print(f"   Sample metric '{first_metric}': company3='{first_data.get('company3')}'")
+            logger.info(f"   Sample metric '{first_metric}': company3='{first_data.get('company3')}'")
     else:
-        print(" No metrics extracted from table")
+        logger.info(" No metrics extracted from table")
     
     return metrics_data
 
@@ -1830,7 +1834,7 @@ def generate_comparison_chart(state):
     Note: This is a SYNCHRONOUS function for LangGraph compatibility.
     All async operations are handled internally where needed.
     """
-    print("---GENERATING COMPARISON CHART---")
+    logger.info("---GENERATING COMPARISON CHART---")
     
     try:
         import plotly.graph_objects as go
@@ -1843,11 +1847,11 @@ def generate_comparison_chart(state):
         company3 = state.get("comparison_company3", None)
         
         # Debug logging
-        print(f" DEBUG: company1='{company1}', company2='{company2}', company3='{company3}'")
-        print(f" DEBUG: company3 type={type(company3)}, is None={company3 is None}, is empty={company3 == ''}")
+        logger.info(f" DEBUG: company1='{company1}', company2='{company2}', company3='{company3}'")
+        logger.info(f" DEBUG: company3 type={type(company3)}, is None={company3 is None}, is empty={company3 == ''}")
         
         if not answer or not company1 or not company2:
-            print(" Missing data for chart generation")
+            logger.warning(" Missing data for chart generation")
             return {"chart_url": None, "chart_filename": None}
         
         # Treat empty string as None for company3
@@ -1855,25 +1859,25 @@ def generate_comparison_chart(state):
             company3 = None
         
         if company3:
-            print(f"Generating chart for {company1} vs {company2} vs {company3}")
+            logger.info(f"Generating chart for {company1} vs {company2} vs {company3}")
         else:
-            print(f"Generating chart for {company1} vs {company2}")
+            logger.info(f"Generating chart for {company1} vs {company2}")
         
         # Step 1: Parse table
         metrics_data = parse_markdown_table(answer)
         if not metrics_data:
-            print("No metrics found in answer")
+            logger.info("No metrics found in answer")
             return {"chart_url": None, "chart_filename": None}
         
-        print(f"✓ Parsed {len(metrics_data)} metrics from table")
+        logger.info(f"✓ Parsed {len(metrics_data)} metrics from table")
         
         # Step 2: Prepare chart data
         chart_data = prepare_chart_data(metrics_data, company1, company2, company3, max_metrics=8)
         if not chart_data['metrics']:
-            print("No valid numeric metrics for charting")
+            logger.info("No valid numeric metrics for charting")
             return {"chart_url": None, "chart_filename": None}
         
-        print(f"✓ Prepared {len(chart_data['metrics'])} metrics for charting")
+        logger.info(f"✓ Prepared {len(chart_data['metrics'])} metrics for charting")
         
         # Step 3: Create grouped bar chart
         bars = [
@@ -1944,7 +1948,7 @@ def generate_comparison_chart(state):
             hovermode='x unified'
         )
         
-        print("✓ Chart created successfully")
+        logger.info("✓ Chart created successfully")
         
         # Step 4: Save locally first
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1960,9 +1964,9 @@ def generate_comparison_chart(state):
         
         try:
             fig.write_image(local_path, width=1000 if not company3 else 1200, height=600)
-            print(f"✓ Chart saved locally: {local_path}")
+            logger.info(f"✓ Chart saved locally: {local_path}")
         except Exception as e:
-            print(f"Failed to save locally: {str(e)}")
+            logger.error(f"Failed to save locally: {str(e)}")
         
         # Step 5: Try to upload to Cloudinary (non-blocking)
         chart_url = None
@@ -1971,18 +1975,18 @@ def generate_comparison_chart(state):
             from app.cloudinary import upload_to_cloudinary
             
             if os.getenv("CLOUDINARY_CLOUD_NAME"):
-                print("Uploading chart to Cloudinary...")
+                logger.info("Uploading chart to Cloudinary...")
                 result = upload_to_cloudinary(local_path)
                 
                 if result.get("success"):
                     chart_url = result.get("url")
-                    print(f"✓ Chart uploaded: {chart_url}")
+                    logger.info(f"✓ Chart uploaded: {chart_url}")
                 else:
-                    print(f"Cloudinary upload failed: {result.get('error')}")
+                    logger.error(f"Cloudinary upload failed: {result.get('error')}")
             else:
-                print("Cloudinary not configured - chart saved locally only")
+                logger.info("Cloudinary not configured - chart saved locally only")
         except Exception as e:
-            print(f"Cloudinary upload skipped: {str(e)}")
+            logger.error(f"Cloudinary upload skipped: {str(e)}")
         
         return {
             "chart_url": chart_url,
@@ -1990,11 +1994,11 @@ def generate_comparison_chart(state):
         }
     
     except ImportError as e:
-        print(f"Missing required package: {e}")
-        print("Install with: pip install plotly kaleido")
+        logger.error(f"Missing required package: {e}")
+        logger.error("Install with: pip install plotly kaleido")
         return {"chart_url": None, "chart_filename": None}
     except Exception as e:
-        print(f"Chart generation error: {str(e)}")
+        logger.error(f"Chart generation error: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"chart_url": None, "chart_filename": None}
@@ -2013,17 +2017,17 @@ def detect_alpha_query(state):
     - "should i buy [company/ticker]?"
     - "is now a good entry point for [ticker]?"
     """
-    print("="*80)
-    print(" ALPHA QUERY DETECTION")
-    print("="*80)
+    logger.info("="*80)
+    logger.info(" ALPHA QUERY DETECTION")
+    logger.info("="*80)
 
     # Explicit trigger: a dedicated caller (e.g. the /alpha endpoint) can seed
     # alpha_mode/ticker directly in the initial state, bypassing keyword
     # detection entirely. This is the only way ALPHA mode gets activated now.
     if state.get("alpha_mode") and state.get("ticker"):
-        print(" ALPHA MODE (explicit trigger)")
-        print(f"   Target: {state.get('ticker')}")
-        print("="*80 + "\n")
+        logger.info(" ALPHA MODE (explicit trigger)")
+        logger.info(f"   Target: {state.get('ticker')}")
+        logger.info("="*80 + "\n")
         return {
             "alpha_mode": True,
             "alpha_pillar": state.get("alpha_pillar"),
@@ -2078,8 +2082,8 @@ def detect_alpha_query(state):
     is_insider_query = any(pattern in question for pattern in insider_patterns)
 
     if is_insider_query:
-        print(" ALPHA MODE ACTIVATED (insider_trading pillar)")
-        print(f"   Query: {question}")
+        logger.info(" ALPHA MODE ACTIVATED (insider_trading pillar)")
+        logger.info(f"   Query: {question}")
 
         # Try to extract ticker from state first
         ticker = state.get("ticker")
@@ -2100,11 +2104,11 @@ def detect_alpha_query(state):
                     break
 
         if not target_ticker:
-            print(" WARNING: Could not extract ticker/company")
+            logger.warning(" WARNING: Could not extract ticker/company")
             target_ticker = "unknown"
 
-        print(f"   Target: {target_ticker}")
-        print("="*80 + "\n")
+        logger.info(f"   Target: {target_ticker}")
+        logger.info("="*80 + "\n")
 
         return {
             "alpha_mode": True,
@@ -2114,8 +2118,8 @@ def detect_alpha_query(state):
             "alpha_report": ""
         }
 
-    print(" Normal RAG query (not ALPHA)")
-    print("="*80 + "\n")
+    logger.info(" Normal RAG query (not ALPHA)")
+    logger.info("="*80 + "\n")
     return {
         "alpha_mode": False
     }
@@ -2132,9 +2136,9 @@ async def alpha_dimension_retrieve(state):
     - Horizon: Web only
     - Action: Web only
     """
-    print("="*80)
-    print(" ALPHA DIMENSIONAL RETRIEVAL")
-    print("="*80)
+    logger.info("="*80)
+    logger.info(" ALPHA DIMENSIONAL RETRIEVAL")
+    logger.info("="*80)
     
     ticker = state.get("ticker", "").upper()
     company_filter = state.get("company_filter", [])
@@ -2142,12 +2146,12 @@ async def alpha_dimension_retrieve(state):
     if not ticker and company_filter:
         ticker = company_filter[0].upper()
     
-    print(f" Target: {ticker}\n")
+    logger.info(f" Target: {ticker}\n")
 
     alpha_pillar = state.get("alpha_pillar")
 
     if alpha_pillar == "insider_trading":
-        print(" [SINGLE PILLAR] Insider Trading (Form 4)")
+        logger.info(" [SINGLE PILLAR] Insider Trading (Form 4)")
         try:
             from rag.utils.Insights_Form4.advisory_hub import get_advisory_report
             form4_report = await get_advisory_report(ticker)
@@ -2188,14 +2192,14 @@ async def alpha_dimension_retrieve(state):
                     sections.append("\n".join(section))
 
             final_response = "\n\n---\n\n".join(sections) if sections else f"No Form 4 data found for {ticker}."
-            print("    Form4 data retrieved and formatted successfully.")
+            logger.info("    Form4 data retrieved and formatted successfully.")
             return {
                 "Intermediate_message": final_response,
                 "alpha_dimensions": {"insider_trading": {}},
                 "documents": [],
             }
         except Exception as e:
-            print(f"    Error: {e}")
+            logger.error(f"    Error: {e}")
             import traceback; traceback.print_exc()
             return {
                 "Intermediate_message": f"Error retrieving insider trading data for {ticker}: {e}",
@@ -2221,7 +2225,7 @@ async def alpha_dimension_retrieve(state):
     # -------------------------------------------------------------------------
     # ALIGNMENT: VectorDB (MD&A, Governance) + Form4 Insider Trading
     # -------------------------------------------------------------------------
-    print(" [1/5] Alignment (Stakeholder Interests) - VectorDB + Form4 Insider Data")
+    logger.info(" [1/5] Alignment (Stakeholder Interests) - VectorDB + Form4 Insider Data")
     try:
         db_instance = vectordb_mgr.get_instance(ticker, create_if_missing=False)
 
@@ -2245,7 +2249,7 @@ async def alpha_dimension_retrieve(state):
                     alignment_docs.append(doc)
 
         # ── Form 4 insider trading advisory data ──────────────────────────────
-        print("    Fetching Form 4 insider trading data…")
+        logger.info("    Fetching Form 4 insider trading data…")
         try:
             from rag.utils.Insights_Form4.advisory_hub import get_advisory_report
 
@@ -2271,11 +2275,11 @@ async def alpha_dimension_retrieve(state):
                 )
                 # Insert first so it's never cut off by the docs[:5] slice in format_docs
                 alignment_docs.insert(0, insider_doc)
-                print(f"    Form4 insider doc added ({len(form4_report)} issuer(s))")
+                logger.info(f"    Form4 insider doc added ({len(form4_report)} issuer(s))")
             else:
-                print(f"    No Form4 data in DB for {ticker} — skipping insider doc")
+                logger.warning(f"    No Form4 data in DB for {ticker} — skipping insider doc")
         except Exception as form4_err:
-            print(f"    Form4 fetch error (non-fatal): {form4_err}")
+            logger.error(f"    Form4 fetch error (non-fatal): {form4_err}")
         # ─────────────────────────────────────────────────────────────────────
 
         alpha_dimensions['alignment'] = {
@@ -2283,16 +2287,16 @@ async def alpha_dimension_retrieve(state):
             'documents': alignment_docs[:5],  # Form4 doc at [0], then vectordb docs
             'query_count': len(alignment_queries)
         }
-        print(f"    Total alignment docs: {len(alignment_docs[:5])}")
+        logger.info(f"    Total alignment docs: {len(alignment_docs[:5])}")
 
     except Exception as e:
-        print(f"    Error: {e}")
+        logger.error(f"    Error: {e}")
         alpha_dimensions['alignment'] = {'source': 'vectordb+form4', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
     # LIQUIDITY: VectorDB (risk factors) + Web (latest FDIC / govt macro data)
     # -------------------------------------------------------------------------
-    print(" [2/5] Liquidity (Macro/Micro Environment) - VectorDB + Govt Sources")
+    logger.info(" [2/5] Liquidity (Macro/Micro Environment) - VectorDB + Govt Sources")
     try:
         # VectorDB: Risk factors, commodity exposure
         liquidity_docs = []
@@ -2335,16 +2339,16 @@ async def alpha_dimension_retrieve(state):
             'documents': liquidity_docs,
             'query_count': len(vdb_queries) + len(web_queries)
         }
-        print(f"    Retrieved {len(liquidity_docs)} chunks (vectordb + govt sources)")
+        logger.info(f"    Retrieved {len(liquidity_docs)} chunks (vectordb + govt sources)")
 
     except Exception as e:
-        print(f"    Error: {e}")
+        logger.error(f"    Error: {e}")
         alpha_dimensions['liquidity'] = {'source': 'vectordb+govt', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
     # PERFORMANCE: VectorDB only (current year 10-K vs prior 2 years for comparison)
     # -------------------------------------------------------------------------
-    print(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
+    logger.info(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
     try:
         _prior_yr, _prior_yr2 = _cur_yr - 1, _cur_yr - 2
         performance_queries = [
@@ -2370,16 +2374,16 @@ async def alpha_dimension_retrieve(state):
             'documents': performance_docs[:9],
             'query_count': len(performance_queries)
         }
-        print(f"    Retrieved {len(performance_docs[:9])} chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
+        logger.info(f"    Retrieved {len(performance_docs[:9])} chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
 
     except Exception as e:
-        print(f"    Error: {e}")
+        logger.error(f"    Error: {e}")
         alpha_dimensions['performance'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
     # HORIZON: SeekingAlpha only (trends, competitive positioning, moat)
     # -------------------------------------------------------------------------
-    print(" [4/5] Horizon (Structural Opportunity & Moat) - SeekingAlpha")
+    logger.info(" [4/5] Horizon (Structural Opportunity & Moat) - SeekingAlpha")
     try:
         horizon_queries = [
             f"{ticker} operating margins vs industry average pricing power",
@@ -2406,16 +2410,16 @@ async def alpha_dimension_retrieve(state):
             'documents': horizon_docs,
             'query_count': len(horizon_queries)
         }
-        print(f"    Retrieved {len(horizon_docs)} chunks (SeekingAlpha)")
+        logger.info(f"    Retrieved {len(horizon_docs)} chunks (SeekingAlpha)")
 
     except Exception as e:
-        print(f"    Error: {e}")
+        logger.error(f"    Error: {e}")
         alpha_dimensions['horizon'] = {'source': 'seekingalpha', 'documents': [], 'query_count': 0}
     
     # -------------------------------------------------------------------------
     # ACTION: Web (RSI, SMA200, price, P/E, EBITDA) — all from trusted sources
     # -------------------------------------------------------------------------
-    print(" [5/5] Action (RSI / SMA200 / Price / P/E / EBITDA) - Web")
+    logger.info(" [5/5] Action (RSI / SMA200 / Price / P/E / EBITDA) - Web")
     try:
         action_docs = []
 
@@ -2433,7 +2437,7 @@ async def alpha_dimension_retrieve(state):
         )
 
         # -- RSI(14) and current price from web --------------------------------
-        print("    Fetching RSI(14) and current price from web...")
+        logger.info("    Fetching RSI(14) and current price from web...")
         try:
             rsi_query = f"{ticker} RSI 14 relative strength index current technical indicators"
             rsi_results = web_search_technical.invoke({"query": rsi_query})
@@ -2450,12 +2454,12 @@ async def alpha_dimension_retrieve(state):
                     }
                 )
                 action_docs.append(doc)
-            print(f"    Retrieved {len(rsi_sources)} RSI/price docs from web")
+            logger.info(f"    Retrieved {len(rsi_sources)} RSI/price docs from web")
         except Exception as rsi_err:
-            print(f"    RSI web search error (non-fatal): {rsi_err}")
+            logger.error(f"    RSI web search error (non-fatal): {rsi_err}")
 
         # -- SMA200 from web ---------------------------------------------------
-        print("    Fetching SMA200 from web...")
+        logger.info("    Fetching SMA200 from web...")
         try:
             sma_query = f"{ticker} 200 day moving average SMA200 current stock price technical"
             sma_results = web_search_technical.invoke({"query": sma_query})
@@ -2472,12 +2476,12 @@ async def alpha_dimension_retrieve(state):
                     }
                 )
                 action_docs.append(doc)
-            print(f"    Retrieved {len(sma_sources)} SMA200 docs from web")
+            logger.info(f"    Retrieved {len(sma_sources)} SMA200 docs from web")
         except Exception as sma_err:
-            print(f"    SMA200 web search error (non-fatal): {sma_err}")
+            logger.error(f"    SMA200 web search error (non-fatal): {sma_err}")
         
         # -- Current Stock Price from web ---------------------------------------------------
-        print("    Fetching Current Stock Price from web...")
+        logger.info("    Fetching Current Stock Price from web...")
         try:
             sma_query = f"{ticker} today's stock price current stock price"
             sma_results = web_search_technical_stock_price.invoke({"query": sma_query})
@@ -2494,12 +2498,12 @@ async def alpha_dimension_retrieve(state):
                     }
                 )
                 action_docs.append(doc)
-            print(f"    Retrieved {len(sma_sources)} Current Stock Price docs from web")
+            logger.info(f"    Retrieved {len(sma_sources)} Current Stock Price docs from web")
         except Exception as sma_err:
-            print(f"    Current Stock Price web search error (non-fatal): {sma_err}")
+            logger.error(f"    Current Stock Price web search error (non-fatal): {sma_err}")
 
         # -- EBITDA from web search (trusted financial domains) ---------------
-        print("    Fetching EBITDA from web (trusted domains)...")
+        logger.info("    Fetching EBITDA from web (trusted domains)...")
         try:
             ebitda_query = f"{ticker} EBITDA annual earnings current"
             ebitda_results = web_search.invoke({"query": ebitda_query})
@@ -2516,12 +2520,12 @@ async def alpha_dimension_retrieve(state):
                     }
                 )
                 action_docs.append(doc)
-            print(f"    Retrieved {len(ebitda_sources)} EBITDA docs from web")
+            logger.info(f"    Retrieved {len(ebitda_sources)} EBITDA docs from web")
         except Exception as ebitda_err:
-            print(f"    EBITDA web search error (non-fatal): {ebitda_err}")
+            logger.error(f"    EBITDA web search error (non-fatal): {ebitda_err}")
 
         # -- P/E ratio from web search (trusted financial domains) ------------
-        print("    Fetching P/E ratio from web (trusted domains)...")
+        logger.info("    Fetching P/E ratio from web (trusted domains)...")
         try:
             pe_query = f"{ticker} P/E ratio price to earnings current valuation"
             pe_results = web_search.invoke({"query": pe_query})
@@ -2538,28 +2542,28 @@ async def alpha_dimension_retrieve(state):
                     }
                 )
                 action_docs.append(doc)
-            print(f"    Retrieved {len(pe_sources)} P/E docs from web")
+            logger.info(f"    Retrieved {len(pe_sources)} P/E docs from web")
         except Exception as pe_err:
-            print(f"    P/E web search error (non-fatal): {pe_err}")
+            logger.error(f"    P/E web search error (non-fatal): {pe_err}")
 
         alpha_dimensions['action'] = {
             'source': 'web',
             'documents': action_docs,
             'query_count': 5
         }
-        print(f"    Total action docs: {len(action_docs)}")
+        logger.info(f"    Total action docs: {len(action_docs)}")
 
     except Exception as e:
-        print(f"    Error: {e}")
+        logger.error(f"    Error: {e}")
         alpha_dimensions['action'] = {
             'source': 'web',
             'documents': [],
             'query_count': 0
         }
     
-    print("\n" + "="*80)
-    print(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total chunks")
-    print("="*80 + "\n")
+    logger.info("\n" + "="*80)
+    logger.info(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total chunks")
+    logger.info("="*80 + "\n")
     
     return {
         "alpha_dimensions": alpha_dimensions
@@ -2571,9 +2575,9 @@ def alpha_generate_report(state):
     Generate ALPHA Framework report from dimensional analysis.
     Creates <100 word summaries for each dimension and combines into final report.
     """
-    print("="*80)
-    print(" ALPHA REPORT GENERATION")
-    print("="*80 + "\n")
+    logger.info("="*80)
+    logger.info(" ALPHA REPORT GENERATION")
+    logger.info("="*80 + "\n")
     
     ticker = state.get("ticker", "UNKNOWN")
     alpha_dimensions = state.get("alpha_dimensions", {})
@@ -2618,7 +2622,7 @@ def alpha_generate_report(state):
     ]
     
     for dim_key, chain_func, dim_name in dimensions:
-        print(f" Generating {dim_name}...")
+        logger.info(f" Generating {dim_name}...")
 
         dim_data = alpha_dimensions.get(dim_key, {})
         docs = dim_data.get('documents', [])
@@ -2627,7 +2631,7 @@ def alpha_generate_report(state):
             technical_docs = [d for d in docs if d.metadata.get('data_type') == 'technical']
             pe_docs        = [d for d in docs if d.metadata.get('data_type') == 'pe_ratio']
             ebitda_docs    = [d for d in docs if d.metadata.get('data_type') == 'ebitda']
-            print(f"    ACTION docs → {len(technical_docs)} technical, {len(pe_docs)} P/E, {len(ebitda_docs)} EBITDA")
+            logger.info(f"    ACTION docs → {len(technical_docs)} technical, {len(pe_docs)} P/E, {len(ebitda_docs)} EBITDA")
 
             action_document = (
                 f"=== TECHNICAL INDICATORS (web-sourced: RSI-14, SMA200, current price) ===\n"
@@ -2673,10 +2677,10 @@ def alpha_generate_report(state):
                 'key_points': result.key_points,
                 'recommendation': getattr(result, 'recommendation', '')
             }
-            print(f"    ✓ {dim_name}: {len(analysis)} chars, {len(result.key_points)} points")
+            logger.info(f"    ✓ {dim_name}: {len(analysis)} chars, {len(result.key_points)} points")
 
         except Exception as e:
-            print(f"    ✗ Error: {e}")
+            logger.error(f"    ✗ Error: {e}")
             dimension_outputs[dim_key] = {
                 'analysis': f"Analysis unavailable due to insufficient data.",
                 'key_points': [],
@@ -2684,7 +2688,7 @@ def alpha_generate_report(state):
             }
     
     # Combine into final report
-    print("\n Combining dimensions into final report...")
+    logger.info("\n Combining dimensions into final report...")
 
     try:
         combiner_chain = get_alpha_report_combiner_chain(llm)
@@ -2697,15 +2701,15 @@ def alpha_generate_report(state):
             "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
             "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
         })
-        print(f"    ✓ Final report: {len(final_report)} chars")
+        logger.info(f"    ✓ Final report: {len(final_report)} chars")
 
     except Exception as e:
-        print(f"    ✗ Error: {e}")
+        logger.error(f"    ✗ Error: {e}")
         final_report = f"# ALPHA Framework Analysis: {ticker}\n\nError generating report: {str(e)}"
     
-    print("\n" + "="*80)
-    print(" ALPHA REPORT COMPLETE")
-    print("="*80 + "\n")
+    logger.info("\n" + "="*80)
+    logger.info(" ALPHA REPORT COMPLETE")
+    logger.info("="*80 + "\n")
     
     # Return final report as AIMessage
     from langchain_core.messages import AIMessage
@@ -2787,14 +2791,14 @@ def detect_scenario_query(state):
         scenario_mode: True   → graph routes to scenario_retrieve
         scenario_mode: False  → graph routes normally
     """
-    print("=" * 80)
-    print(" SCENARIO QUERY DETECTION")
-    print("=" * 80)
+    logger.info("=" * 80)
+    logger.info(" SCENARIO QUERY DETECTION")
+    logger.info("=" * 80)
 
     # If alpha mode already active, skip scenario detection
     if state.get("alpha_mode", False):
-        print(" Alpha mode active – skipping scenario detection")
-        print("=" * 80 + "\n")
+        logger.warning(" Alpha mode active – skipping scenario detection")
+        logger.info("=" * 80 + "\n")
         return {"scenario_mode": False}
 
     messages = state["messages"]
@@ -2803,8 +2807,8 @@ def detect_scenario_query(state):
     is_scenario_query = any(pattern in question for pattern in SCENARIO_PATTERNS)
 
     if is_scenario_query:
-        print(" SCENARIO MODE ACTIVATED")
-        print(f"   Query: {question}")
+        logger.info(" SCENARIO MODE ACTIVATED")
+        logger.info(f"   Query: {question}")
 
         # Resolve ticker from state (set by portfolio/session context)
         ticker = state.get("ticker")
@@ -2825,8 +2829,8 @@ def detect_scenario_query(state):
         if not ticker:
             ticker = "UNKNOWN"
 
-        print(f"   Target ticker: {ticker}")
-        print("=" * 80 + "\n")
+        logger.info(f"   Target ticker: {ticker}")
+        logger.info("=" * 80 + "\n")
         return {
             "scenario_mode": True,
             "ticker": ticker,
@@ -2834,8 +2838,8 @@ def detect_scenario_query(state):
             "scenario_report": ""
     }
     else:
-        print(" Normal query (not a Scenario request)")
-        print("=" * 80 + "\n")
+        logger.info(" Normal query (not a Scenario request)")
+        logger.info("=" * 80 + "\n")
         return {"scenario_mode": False}
 
 
@@ -2851,12 +2855,12 @@ def scenario_data_retrieve(state):
       5. credit_data    – S&P, Moody's, Fitch, DBRS rating commentary
       6. macro_data     – sector trends, interest rates, macro environment
     """
-    print("=" * 80)
-    print(" SCENARIO DATA RETRIEVAL (Web-Search Only)")
-    print("=" * 80)
+    logger.info("=" * 80)
+    logger.info(" SCENARIO DATA RETRIEVAL (Web-Search Only)")
+    logger.info("=" * 80)
 
     ticker = state.get("ticker", "UNKNOWN").upper()
-    print(f" Target: {ticker}\n")
+    logger.info(f" Target: {ticker}\n")
 
     web_search_tool = TavilySearch(
         max_results=4,
@@ -2876,7 +2880,7 @@ def scenario_data_retrieve(state):
     # -------------------------------------------------------------------------
     # 1. Analyst Ratings & Brokerage Price Targets
     # -------------------------------------------------------------------------
-    print(" [1/6] Analyst ratings & brokerage price targets")
+    logger.info(" [1/6] Analyst ratings & brokerage price targets")
     _s_yr = datetime.now().year
     analyst_queries = [
         f"{ticker} analyst rating consensus buy sell hold price target {_s_yr}",
@@ -2895,13 +2899,13 @@ def scenario_data_retrieve(state):
                     "content": s["content"][:1500]
     })
         except Exception as e:
-            print(f"    Warning: {e}")
-    print(f"    {len(scenario_data['analyst_data'])} analyst sources collected")
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['analyst_data'])} analyst sources collected")
 
     # -------------------------------------------------------------------------
     # 2. Valuation Metrics
     # -------------------------------------------------------------------------
-    print(" [2/6] Valuation metrics")
+    logger.info(" [2/6] Valuation metrics")
     valuation_queries = [
         f"{ticker} P/E ratio EV/EBITDA price to sales valuation {_s_yr}",
         f"{ticker} fair value DCF intrinsic value analyst estimate",
@@ -2917,13 +2921,13 @@ def scenario_data_retrieve(state):
                     "content": s["content"][:1500]
     })
         except Exception as e:
-            print(f"    Warning: {e}")
-    print(f"    {len(scenario_data['valuation_data'])} valuation sources collected")
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['valuation_data'])} valuation sources collected")
 
     # -------------------------------------------------------------------------
     # 3. Growth Catalysts (Bull drivers)
     # -------------------------------------------------------------------------
-    print(" [3/6] Growth catalysts & bull drivers")
+    logger.info(" [3/6] Growth catalysts & bull drivers")
     catalyst_queries = [
         f"{ticker} growth drivers catalysts bullish case upside {_s_yr} {_s_yr + 1}",
         f"{ticker} new product launch market expansion revenue growth opportunity",
@@ -2940,13 +2944,13 @@ def scenario_data_retrieve(state):
                     "content": s["content"][:1500]
     })
         except Exception as e:
-            print(f"    Warning: {e}")
-    print(f"    {len(scenario_data['catalyst_data'])} catalyst sources collected")
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['catalyst_data'])} catalyst sources collected")
 
     # -------------------------------------------------------------------------
     # 4. Downside Risks (Bear drivers)
     # -------------------------------------------------------------------------
-    print(" [4/6] Downside risks & bear headwinds")
+    logger.info(" [4/6] Downside risks & bear headwinds")
     risk_queries = [
         f"{ticker} risks headwinds bearish case downside {_s_yr}",
         f"{ticker} competition market share loss regulatory risk",
@@ -2963,13 +2967,13 @@ def scenario_data_retrieve(state):
                     "content": s["content"][:1500]
     })
         except Exception as e:
-            print(f"    Warning: {e}")
-    print(f"    {len(scenario_data['risk_data'])} risk sources collected")
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['risk_data'])} risk sources collected")
 
     # -------------------------------------------------------------------------
     # 5. Credit Ratings
     # -------------------------------------------------------------------------
-    print(" [5/6] Credit rating agency reports")
+    logger.info(" [5/6] Credit rating agency reports")
     credit_queries = [
         f"{ticker} credit rating S&P Moody's Fitch rating outlook {_s_yr}",
         f"{ticker} bond rating investment grade speculative debt outlook",
@@ -2985,13 +2989,13 @@ def scenario_data_retrieve(state):
                     "content": s["content"][:1500]
     })
         except Exception as e:
-            print(f"    Warning: {e}")
-    print(f"    {len(scenario_data['credit_data'])} credit sources collected")
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['credit_data'])} credit sources collected")
 
     # -------------------------------------------------------------------------
     # 6. Macro & Sector Environment
     # -------------------------------------------------------------------------
-    print(" [6/6] Macro & sector environment")
+    logger.info(" [6/6] Macro & sector environment")
     macro_queries = [
         f"{ticker} sector macro outlook interest rate impact {_s_yr}",
         f"{ticker} industry trends tailwinds headwinds economic environment",
@@ -3007,12 +3011,12 @@ def scenario_data_retrieve(state):
                     "content": s["content"][:1500]
     })
         except Exception as e:
-            print(f"    Warning: {e}")
-    print(f"    {len(scenario_data['macro_data'])} macro sources collected")
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['macro_data'])} macro sources collected")
 
     total = sum(len(v) for v in scenario_data.values())
-    print(f"\n Retrieval complete: {total} total sources across 6 buckets")
-    print("=" * 80 + "\n")
+    logger.info(f"\n Retrieval complete: {total} total sources across 6 buckets")
+    logger.info("=" * 80 + "\n")
 
     return {"scenario_data": scenario_data}
 
@@ -3027,9 +3031,9 @@ def scenario_generate_report(state):
       3. Run the combiner chain to produce the final markdown report
       4. Return as AIMessage for show_result compatibility
     """
-    print("=" * 80)
-    print(" SCENARIO REPORT GENERATION")
-    print("=" * 80 + "\n")
+    logger.info("=" * 80)
+    logger.info(" SCENARIO REPORT GENERATION")
+    logger.info("=" * 80 + "\n")
 
     ticker = state.get("ticker", "UNKNOWN").upper()
     scenario_data = state.get("scenario_data", {})
@@ -3065,7 +3069,7 @@ def scenario_generate_report(state):
     macro_text = _format_bucket("macro_data")
 
     # ── Bull Case ─────────────────────────────────────────────────────────────
-    print(" Generating Bull Case...")
+    logger.info(" Generating Bull Case...")
     bull_result = None
     try:
         bull_chain = get_scenario_bull_chain(llm)
@@ -3075,12 +3079,12 @@ def scenario_generate_report(state):
             "valuation_data": valuation_text,
             "catalyst_data": catalyst_text
     })
-        print(f"    Bull target: {bull_result.price_target}  upside: {bull_result.upside_downside}")
+        logger.info(f"    Bull target: {bull_result.price_target}  upside: {bull_result.upside_downside}")
     except Exception as e:
-        print(f"    Error: {e}")
+        logger.error(f"    Error: {e}")
 
     # ── Bear Case ─────────────────────────────────────────────────────────────
-    print(" Generating Bear Case...")
+    logger.info(" Generating Bear Case...")
     bear_result = None
     try:
         bear_chain = get_scenario_bear_chain(llm)
@@ -3090,12 +3094,12 @@ def scenario_generate_report(state):
             "risk_data": risk_text,
             "credit_data": credit_text
     })
-        print(f"    Bear target: {bear_result.price_target}  downside: {bear_result.upside_downside}")
+        logger.info(f"    Bear target: {bear_result.price_target}  downside: {bear_result.upside_downside}")
     except Exception as e:
-        print(f"    Error: {e}")
+        logger.error(f"    Error: {e}")
 
     # ── Base Case ─────────────────────────────────────────────────────────────
-    print(" Generating Base Case...")
+    logger.info(" Generating Base Case...")
     base_result = None
     try:
         base_chain = get_scenario_base_chain(llm)
@@ -3105,9 +3109,9 @@ def scenario_generate_report(state):
             "valuation_data": valuation_text,
             "macro_data": macro_text
     })
-        print(f"    Base target: {base_result.price_target}  return: {base_result.upside_downside}")
+        logger.info(f"    Base target: {base_result.price_target}  return: {base_result.upside_downside}")
     except Exception as e:
-        print(f"    Error: {e}")
+        logger.error(f"    Error: {e}")
 
     def _fmt_list(lst):
         if not lst:
@@ -3121,7 +3125,7 @@ def scenario_generate_report(state):
         return getattr(result, field, default) or default
 
     # ── Combine into final report ─────────────────────────────────────────────
-    print("\n Combining into final scenario report...")
+    logger.info("\n Combining into final scenario report...")
     final_report = ""
     try:
         combiner_chain = get_scenario_report_combiner_chain(llm)
@@ -3152,9 +3156,9 @@ def scenario_generate_report(state):
             "analyst_summary": analyst_text[:2000] if analyst_text else "N/A",
             "credit_summary": credit_text[:1000] if credit_text else "N/A"
     })
-        print(f"    Final report: {len(final_report)} chars")
+        logger.info(f"    Final report: {len(final_report)} chars")
     except Exception as e:
-        print(f"    Error generating combined report: {e}")
+        logger.error(f"    Error generating combined report: {e}")
         final_report = (
             f"# Bull / Bear / Base Scenario Analysis: {ticker}\n\n"
             f"Error generating combined report: {e}\n\n"
@@ -3166,9 +3170,9 @@ def scenario_generate_report(state):
             f"({_safe(bear_result, 'upside_downside')} downside)\n"
         )
 
-    print("\n" + "=" * 80)
-    print(" SCENARIO REPORT COMPLETE")
-    print("=" * 80 + "\n")
+    logger.info("\n" + "=" * 80)
+    logger.info(" SCENARIO REPORT COMPLETE")
+    logger.info("=" * 80 + "\n")
 
     return {
         "messages": [AIMessage(content=final_report)],
@@ -3183,14 +3187,14 @@ def scenario_generate_report(state):
 
 def detect_macro_query(state):
     """Detect if the query is asking for macroeconomic data."""
-    print("=" * 80)
-    print(" MACRO QUERY DETECTION")
-    print("=" * 80)
+    logger.info("=" * 80)
+    logger.info(" MACRO QUERY DETECTION")
+    logger.info("=" * 80)
 
     # If alpha or scenario mode already active, skip macro detection
     if state.get("alpha_mode", False) or state.get("scenario_mode", False):
-        print(" Higher priority mode active – skipping macro detection")
-        print("=" * 80 + "\n")
+        logger.warning(" Higher priority mode active – skipping macro detection")
+        logger.info("=" * 80 + "\n")
         return {"macro_mode": False}
 
     messages = state["messages"]
@@ -3209,13 +3213,13 @@ def detect_macro_query(state):
     is_macro = any(kw in question for kw in macro_keywords)
     
     if is_macro:
-        print(" MACRO MODE ACTIVATED")
-        print(f"   Query: {question}")
-        print("=" * 80 + "\n")
+        logger.info(" MACRO MODE ACTIVATED")
+        logger.info(f"   Query: {question}")
+        logger.info("=" * 80 + "\n")
         return {"macro_mode": True}
     else:
-        print(" Normal query (not a Macro request)")
-        print("=" * 80 + "\n")
+        logger.info(" Normal query (not a Macro request)")
+        logger.info("=" * 80 + "\n")
         return {"macro_mode": False}
 
 def macro_analyze_query(state):
@@ -3230,9 +3234,9 @@ def macro_analyze_query(state):
     
     Output is fully inspectable in state['macro_analysis'] before any data is fetched.
     """
-    print("=" * 80)
-    print(" MACRO STEP 1: QUERY ANALYSIS")
-    print("=" * 80)
+    logger.info("=" * 80)
+    logger.info(" MACRO STEP 1: QUERY ANALYSIS")
+    logger.info("=" * 80)
     
     messages = state["messages"]
     question = messages[-1].content
@@ -3285,17 +3289,17 @@ def macro_analyze_query(state):
         ])
         queries_list = [q.model_dump() for q in plan.queries]
     except Exception as e:
-        print(f"   ✗ Analysis failed: {e}. Falling back to ALL indicators.")
+        logger.error(f"   ✗ Analysis failed: {e}. Falling back to ALL indicators.")
         queries_list = [{"indicator": "ALL", "period1": None, "period2": None,
                          "granularity": "native", "comparison_type": "YoY", "duration": None}]
     
     # Log the analysis for transparency
-    print(f"   Extracted {len(queries_list)} query/queries:")
+    logger.info(f"   Extracted {len(queries_list)} query/queries:")
     for i, q in enumerate(queries_list, 1):
-        print(f"     [{i}] {q['indicator']} | {q['granularity']} | "
+        logger.info(f"     [{i}] {q['indicator']} | {q['granularity']} | "
               f"{q.get('period1', 'latest')} vs {q.get('period2', 'auto')} | {q['comparison_type']}")
     
-    print("=" * 80 + "\n")
+    logger.info("=" * 80 + "\n")
     
     return {
         "macro_analysis": {
@@ -3318,9 +3322,9 @@ def macro_fetch_and_calculate(state):
     - Future/unavailable date → falls back to latest, records explicit warning
     - Monthly granularity → skips quarterly aggregation, uses raw monthly values
     """
-    print("=" * 80)
-    print(" MACRO STEP 2: FETCH & CALCULATE (deterministic)")
-    print("=" * 80)
+    logger.info("=" * 80)
+    logger.info(" MACRO STEP 2: FETCH & CALCULATE (deterministic)")
+    logger.info("=" * 80)
     
     from app.utils.macro_utils import get_macro_comparison, get_all_macro_latest
     
@@ -3337,7 +3341,7 @@ def macro_fetch_and_calculate(state):
         comparison_type = q.get("comparison_type", "YoY")
         duration = q.get("duration")
         
-        print(f"   [{i}/{len(queries)}] {indicator} | {granularity} | "
+        logger.info(f"   [{i}/{len(queries)}] {indicator} | {granularity} | "
               f"{period1 or 'latest'} vs {period2 or 'auto'} | {comparison_type} | duration={duration}")
         
         if indicator == "ALL":
@@ -3353,15 +3357,15 @@ def macro_fetch_and_calculate(state):
         
         # Log what actually happened
         if "error" in result:
-            print(f"       ✗ Error: {result['error']}")
+            logger.error(f"       ✗ Error: {result['error']}")
         else:
             actual_p1 = result.get("period1", "N/A")
             actual_p2 = result.get("period2", "N/A")
             val1 = result.get("val1", "N/A")
             val2 = result.get("val2", "N/A")
-            print(f"       ✓ {actual_p1}={val1} vs {actual_p2}={val2}")
+            logger.info(f"       ✓ {actual_p1}={val1} vs {actual_p2}={val2}")
             if "info" in result:
-                print(f"       ⚠ Fallback: {result['info']}")
+                logger.info(f"       ⚠ Fallback: {result['info']}")
                 
         # If a trend/duration was requested, fetch the historical data so the LLM can write a factual summary
         if duration and indicator != "ALL":
@@ -3408,8 +3412,8 @@ def macro_fetch_and_calculate(state):
                 "result": spread_info
             })
 
-    print(f"\n   Completed {len(calculation_results)} calculation(s)")
-    print("=" * 80 + "\n")
+    logger.info(f"\n   Completed {len(calculation_results)} calculation(s)")
+    logger.info("=" * 80 + "\n")
     
     return {"macro_calculation_results": calculation_results}
 
@@ -3424,9 +3428,9 @@ def macro_format_answer(state):
     
     Also handles yield curve chart generation if applicable.
     """
-    print("=" * 80)
-    print(" MACRO STEP 3: FORMAT ANSWER")
-    print("=" * 80)
+    logger.info("=" * 80)
+    logger.info(" MACRO STEP 3: FORMAT ANSWER")
+    logger.info("=" * 80)
     
     from langchain_openai import ChatOpenAI
     from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
@@ -3448,7 +3452,7 @@ def macro_format_answer(state):
     attribution_text = build_source_attribution_context(calc_results)
     if attribution_text:
         data_context += attribution_text
-        print("   Source attribution attached")
+        logger.info("   Source attribution attached")
 
     synthesis_prompt = MACRO_SYNTHESIS_PROMPT + "\n\n" + MACRO_FEW_SHOT
     
@@ -3458,7 +3462,7 @@ def macro_format_answer(state):
         HumanMessage(content=f"Question: {question}\n\nCalculated Data:\n{data_context}")
     ])
     final_answer = response.content
-    print(f"   Generated response: {len(final_answer)} chars")
+    logger.info(f"   Generated response: {len(final_answer)} chars")
     
     # Dynamic Chart Generation via Tag Parsing
     import re
@@ -3490,7 +3494,7 @@ def macro_format_answer(state):
                     if not c_period2 and q.get("period2"):
                         c_period2 = q.get("period2")
             
-            print(f"   Extracted CHART tag parameters: {params} | Resolved periods: period1={c_period1}, period2={c_period2}")
+            logger.info(f"   Extracted CHART tag parameters: {params} | Resolved periods: period1={c_period1}, period2={c_period2}")
             chart_info = generate_dynamic_chart(c_type, c_metrics, c_duration, c_period1, c_period2)
             
             if chart_info and chart_info.get("chart_url"):
@@ -3503,7 +3507,7 @@ def macro_format_answer(state):
             # Tag malformed, remove it silently
             final_answer = final_answer[:match.start()] + final_answer[match.end():]
             
-    print("=" * 80 + "\n")
+    logger.info("=" * 80 + "\n")
     
     return {
         "messages": [AIMessage(content=final_answer)],
@@ -3538,7 +3542,7 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
                     if parsed_end <= max_avail:
                         end_dt = parsed_end
                 except Exception as ex:
-                    print(f"Failed to parse chart end period {period_str}: {ex}")
+                    logger.error(f"Failed to parse chart end period {period_str}: {ex}")
             
             try:
                 if duration_str and duration_str.endswith("M"):
@@ -3550,7 +3554,7 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
                 else:
                     start_dt = end_dt - pd.DateOffset(months=12)
             except ValueError:
-                print(f"Failed to parse duration {duration_str}, defaulting to 12M")
+                logger.error(f"Failed to parse duration {duration_str}, defaulting to 12M")
                 start_dt = end_dt - pd.DateOffset(months=12)
                 
             return start_dt, end_dt
@@ -3561,7 +3565,7 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
             
         elif c_type == "spread_trend":
             if len(c_metrics) < 2:
-                print("spread_trend requires at least 2 metrics")
+                logger.info("spread_trend requires at least 2 metrics")
                 return {"chart_url": None, "chart_filename": None}
                 
             df1 = load_indicator_data(c_metrics[0])
@@ -3584,7 +3588,7 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
             df_combined = df_combined[(df_combined.index >= start_date) & (df_combined.index <= end_date)].dropna()
             
             if df_combined.empty:
-                print("No overlapping data found in the specified duration")
+                logger.info("No overlapping data found in the specified duration")
                 return {"chart_url": None, "chart_filename": None}
                 
             df_combined['spread'] = df_combined['val1'] - df_combined['val2']
@@ -3626,14 +3630,14 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
                     has_data = True
             
             if not has_data:
-                print("No data found for any of the metrics in the specified duration")
+                logger.info("No data found for any of the metrics in the specified duration")
                 return {"chart_url": None, "chart_filename": None}
                 
             title = f"Historical Trend: {', '.join(c_metrics)} ({c_duration})"
             y_title = "Value"
             
         else:
-            print(f"Unknown chart type: {c_type}")
+            logger.info(f"Unknown chart type: {c_type}")
             return {"chart_url": None, "chart_filename": None}
             
         fig.update_layout(
@@ -3654,19 +3658,19 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
         local_path = os.path.join(output_dir, filename)
         
         fig.write_image(local_path, width=800, height=500)
-        print(f"✓ Dynamic chart saved locally: {local_path}")
+        logger.info(f"✓ Dynamic chart saved locally: {local_path}")
         
         # Upload to Cloudinary
         chart_url = None
         if os.getenv("CLOUDINARY_CLOUD_NAME"):
             from app.cloudinary import upload_to_cloudinary
-            print(f"Uploading {c_type} chart to Cloudinary...")
+            logger.info(f"Uploading {c_type} chart to Cloudinary...")
             result = upload_to_cloudinary(local_path)
             if result.get("success"):
                 chart_url = result.get("url")
-                print(f"✓ Dynamic chart uploaded: {chart_url}")
+                logger.info(f"✓ Dynamic chart uploaded: {chart_url}")
             else:
-                print(f"Cloudinary upload failed: {result.get('error')}")
+                logger.error(f"Cloudinary upload failed: {result.get('error')}")
                 
         return {
             "chart_url": chart_url,
@@ -3674,7 +3678,7 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
         }
         
     except Exception as e:
-        print(f"Dynamic chart generation error: {str(e)}")
+        logger.error(f"Dynamic chart generation error: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"chart_url": None, "chart_filename": None}
@@ -3726,7 +3730,7 @@ def generate_yield_curve_chart(period1: Optional[str] = None, period2: Optional[
                     y_val2.append(res["val2"])
         
         if not y_val1:
-            print("No yield curve data found to plot")
+            logger.info("No yield curve data found to plot")
             return {"chart_url": None, "chart_filename": None}
             
         fig = go.Figure()
@@ -3783,19 +3787,19 @@ def generate_yield_curve_chart(period1: Optional[str] = None, period2: Optional[
         local_path = os.path.join(output_dir, filename)
         
         fig.write_image(local_path, width=800, height=500)
-        print(f"✓ Yield curve chart saved locally: {local_path}")
+        logger.info(f"✓ Yield curve chart saved locally: {local_path}")
         
         # Upload to Cloudinary
         chart_url = None
         if os.getenv("CLOUDINARY_CLOUD_NAME"):
             from app.cloudinary import upload_to_cloudinary
-            print("Uploading yield curve chart to Cloudinary...")
+            logger.info("Uploading yield curve chart to Cloudinary...")
             result = upload_to_cloudinary(local_path)
             if result.get("success"):
                 chart_url = result.get("url")
-                print(f"✓ Yield curve chart uploaded: {chart_url}")
+                logger.info(f"✓ Yield curve chart uploaded: {chart_url}")
             else:
-                print(f"Cloudinary upload failed: {result.get('error')}")
+                logger.error(f"Cloudinary upload failed: {result.get('error')}")
                 
         return {
             "chart_url": chart_url,
@@ -3803,7 +3807,7 @@ def generate_yield_curve_chart(period1: Optional[str] = None, period2: Optional[
         }
         
     except Exception as e:
-        print(f"Yield curve chart generation error: {str(e)}")
+        logger.error(f"Yield curve chart generation error: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"chart_url": None, "chart_filename": None}

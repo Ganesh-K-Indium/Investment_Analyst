@@ -17,6 +17,7 @@ Supersedes the old root-level download_10q_pdfs.py (10-Q-only, hardcoded to
 AAPL/2025, no ingestion hookup).
 """
 import asyncio
+import logging
 import os
 import time
 from datetime import date, datetime
@@ -27,6 +28,8 @@ from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
 load_dotenv()
+
+logger = logging.getLogger("ingestion.edgar_fetcher")
 
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "Indium Capital contact@indium.com")
 SEC_REQUEST_RATE_LIMIT = 10  # max 10 requests/sec (SEC guideline)
@@ -302,6 +305,6 @@ if __name__ == "__main__":
                 output_dir=args.output_dir,
                 ingest=not args.no_ingest,
             )
-            print(summary)
+            logger.info(summary)
 
     asyncio.run(_main())
