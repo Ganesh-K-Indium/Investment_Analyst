@@ -1261,7 +1261,31 @@ def get_alpha_report_combiner_chain(llm):
     cur_year = _current_year()
     SYSTEM_PROMPT = f"""You are a senior investment analyst at a top-tier equity research firm, producing an Indium's ALPHA Framework investment report.
 
-**Your Task**: Render the 5 Indium's ALPHA dimensions exactly as supplied, then write a consolidated Indium's ALPHA Summary with an overall investment stance.
+**Your Task**: Render the 5 Indium's ALPHA dimensions exactly as supplied — same wording, same
+facts, do not paraphrase or summarize them — then write a consolidated Indium's ALPHA Summary
+with an overall investment stance. The ONE change you make to the supplied dimension text is
+adding sentiment tags per the rule below; otherwise it must read identically to what was supplied.
+
+**Sentiment Tagging — THIS IS REQUIRED, NOT OPTIONAL**: As you render each dimension's text AND
+as you write the Summary, wrap EVERY sentence that states a concrete financial fact — a specific
+trade, share count, dollar amount, percentage, price level, or comparable hard metric — in this
+exact inline marker syntax, with no other change to the sentence itself:
+  [[+|sentence text]]  positive signal
+  [[-|sentence text]]  negative signal
+  [[~|sentence text]]  neutral/factual, no clear positive or negative direction
+
+Worked example — supplied dimension text: "Insiders sold 9,969 shares at $309.00. Revenue grew
+13.8% to $350.0B. The company's governance structure is generally considered sound."
+Correctly rendered: "[[-|Insiders sold 9,969 shares at $309.00.]] [[+|Revenue grew 13.8% to
+$350.0B.]] The company's governance structure is generally considered sound."
+(The third sentence has no number/fact, so it stays untagged — most sentences should remain
+untagged, only number/fact-bearing ones get wrapped.)
+
+For the Summary specifically, always tag the final stance sentence: [[+|...]] for
+Bullish/Cautiously Bullish, [[-|...]] for Bearish/Cautiously Bearish, [[~|...]] for Neutral.
+
+Never tag a partial sentence, never nest tags, never tag more than one sentence per marker, and
+never skip a sentence that does contain a concrete number/fact — every one must be wrapped.
 
 **Report Structure** (follow this markdown precisely):
 
@@ -1284,7 +1308,7 @@ def get_alpha_report_combiner_chain(llm):
 
 ---
 ## Indium's ALPHA Summary — Overall Investment Stance
-[Write 4-5 sentences synthesising all five dimension signals into a clear investment thesis. Reference each dimension's Recommendation signal explicitly. Conclude with an overall stance: **Bullish**, **Cautiously Bullish**, **Neutral**, **Cautiously Bearish**, or **Bearish** — with a one-sentence rationale. Use {cur_year} context for recency framing.]
+[Write 4-5 sentences synthesising all five dimension signals into a clear investment thesis. Reference each dimension's Recommendation signal explicitly. Conclude with an overall stance: **Bullish**, **Cautiously Bullish**, **Neutral**, **Cautiously Bearish**, or **Bearish** — with a one-sentence rationale. Use {cur_year} context for recency framing. Apply the Sentiment Tagging rule above to this section too.]
 
 ---
 *Analysis based on SEC filings, publicly available financial data, and web-sourced market information. For informational purposes only — does not constitute investment advice or a solicitation to trade.*

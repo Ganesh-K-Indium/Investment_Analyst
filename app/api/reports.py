@@ -30,6 +30,7 @@ class DraftItemCreate(BaseModel):
     portfolio_id: Optional[int] = Field(None, description="Portfolio this clip belongs to")
     item_type: str = Field(..., description="text | image | summary")
     content: Optional[str] = Field(None, description="Markdown text or summary body")
+    html: Optional[str] = Field(None, description="Rich-text HTML for this clip (sanitized server-side)")
     image_url: Optional[str] = Field(None, description="Cloudinary URL for chart images")
     source: Optional[str] = Field(None, description="rag | quant | summary")
     session_id: Optional[str] = Field(None, description="Originating chat session ID")
@@ -40,6 +41,7 @@ class DraftItemCreate(BaseModel):
 class DraftItemUpdate(BaseModel):
     label: Optional[str] = None
     content: Optional[str] = None
+    html: Optional[str] = None
     sort_order: Optional[int] = None
 
 
@@ -53,6 +55,7 @@ class DraftItemResponse(BaseModel):
     portfolio_id: Optional[int]
     item_type: str
     content: Optional[str]
+    html: Optional[str]
     image_url: Optional[str]
     source: Optional[str]
     session_id: Optional[str]
@@ -68,6 +71,7 @@ class DraftItemResponse(BaseModel):
             portfolio_id=obj.portfolio_id,
             item_type=obj.item_type,
             content=obj.content,
+            html=obj.html,
             image_url=obj.image_url,
             source=obj.source,
             session_id=obj.session_id,
@@ -106,6 +110,7 @@ def add_draft_item(payload: DraftItemCreate, db: Session = Depends(get_db_sessio
         portfolio_id=payload.portfolio_id,
         item_type=payload.item_type,
         content=payload.content,
+        html=payload.html,
         image_url=payload.image_url,
         source=payload.source,
         session_id=payload.session_id,
@@ -146,6 +151,7 @@ def update_draft_item(
         user_id=user_id,
         label=payload.label,
         content=payload.content,
+        html=payload.html,
         sort_order=payload.sort_order,
     )
     if not item:
@@ -202,6 +208,7 @@ class ReportCreate(BaseModel):
     company_name: str
     ticker: Optional[str] = None
     content_markdown: Optional[str] = None
+    content_html: Optional[str] = Field(None, description="Rich-text HTML — primary format, sanitized server-side")
     image_urls: Optional[List[str]] = Field(default_factory=list)
     source_session_ids: Optional[List[str]] = Field(default_factory=list)
     portfolio_id: Optional[int] = None
@@ -211,6 +218,7 @@ class ReportUpdate(BaseModel):
     company_name: Optional[str] = None
     ticker: Optional[str] = None
     content_markdown: Optional[str] = None
+    content_html: Optional[str] = None
     image_urls: Optional[List[str]] = None
     source_session_ids: Optional[List[str]] = None
     portfolio_id: Optional[int] = None
@@ -223,6 +231,7 @@ class ReportResponse(BaseModel):
     company_name: str
     ticker: Optional[str]
     content_markdown: Optional[str]
+    content_html: Optional[str]
     image_urls: List[str]
     source_session_ids: List[str]
     portfolio_id: Optional[int]
@@ -239,6 +248,7 @@ class ReportResponse(BaseModel):
             company_name=r.company_name,
             ticker=r.ticker,
             content_markdown=r.content_markdown,
+            content_html=r.content_html,
             image_urls=r.image_urls or [],
             source_session_ids=r.source_session_ids or [],
             portfolio_id=r.portfolio_id,
@@ -302,6 +312,7 @@ def create_report(payload: ReportCreate, db: Session = Depends(get_db_session)):
         company_name=payload.company_name,
         ticker=payload.ticker,
         content_markdown=payload.content_markdown,
+        content_html=payload.content_html,
         image_urls=payload.image_urls,
         source_session_ids=payload.source_session_ids,
         portfolio_id=payload.portfolio_id,
@@ -511,8 +522,16 @@ def export_report_pdf(report_id: int, inline: bool = False, db: Session = Depend
     pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + w, pdf.get_y())
     pdf.ln(4)
 
-    # --- Body: markdown rendered with formatting ---
-    if report.content_markdown:
+    # --- Body ---
+    if report.content_html:
+        # Rich-text path — walks the sanitized editor HTML directly (see
+        # pdf_render.py) instead of fpdf2's own write_html(), which ignores
+        # inline color/background on anything but heading tags, doesn't
+        # understand rgb()/rgba() colors, and crashes on TipTap's
+        # width="450px"-style <img> attributes.
+        from app.services.pdf_render import render_content_html
+        render_content_html(pdf, _safe(report.content_html))
+    elif report.content_markdown:
         import re
 
         def render_inline(text: str) -> str:

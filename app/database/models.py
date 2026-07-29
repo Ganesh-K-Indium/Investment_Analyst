@@ -149,6 +149,7 @@ class AnalystReport(Base):
     company_name       = Column(String, nullable=False, index=True)
     ticker             = Column(String, nullable=True, index=True)
     content_markdown   = Column(Text, nullable=True)
+    content_html       = Column(Text, nullable=True)  # sanitized rich-text HTML — primary format
     image_urls         = Column(JSON, default=list)
     source_session_ids = Column(JSON, default=list)
     portfolio_id       = Column(Integer, ForeignKey("portfolios.id"), nullable=True)
@@ -168,6 +169,7 @@ class ReportDraftItem(Base):
     portfolio_id = Column(Integer, nullable=True, index=True)  # scopes clip to a portfolio
     item_type    = Column(String, nullable=False)   # "text" | "image" | "summary"
     content      = Column(Text, nullable=True)       # markdown text or summary
+    html         = Column(Text, nullable=True)       # sanitized rich-text HTML for this clip
     image_url    = Column(String, nullable=True)     # Cloudinary URL for charts
     source       = Column(String, nullable=True)     # "rag" | "quant" | "summary"
     session_id   = Column(String, nullable=True)     # originating chat session

@@ -5,10 +5,24 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
+import markdown as _markdown
+from markdownify import markdownify as _html_to_markdown
 from app.database.models import ReportDraftItem, AnalystReport, ReportStatus, User
+from app.services.html_sanitize import sanitize_report_html
 
 _VALID_ITEM_TYPES = {"text", "image", "summary"}
 _VALID_SOURCES = {"rag", "quant", "summary", None}
+
+
+def _markdown_to_html(md: str) -> str:
+    return _markdown.markdown(md or "", extensions=["tables", "fenced_code"])
+
+
+def _derive_markdown(content_html: Optional[str]) -> Optional[str]:
+    """Authoritative Markdown (for FTS + legacy consumers), derived from sanitized HTML."""
+    if not content_html:
+        return None
+    return _html_to_markdown(content_html, heading_style="ATX").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -21,17 +35,20 @@ def add_draft_item(
     item_type: str,
     portfolio_id: Optional[int] = None,
     content: Optional[str] = None,
+    html: Optional[str] = None,
     image_url: Optional[str] = None,
     source: Optional[str] = None,
     session_id: Optional[str] = None,
     label: Optional[str] = None,
     sort_order: int = 0,
 ) -> ReportDraftItem:
+    clean_html = sanitize_report_html(html) if html else None
     item = ReportDraftItem(
         user_id=user_id,
         portfolio_id=portfolio_id,
         item_type=item_type,
-        content=content,
+        content=content or (_derive_markdown(clean_html) if clean_html else None),
+        html=clean_html,
         image_url=image_url,
         source=source,
         session_id=session_id,
@@ -72,6 +89,7 @@ def update_draft_item(
     user_id: str,
     label: Optional[str] = None,
     content: Optional[str] = None,
+    html: Optional[str] = None,
     sort_order: Optional[int] = None,
 ) -> Optional[ReportDraftItem]:
     item = get_draft_item(db, item_id, user_id)
@@ -79,6 +97,8 @@ def update_draft_item(
         return None
     if label is not None:
         item.label = label
+    if html is not None:
+        item.html = sanitize_report_html(html)
     if content is not None:
         item.content = content
     if sort_order is not None:
@@ -129,7 +149,7 @@ def create_report_from_draft(
     if not items:
         raise ValueError("No draft items found — clipboard is empty for this portfolio")
 
-    md_sections: List[str] = []
+    html_sections: List[str] = []
     image_urls: List[str] = []
 
     for item in items:
@@ -138,9 +158,11 @@ def create_report_from_draft(
                 image_urls.append(item.image_url)
         else:
             heading = item.label or item.item_type.capitalize()
-            md_sections.append(f"## {heading}\n\n{item.content or ''}")
+            body_html = item.html or _markdown_to_html(item.content or "")
+            html_sections.append(f"<h2>{heading}</h2>{body_html}")
 
-    content_markdown = "\n\n---\n\n".join(md_sections) if md_sections else None
+    content_html = "<hr/>".join(html_sections) if html_sections else None
+    content_markdown = _derive_markdown(content_html)
     draft_session_ids = list({i.session_id for i in items if i.session_id})
     merged_session_ids = list(set((source_session_ids or []) + draft_session_ids))
 
@@ -150,6 +172,7 @@ def create_report_from_draft(
         company_name=company_name,
         ticker=ticker,
         content_markdown=content_markdown,
+        content_html=content_html,
         image_urls=image_urls,
         source_session_ids=merged_session_ids,
         portfolio_id=portfolio_id,
@@ -191,15 +214,18 @@ def create_report(
     company_name: str,
     ticker: Optional[str] = None,
     content_markdown: Optional[str] = None,
+    content_html: Optional[str] = None,
     image_urls: Optional[List[str]] = None,
     source_session_ids: Optional[List[str]] = None,
     portfolio_id: Optional[int] = None,
 ) -> AnalystReport:
+    clean_html = sanitize_report_html(content_html) if content_html else None
     report = AnalystReport(
         user_id=user_id,
         company_name=company_name,
         ticker=ticker,
-        content_markdown=content_markdown,
+        content_markdown=_derive_markdown(clean_html) or content_markdown,
+        content_html=clean_html,
         image_urls=image_urls or [],
         source_session_ids=source_session_ids or [],
         portfolio_id=portfolio_id,
@@ -233,11 +259,16 @@ def update_report(
     if not report:
         return None
 
-    allowed = {"company_name", "ticker", "content_markdown", "image_urls", "source_session_ids", "portfolio_id"}
+    allowed = {"company_name", "ticker", "content_markdown", "content_html", "image_urls", "source_session_ids", "portfolio_id"}
     for field, value in patch.items():
         if field not in allowed or value is None:
             continue
+        if field == "content_html":
+            value = sanitize_report_html(value)
         setattr(report, field, value)
+
+    if "content_html" in patch and patch["content_html"] is not None:
+        report.content_markdown = _derive_markdown(report.content_html)
 
     report.updated_at = datetime.utcnow()
     db.commit()
