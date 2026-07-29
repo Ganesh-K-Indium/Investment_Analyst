@@ -78,7 +78,7 @@ class ChatSession(Base):
     session_id = Column(String, unique=True, nullable=False, index=True)  # thread_id/session_id
     user_id = Column(String, nullable=False, index=True)
     portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=True)  # Optional
-    agent_type = Column(SQLEnum(AgentType), nullable=False, index=True)  # rag or quant
+    agent_type = Column(SQLEnum(AgentType, values_callable=lambda enum_cls: [e.value for e in enum_cls]), nullable=False, index=True)  # rag or quant
     # Summarised 
     summary: Optional[str] = Column(String(2000), nullable=True, comment="LLM-generated session summary")
     summary_updated_at: Optional[DateTime] = Column(DateTime, nullable=True, comment="Last summary update timestamp")
@@ -106,7 +106,7 @@ class ChatMessage(Base):
     chat_session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False, index=True)
     
     # Message content
-    role = Column(SQLEnum(MessageRole), nullable=False)
+    role = Column(SQLEnum(MessageRole, values_callable=lambda enum_cls: [e.value for e in enum_cls]), nullable=False)
     content = Column(Text, nullable=False)
     
     # Additional metadata - renamed from 'metadata' to 'message_metadata' to avoid SQLAlchemy conflict
@@ -153,7 +153,7 @@ class AnalystReport(Base):
     image_urls         = Column(JSON, default=list)
     source_session_ids = Column(JSON, default=list)
     portfolio_id       = Column(Integer, ForeignKey("portfolios.id"), nullable=True)
-    status             = Column(SQLEnum(ReportStatus), default="draft", index=True)
+    status             = Column(SQLEnum(ReportStatus, values_callable=lambda enum_cls: [e.value for e in enum_cls], native_enum=False), default="draft", index=True)
     created_at         = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at         = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -63,7 +63,7 @@ def _normalize_name(name: str) -> str:
         return ""
     return name.upper().strip().rstrip('.').replace('  ', ' ')
 
-def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date = None) -> list:
+async def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date = None) -> list:
     """
     Fetches deduplicated transactions for a ticker using SQL GROUP BY — identical
     logic to check_form4.py so the numbers always agree with the verification script.
@@ -79,10 +79,10 @@ def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date =
     date_filter = ""
     if start_date:
         date_filter += " AND transaction_date >= :start_date"
-        params["start_date"] = str(start_date)
+        params["start_date"] = start_date
     if end_date:
         date_filter += " AND transaction_date <= :end_date"
-        params["end_date"] = str(end_date)
+        params["end_date"] = end_date
 
     sql = text(f"""
         SELECT
@@ -103,6 +103,12 @@ def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date =
         {date_filter}
         GROUP BY
             rpt_owner_name,
+            issuer_name,
+            issuer_symbol,
+            rpt_owner_title,
+            is_director,
+            is_officer,
+            is_ten_percent_owner,
             transaction_date,
             transaction_code,
             transaction_acquired_disposed_code,
@@ -111,8 +117,9 @@ def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date =
         ORDER BY transaction_date ASC, rpt_owner_name
     """)
 
-    with get_db() as db:
-        rows = db.execute(sql, params).fetchall()
+    async with get_db() as db:
+        result = await db.execute(sql, params)
+        rows = result.fetchall()
 
     if not rows:
         logger.warning(f"No transactions found in DB for ticker '{ticker}'.")
@@ -163,7 +170,7 @@ def fetch_data_for_ticker(ticker: str, start_date: date = None, end_date: date =
 
     return list(grouped.values())
 
-def get_advisory_report(ticker: str, start_date: date = None, end_date: date = None) -> dict:
+async def get_advisory_report(ticker: str, start_date: date = None, end_date: date = None) -> dict:
     """
     Main entry point for the Advisory Pipeline.
     
@@ -185,7 +192,7 @@ def get_advisory_report(ticker: str, start_date: date = None, end_date: date = N
         end_date = date.today()
 
     # 1. Fetch Data (Read-Only)
-    data = fetch_data_for_ticker(ticker, start_date=start_date, end_date=end_date)
+    data = await fetch_data_for_ticker(ticker, start_date=start_date, end_date=end_date)
     
     if not data:
         return {
@@ -241,12 +248,13 @@ def print_report(ticker: str, report: dict):
         print(f"{reason}\n")
 
 if __name__ == "__main__":
+    import asyncio
     import sys
-    
+
     ticker = "GOOGL"
     if not ticker:
         print("No ticker provided.")
         sys.exit(1)
-        
-    result = get_advisory_report(ticker)
+
+    result = asyncio.run(get_advisory_report(ticker))
     print_report(ticker, result)

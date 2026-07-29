@@ -4,7 +4,8 @@ User authentication endpoints — signup, login, profile management
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.connection import get_db_session
 from app.database.models import User
@@ -85,15 +86,15 @@ def _to_token_response(user: User) -> TokenResponse:
 # ---------------------------------------------------------------------------
 
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def signup(payload: SignupRequest, db: Session = Depends(get_db_session)):
+async def signup(payload: SignupRequest, db: AsyncSession = Depends(get_db_session)):
     """Register a new user account and return tokens."""
     if payload.role not in _VALID_ROLES:
         raise HTTPException(status_code=400, detail=f"Invalid role. Choose from: {_VALID_ROLES}")
 
-    if db.query(User).filter(User.email == payload.email).first():
+    if (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Email already registered")
 
-    if db.query(User).filter(User.username == payload.username).first():
+    if (await db.execute(select(User).where(User.username == payload.username))).scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Username already taken")
 
     user = User(
@@ -104,16 +105,17 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db_session)):
         hashed_password=hash_password(payload.password),
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
 
     return _to_token_response(user)
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db_session)):
+async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db_session)):
     """Authenticate with email + password and return tokens."""
-    user = db.query(User).filter(User.email == payload.email).first()
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
 
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -125,14 +127,15 @@ def login(payload: LoginRequest, db: Session = Depends(get_db_session)):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-def refresh_token(payload: RefreshRequest, db: Session = Depends(get_db_session)):
+async def refresh_token(payload: RefreshRequest, db: AsyncSession = Depends(get_db_session)):
     """Exchange a refresh token for a new access + refresh token pair."""
     data = decode_token(payload.refresh_token)
 
     if not data or data.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
-    user = db.query(User).filter(User.id == int(data["sub"]), User.is_active == True).first()
+    result = await db.execute(select(User).where(User.id == int(data["sub"]), User.is_active == True))
+    user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="User not found or inactive")
 
@@ -140,7 +143,7 @@ def refresh_token(payload: RefreshRequest, db: Session = Depends(get_db_session)
 
 
 @router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(current_user: User = Depends(get_current_user)):
     """Return the authenticated user's profile."""
     return UserResponse(
         id=current_user.id,
@@ -154,7 +157,7 @@ def get_me(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
-def logout(current_user: User = Depends(get_current_user)):
+async def logout(current_user: User = Depends(get_current_user)):
     """
     Invalidate the current session.
     JWT is stateless so the client must discard its tokens.
@@ -164,9 +167,9 @@ def logout(current_user: User = Depends(get_current_user)):
 
 
 @router.put("/me", response_model=UserResponse)
-def update_me(
+async def update_me(
     payload: UpdateProfileRequest,
-    db: Session = Depends(get_db_session),
+    db: AsyncSession = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ):
     """Update profile — full_name or password."""
@@ -180,8 +183,8 @@ def update_me(
             raise HTTPException(status_code=401, detail="current_password is incorrect")
         current_user.hashed_password = hash_password(payload.new_password)
 
-    db.commit()
-    db.refresh(current_user)
+    await db.commit()
+    await db.refresh(current_user)
 
     return UserResponse(
         id=current_user.id,

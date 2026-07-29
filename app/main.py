@@ -45,6 +45,7 @@ from app.api.integrations import router as integrations_router
 from app.api.quant import router as quant_router
 from app.api.chats import router as chats_router
 from app.api.form4 import router as form4_router
+from app.api.edgar import router as edgar_router
 from app.api.auth import router as auth_router
 from app.api.reports import router as reports_router
 import app.api.rag as rag_router_module
@@ -172,6 +173,7 @@ app.include_router(integrations_router)
 app.include_router(quant_router)
 app.include_router(chats_router)
 app.include_router(form4_router)
+app.include_router(edgar_router)
 
 
 @app.get("/")

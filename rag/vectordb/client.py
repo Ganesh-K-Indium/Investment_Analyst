@@ -5,7 +5,7 @@ this module is used for loading the unified RAG database with hybrid search capa
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore, RetrievalMode
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, AsyncQdrantClient
 from qdrant_client import models
 from qdrant_client.http.models import PayloadSchemaType
 from tqdm import tqdm
@@ -38,9 +38,8 @@ class load_vector_database():
         self.use_hybrid_search = use_hybrid_search
         self.create_if_missing = create_if_missing
         
-        # Not yet done : Initialize embeddings — text-embedding-3-large for financial phrase directionality
-
-        self.embeddings = OpenAIEmbeddings()
+        # text-embedding-3-large for financial phrase directionality (3072-dim vectors)
+        self.embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
         self.qdrant_url = os.getenv("QDRANT_URL", "")
         self.qdrant_api_key = os.getenv("QDRANT_API_KEY", '')
         
@@ -79,6 +78,10 @@ class load_vector_database():
             # check existence without creating
             self._check_exists()
 
+        # Async client for the query-time hot path (hybrid_search) — constructing
+        # it does no I/O, so this is safe outside an event loop / async context.
+        self.async_qdrant_client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=60)
+
     def ensure_collection_exists(self):
         """
         Ensure the collection exists with the required configuration.
@@ -88,12 +91,25 @@ class load_vector_database():
             collections = self.qdrant_client.get_collections().collections
             exists = any(c.name == self.collection_name for c in collections)
             
+            # Payload indexes required on every collection, new or pre-existing.
+            payload_fields = {
+                "metadata.source_file": PayloadSchemaType.KEYWORD,
+                "metadata.company": PayloadSchemaType.KEYWORD,
+                "metadata.content_type": PayloadSchemaType.KEYWORD,
+                "metadata.content_hash": PayloadSchemaType.KEYWORD,
+                "metadata.image_content_hash": PayloadSchemaType.KEYWORD,
+                "metadata.page_num": PayloadSchemaType.INTEGER,
+                "metadata.year": PayloadSchemaType.INTEGER,
+                "metadata.ingestion_timestamp": PayloadSchemaType.KEYWORD,
+                "metadata.filing_type": PayloadSchemaType.KEYWORD,
+            }
+
             if not exists:
                 print(f"Collection '{self.collection_name}' does not exist. Creating with hybrid config...")
-                
-                # Dense embedding size (OpenAI)
-                dense_size = 1536
-                
+
+                # Dense embedding size (OpenAI text-embedding-3-large)
+                dense_size = 3072
+
                 # Create collection with hybrid config
                 self.qdrant_client.create_collection(
                     collection_name=self.collection_name,
@@ -109,19 +125,7 @@ class load_vector_database():
                         )
                     }
                 )
-                
-                # Create payload indexes
-                payload_fields = {
-                    "metadata.source_file": PayloadSchemaType.KEYWORD,
-                    "metadata.company": PayloadSchemaType.KEYWORD,
-                    "metadata.content_type": PayloadSchemaType.KEYWORD,
-                    "metadata.content_hash": PayloadSchemaType.KEYWORD,
-                    "metadata.image_content_hash": PayloadSchemaType.KEYWORD,
-                    "metadata.page_num": PayloadSchemaType.INTEGER,
-                    "metadata.year": PayloadSchemaType.INTEGER,
-                    "metadata.ingestion_timestamp": PayloadSchemaType.KEYWORD,
-                }
-                
+
                 for field_name, schema in payload_fields.items():
                     print(f"Creating index for {field_name} ({schema})...")
                     self.qdrant_client.create_payload_index(
@@ -129,13 +133,23 @@ class load_vector_database():
                         field_name=field_name,
                         field_schema=schema,
                     )
-                
+
                 print(f" Collection '{self.collection_name}' created successfully with hybrid search and indexes.")
             else:
-                 # Optional: Check if indexes exist and create if missing?
-                 # For now, assume if it exists, it's correct or managed elsewhere.
-                 pass
-                 
+                # Collection already exists (e.g. created before a new payload field was
+                # introduced, such as metadata.filing_type) — backfill any missing indexes.
+                existing_indexes = set(
+                    self.qdrant_client.get_collection(self.collection_name).payload_schema.keys()
+                )
+                for field_name, schema in payload_fields.items():
+                    if field_name not in existing_indexes:
+                        print(f"Backfilling missing index for {field_name} ({schema}) on '{self.collection_name}'...")
+                        self.qdrant_client.create_payload_index(
+                            collection_name=self.collection_name,
+                            field_name=field_name,
+                            field_schema=schema,
+                        )
+
         except Exception as e:
             print(f"Error ensuring collection exists: {e}")
             # Don't raise, might interfere with read-only operations if strict permissions logic
@@ -166,12 +180,12 @@ class load_vector_database():
         vectorstore = QdrantVectorStore(**vector_store_kwargs)
         return vectorstore
     
-    def hybrid_search(self, query: str, content_type: str = None, company: str = None, 
+    async def hybrid_search(self, query: str, content_type: str = None, company: str = None,
                      years: list = None,
                      limit: int = 10, dense_limit: int = 100, sparse_limit: int = 100):
         """
         Advanced hybrid search using prefetch and fusion queries (RRF).
-        
+
         Args:
             query: Search query text
             content_type: Filter by content type ("text" or "image"), None for both
@@ -180,12 +194,12 @@ class load_vector_database():
             limit: Final number of results to return
             dense_limit: Number of results from dense vector search
             sparse_limit: Number of results from sparse (BM25) search
-            
+
         Returns:
             List of search results with payloads
         """
         # Generate dense embeddings (OpenAI)
-        dense_vector = self.embeddings.embed_query(query)
+        dense_vector = await self.embeddings.aembed_query(query)
         
         # Generate sparse vector if available
         sparse_vector = None
@@ -281,7 +295,7 @@ class load_vector_database():
         
         # Final query — use RRF fusion result directly (not dense re-rank which discards BM25)
         try:
-            response = self.qdrant_client.query_points(
+            response = await self.async_qdrant_client.query_points(
                 collection_name=self.collection_name,
                 prefetch=fusion_prefetch,
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
@@ -289,18 +303,18 @@ class load_vector_database():
                 limit=limit,
                 with_payload=True,
             )
-            
+
             return response.points
-            
+
         except Exception as e:
             print(f"Error in hybrid search: {e}")
             # Fallback to simple dense search
-            return self._fallback_search(dense_vector, global_filter, limit)
-    
-    def _fallback_search(self, query_vector, query_filter, limit):
+            return await self._fallback_search(dense_vector, global_filter, limit)
+
+    async def _fallback_search(self, query_vector, query_filter, limit):
         """Fallback to simple dense vector search if hybrid search fails."""
         try:
-            response = self.qdrant_client.query_points(
+            response = await self.async_qdrant_client.query_points(
                 collection_name=self.collection_name,
                 query=query_vector,
                 using="dense",

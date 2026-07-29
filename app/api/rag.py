@@ -4,7 +4,7 @@ RAG endpoints (ask and compare) with portfolio integration and chat persistence
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import HumanMessage
 from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
@@ -67,7 +67,7 @@ def set_agent(agent_instance):
 @router.post("/ask")
 async def ask_agent(
     payload: AskInput,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Handle RAG queries with portfolio-based filtering and chat persistence.
@@ -81,13 +81,13 @@ async def ask_agent(
         thread_id = payload.thread_id
         
         # Get session and associated portfolio
-        session = PortfolioService.get_session(db, thread_id)
+        session = await PortfolioService.get_session(db, thread_id)
         if not session:
             raise HTTPException(
                 status_code=404,
                 detail=f"Session not found. Please create a portfolio session first."
             )
-        
+
         portfolio = session.portfolio
 
         # Map portfolio companies to tickers for the filter
@@ -102,7 +102,7 @@ async def ask_agent(
                 company_tickers.append(company)
 
         # Create or get chat session for persistence
-        chat_session = ChatService.create_or_get_chat_session(
+        chat_session = await ChatService.create_or_get_chat_session(
             db=db,
             session_id=thread_id,
             user_id=session.user_id,
@@ -118,7 +118,7 @@ async def ask_agent(
         )
 
         # Save user message
-        ChatService.add_message(
+        await ChatService.add_message(
             db=db,
             session_id=thread_id,
             role=MessageRole.USER,
@@ -157,7 +157,7 @@ async def ask_agent(
         answer = result["messages"][-1].content
         
         # Save assistant message with metadata
-        ChatService.add_message(
+        await ChatService.add_message(
             db=db,
             session_id=thread_id,
             role=MessageRole.ASSISTANT,
@@ -255,7 +255,7 @@ async def ask_agent(
 @router.post("/compare")
 async def compare_companies(
     payload: CompareInput,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Handle company comparison queries with chat persistence.
@@ -311,7 +311,7 @@ async def compare_companies(
             thread_id = f"compare_{user_id}_{hashlib.md5(companies_key.encode()).hexdigest()[:12]}"
         
         # Create or get chat session for persistence
-        chat_session = ChatService.create_or_get_chat_session(
+        chat_session = await ChatService.create_or_get_chat_session(
             db=db,
             session_id=thread_id,
             user_id=user_id,
@@ -339,7 +339,7 @@ Compare {comparison_str} {year_str}:
 """
         
         # Save user message
-        ChatService.add_message(
+        await ChatService.add_message(
             db=db,
             session_id=thread_id,
             role=MessageRole.USER,
@@ -394,7 +394,7 @@ Compare {comparison_str} {year_str}:
         chart_filename = result.get("chart_filename")
         
         # Save assistant message with metadata
-        ChatService.add_message(
+        await ChatService.add_message(
             db=db,
             session_id=thread_id,
             role=MessageRole.ASSISTANT,
@@ -490,7 +490,7 @@ Compare {comparison_str} {year_str}:
 @router.post("/alpha")
 async def run_alpha(
     payload: AlphaInput,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Run the ALPHA framework directly for a list of tickers — no free-text query.
@@ -504,7 +504,7 @@ async def run_alpha(
 
         thread_id = payload.thread_id
 
-        session = PortfolioService.get_session(db, thread_id)
+        session = await PortfolioService.get_session(db, thread_id)
         if not session:
             raise HTTPException(
                 status_code=404,
@@ -518,7 +518,7 @@ async def run_alpha(
             ticker = get_ticker(t) or t.upper()
             resolved_tickers.append(ticker)
 
-        chat_session = ChatService.create_or_get_chat_session(
+        chat_session = await ChatService.create_or_get_chat_session(
             db=db,
             session_id=thread_id,
             user_id=session.user_id,
@@ -532,7 +532,7 @@ async def run_alpha(
             }
         )
 
-        ChatService.add_message(
+        await ChatService.add_message(
             db=db,
             session_id=thread_id,
             role=MessageRole.USER,
@@ -575,7 +575,7 @@ async def run_alpha(
                 "report": report
             })
 
-            ChatService.add_message(
+            await ChatService.add_message(
                 db=db,
                 session_id=thread_id,
                 role=MessageRole.ASSISTANT,
@@ -714,7 +714,7 @@ async def get_session_history(session_id: str):
 @router.get("/portfolio/{portfolio_id}/sessions")
 async def get_portfolio_rag_sessions(
     portfolio_id: int,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Get all RAG sessions (ask + compare) linked to a portfolio.
@@ -723,12 +723,12 @@ async def get_portfolio_rag_sessions(
     portfolio_id matches the requested portfolio.
     """
     # Verify portfolio exists
-    portfolio = PortfolioService.get_portfolio(db, portfolio_id)
+    portfolio = await PortfolioService.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    
+
     # Get all RAG sessions for this portfolio
-    sessions = ChatService.get_portfolio_sessions(
+    sessions = await ChatService.get_portfolio_sessions(
         db=db,
         portfolio_id=portfolio_id,
         agent_type=AgentType.RAG

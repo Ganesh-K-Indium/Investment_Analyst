@@ -4,7 +4,8 @@ Portfolio management endpoints
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Any
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
 from app.services.chat import ChatService
@@ -85,13 +86,13 @@ class SessionResponse(BaseModel):
 
 
 @router.post("", response_model=PortfolioResponse)
-def create_portfolio(
+async def create_portfolio(
     payload: PortfolioCreate,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Create a new portfolio with specified tickers and initialize Vector DB"""
     try:
-        portfolio = PortfolioService.create_portfolio(
+        portfolio = await PortfolioService.create_portfolio(
             db=db,
             user_id=payload.user_id,
             name=payload.name,
@@ -129,12 +130,12 @@ def create_portfolio(
 
 
 @router.get("/{portfolio_id}", response_model=PortfolioResponse)
-def get_portfolio(
+async def get_portfolio(
     portfolio_id: int,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Get portfolio by ID"""
-    portfolio = PortfolioService.get_portfolio(db, portfolio_id)
+    portfolio = await PortfolioService.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     
@@ -150,12 +151,12 @@ def get_portfolio(
 
 
 @router.get("/user/{user_id}", response_model=List[PortfolioResponse])
-def get_user_portfolios(
+async def get_user_portfolios(
     user_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Get all portfolios for a user"""
-    portfolios = PortfolioService.get_user_portfolios(db, user_id)
+    portfolios = await PortfolioService.get_user_portfolios(db, user_id)
     return [
         PortfolioResponse(
             id=p.id,
@@ -170,13 +171,13 @@ def get_user_portfolios(
 
 
 @router.put("/{portfolio_id}", response_model=PortfolioResponse)
-def update_portfolio(
+async def update_portfolio(
     portfolio_id: int,
     payload: PortfolioUpdate,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Update an existing portfolio and re-initialize Vector DB if tickers changed"""
-    portfolio = PortfolioService.update_portfolio(
+    portfolio = await PortfolioService.update_portfolio(
         db=db,
         portfolio_id=portfolio_id,
         name=payload.name,
@@ -199,9 +200,10 @@ def update_portfolio(
             
             # Re-register all existing sessions for this portfolio
             from app.database.models import Session as SessionModel
-            sessions = db.query(SessionModel).filter(
-                SessionModel.portfolio_id == portfolio_id
-            ).all()
+            sessions_result = await db.execute(
+                select(SessionModel).where(SessionModel.portfolio_id == portfolio_id)
+            )
+            sessions = sessions_result.scalars().all()
             
             for session in sessions:
                 vectordb_mgr.register_session(session.id, portfolio_id)
@@ -224,12 +226,12 @@ def update_portfolio(
 
 
 @router.delete("/{portfolio_id}")
-def delete_portfolio(
+async def delete_portfolio(
     portfolio_id: int,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Delete a portfolio and cleanup its Vector DB instance"""
-    success = PortfolioService.delete_portfolio(db, portfolio_id)
+    success = await PortfolioService.delete_portfolio(db, portfolio_id)
     if not success:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     
@@ -242,21 +244,21 @@ def delete_portfolio(
 
 
 @router.post("/sessions", response_model=SessionResponse)
-def create_session(
+async def create_session(
     payload: SessionCreateRequest,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Create a new session for a portfolio.
     Simply registers the session to the existing portfolio Vector DB.
     """
     # Verify portfolio exists
-    portfolio = PortfolioService.get_portfolio(db, payload.portfolio_id)
+    portfolio = await PortfolioService.get_portfolio(db, payload.portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    
+
     # Create session
-    session = PortfolioService.create_session(
+    session = await PortfolioService.create_session(
         db=db,
         portfolio_id=payload.portfolio_id,
         user_id=payload.user_id,
@@ -273,7 +275,7 @@ def create_session(
 
     # Also register a ChatSession so the session is immediately deletable
     # via DELETE /chats/session/{session_id} even before any message is sent.
-    ChatService.create_or_get_chat_session(
+    await ChatService.create_or_get_chat_session(
         db=db,
         session_id=session.id,
         user_id=payload.user_id,
@@ -310,12 +312,12 @@ def create_session(
 
 
 @router.get("/sessions/{thread_id}", response_model=SessionResponse)
-def get_session(
+async def get_session(
     thread_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Get session and associated portfolio information"""
-    session = PortfolioService.get_session(db, thread_id)
+    session = await PortfolioService.get_session(db, thread_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     

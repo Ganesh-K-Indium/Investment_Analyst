@@ -536,7 +536,7 @@ def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
     return matched_tickers
 
 
-def retrieve(state, config):
+async def retrieve(state, config):
     """
     Retrieve documents relevant to the question using ticker-based collections.
     Supports multi-company retrieval by querying separate collections.
@@ -695,7 +695,7 @@ def retrieve(state, config):
                     # Perform search per requested year to ensure representation
                     docs_from_ticker = 0
                     for year_filter in requested_years:
-                        search_results = db_instance.hybrid_search(
+                        search_results = await db_instance.hybrid_search(
                             query=sq,
                             content_type=None,
                             years=[year_filter],
@@ -785,7 +785,7 @@ def retrieve(state, config):
                     
                     current_collection_docs = 0
                     for year_filter in requested_years:
-                        search_results = db_instance.hybrid_search(
+                        search_results = await db_instance.hybrid_search(
                             query=question,
                             content_type=None,
                             years=[year_filter],
@@ -1910,7 +1910,7 @@ def detect_alpha_query(state):
     }
 
 
-def alpha_dimension_retrieve(state):
+async def alpha_dimension_retrieve(state):
     """
     Retrieve dimension-specific data for ALPHA Framework.
     
@@ -1939,7 +1939,7 @@ def alpha_dimension_retrieve(state):
         print(" [SINGLE PILLAR] Insider Trading (Form 4)")
         try:
             from rag.utils.Insights_Form4.advisory_hub import get_advisory_report
-            form4_report = get_advisory_report(ticker)
+            form4_report = await get_advisory_report(ticker)
             sections = []
             if form4_report and "status" not in form4_report and "error" not in form4_report:
                 for issuer_name, detail in form4_report.items():
@@ -2022,7 +2022,7 @@ def alpha_dimension_retrieve(state):
 
         alignment_docs = []
         for query in alignment_queries:
-            results = db_instance.hybrid_search(query=query, content_type="text", limit=3)
+            results = await db_instance.hybrid_search(query=query, content_type="text", limit=3)
             for point in results:
                 if hasattr(point, 'payload'):
                     from langchain_core.documents import Document
@@ -2037,7 +2037,7 @@ def alpha_dimension_retrieve(state):
         try:
             from rag.utils.Insights_Form4.advisory_hub import get_advisory_report
 
-            form4_report = get_advisory_report(ticker)
+            form4_report = await get_advisory_report(ticker)
 
             if form4_report and "status" not in form4_report and "error" not in form4_report:
                 lines = [f"INSIDER TRADING ANALYSIS (SEC Form 4) — {ticker}\n"]
@@ -2090,7 +2090,7 @@ def alpha_dimension_retrieve(state):
         ]
 
         for query in vdb_queries:
-            results = db_instance.hybrid_search(query=query, content_type="text", limit=2)
+            results = await db_instance.hybrid_search(query=query, content_type="text", limit=2)
             for point in results:
                 if hasattr(point, 'payload'):
                     from langchain_core.documents import Document
@@ -2143,7 +2143,7 @@ def alpha_dimension_retrieve(state):
 
         performance_docs = []
         for query in performance_queries:
-            results = db_instance.hybrid_search(query=query, content_type="text", limit=4)
+            results = await db_instance.hybrid_search(query=query, content_type="text", limit=4)
             for point in results:
                 if hasattr(point, 'payload'):
                     from langchain_core.documents import Document

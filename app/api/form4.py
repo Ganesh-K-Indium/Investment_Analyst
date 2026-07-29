@@ -107,7 +107,7 @@ async def ingest_form4(request: Form4IngestRequest):
     ticker = _validate_ticker(request.ticker)
 
     try:
-        result = run_form4_ingestion(
+        result = await run_form4_ingestion(
             ticker=ticker,
             start_date=request.start_date,
         )
@@ -148,7 +148,7 @@ async def ingest_form4_batch(request: Form4BatchIngestRequest):
     tickers = [_validate_ticker(t) for t in request.tickers]
 
     try:
-        result = run_form4_ingestion_multi(
+        result = await run_form4_ingestion_multi(
             tickers=tickers,
             start_date=request.start_date,
         )

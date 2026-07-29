@@ -1,6 +1,7 @@
 """
 Benchmark utilities for tracking node execution times in the workflow graph.
 """
+import inspect
 import time
 from typing import Dict, Any
 from functools import wraps
@@ -51,8 +52,23 @@ class NodeTimer:
 node_timer = NodeTimer()
 
 def time_node(node_name: str):
-    """Decorator to time node execution."""
+    """Decorator to time node execution. Supports both sync and async node functions —
+    an async func wrapped with a sync wrapper would return an un-awaited coroutine."""
     def decorator(func):
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                node_timer.start_node_timer(node_name)
+                try:
+                    result = await func(*args, **kwargs)
+                    node_timer.end_node_timer(node_name)
+                    return result
+                except Exception as e:
+                    print(f" Error in node {node_name}: {str(e)}")
+                    node_timer.end_node_timer(node_name)
+                    raise
+            return async_wrapper
+
         @wraps(func)
         def wrapper(*args, **kwargs):
             node_timer.start_node_timer(node_name)

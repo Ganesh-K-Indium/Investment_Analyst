@@ -2,7 +2,7 @@
 Integration management and file import endpoints
 """
 from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 
 from app.database.connection import get_db_session
@@ -28,9 +28,9 @@ router = APIRouter(prefix="/integrations", tags=["Integrations"])
 # ========== Integration Management Endpoints ==========
 
 @router.post("/", response_model=IntegrationResponse)
-def create_integration(
+async def create_integration(
     payload: IntegrationCreate,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Create a new data source integration
@@ -45,7 +45,7 @@ def create_integration(
     - sftp: SFTP Server
     """
     try:
-        integration = IntegrationService.create_integration(
+        integration = await IntegrationService.create_integration(
             db=db,
             user_id=payload.user_id,
             vendor=payload.vendor,
@@ -77,12 +77,12 @@ def create_integration(
 
 
 @router.get("/{integration_id}", response_model=IntegrationResponse)
-def get_integration(
+async def get_integration(
     integration_id: int,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Get integration by ID"""
-    integration = IntegrationService.get_integration(db, integration_id)
+    integration = await IntegrationService.get_integration(db, integration_id)
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
     
@@ -104,13 +104,13 @@ def get_integration(
 
 
 @router.get("/user/{user_id}", response_model=List[IntegrationResponse])
-def get_user_integrations(
+async def get_user_integrations(
     user_id: str,
     vendor: Optional[str] = None,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Get all integrations for a user, optionally filtered by vendor"""
-    integrations = IntegrationService.get_user_integrations(db, user_id, vendor)
+    integrations = await IntegrationService.get_user_integrations(db, user_id, vendor)
     
     return [
         IntegrationResponse(
@@ -131,13 +131,13 @@ def get_user_integrations(
 
 
 @router.put("/{integration_id}", response_model=IntegrationResponse)
-def update_integration(
+async def update_integration(
     integration_id: int,
     payload: IntegrationUpdate,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Update an existing integration"""
-    integration = IntegrationService.update_integration(
+    integration = await IntegrationService.update_integration(
         db=db,
         integration_id=integration_id,
         name=payload.name,
@@ -168,38 +168,38 @@ def update_integration(
 
 
 @router.delete("/{integration_id}")
-def delete_integration(
+async def delete_integration(
     integration_id: int,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Delete an integration"""
-    success = IntegrationService.delete_integration(db, integration_id)
+    success = await IntegrationService.delete_integration(db, integration_id)
     if not success:
         raise HTTPException(status_code=404, detail="Integration not found")
-    
+
     return {"message": "Integration deleted successfully"}
 
 
 @router.post("/{integration_id}/disconnect")
-def disconnect_integration(
+async def disconnect_integration(
     integration_id: int,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Mark an integration as disconnected"""
-    integration = IntegrationService.disconnect_integration(db, integration_id)
+    integration = await IntegrationService.disconnect_integration(db, integration_id)
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
-    
+
     return {"message": "Integration disconnected successfully", "status": integration.status}
 
 
 @router.post("/{integration_id}/test", response_model=ConnectionTestResponse)
-def test_integration_connection(
+async def test_integration_connection(
     integration_id: int,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Test connection to an integration"""
-    integration = IntegrationService.get_integration(db, integration_id)
+    integration = await IntegrationService.get_integration(db, integration_id)
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
     
@@ -240,9 +240,9 @@ def test_integration_connection(
 # ========== File Browsing Endpoints ==========
 
 @router.post("/browse", response_model=BrowseFilesResponse)
-def browse_integration_files(
+async def browse_integration_files(
     payload: BrowseFilesRequest,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Browse files from an integration
@@ -255,10 +255,10 @@ def browse_integration_files(
 
     This allows the UI to show ticker selection options alongside file browsing.
     """
-    integration = IntegrationService.get_integration(db, payload.integration_id)
+    integration = await IntegrationService.get_integration(db, payload.integration_id)
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
-    
+
     try:
         print(f"\n=== Browse Files Debug ===")
         print(f"Integration ID: {payload.integration_id}")
@@ -312,7 +312,7 @@ def browse_integration_files(
         portfolio_id_used = None
 
         if payload.portfolio_id:
-            portfolio = PortfolioService.get_portfolio(db, payload.portfolio_id)
+            portfolio = await PortfolioService.get_portfolio(db, payload.portfolio_id)
             if portfolio:
                 # company_names contains the tickers (normalized to lowercase)
                 available_tickers = [ticker.upper() for ticker in portfolio.company_names]
@@ -321,7 +321,7 @@ def browse_integration_files(
                 print(f"Loaded {len(available_tickers)} tickers from portfolio '{portfolio_name}'")
         elif payload.user_id:
             # Get all portfolios for the user and collect unique tickers
-            portfolios = PortfolioService.get_user_portfolios(db, payload.user_id)
+            portfolios = await PortfolioService.get_user_portfolios(db, payload.user_id)
             if portfolios:
                 # Collect all unique tickers from all portfolios
                 ticker_set = set()
@@ -355,9 +355,9 @@ def browse_integration_files(
 # ========== File Import Endpoints ==========
 
 @router.post("/import", response_model=FileImportResponse)
-def import_files(
+async def import_files(
     payload: FileImportRequest,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Import and ingest files from an integration
@@ -375,7 +375,7 @@ def import_files(
         if not ticker:
             raise HTTPException(status_code=400, detail="Ticker symbol is required")
 
-        results = FileImportService.import_files(
+        results = await FileImportService.import_files(
             db=db,
             integration_id=payload.integration_id,
             file_paths=payload.file_paths,

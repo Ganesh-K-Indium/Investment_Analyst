@@ -2,7 +2,9 @@
 Chat History Service
 Manages CRUD operations for chat sessions and messages across RAG and Quant agents
 """
-from sqlalchemy.orm import Session
+from sqlalchemy import select, func, delete
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.database.models import ChatSession, ChatMessage, Portfolio, AgentType, MessageRole, ConsolidatedSummary
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -15,19 +17,18 @@ import json
 class ChatService:
     """Business logic for chat history operations"""
     @staticmethod
-    def get_session_summary(
-        db: Session,
+    async def get_session_summary(
+        db: AsyncSession,
         session_id: str
     ) -> Optional[str]:
         """Get cached summary from database"""
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
         return chat_session.summary if chat_session else None
 
     @staticmethod
-    def get_user_summaries_by_agent(
-        db: Session,
+    async def get_user_summaries_by_agent(
+        db: AsyncSession,
         user_id: str
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -40,19 +41,31 @@ class ChatService:
         Returns:
             Dictionary with 'rag' and 'quant' keys, each containing list of summaries
         """
-        rag_sessions = db.query(ChatSession).filter(
-            ChatSession.user_id == user_id,
-            ChatSession.agent_type == AgentType.RAG,
-            ChatSession.is_active == True,
-            ChatSession.summary.isnot(None)
-        ).order_by(ChatSession.last_message_at.desc()).all()
+        rag_result = await db.execute(
+            select(ChatSession)
+            .where(
+                ChatSession.user_id == user_id,
+                ChatSession.agent_type == AgentType.RAG,
+                ChatSession.is_active == True,
+                ChatSession.summary.isnot(None)
+            )
+            .options(selectinload(ChatSession.messages))
+            .order_by(ChatSession.last_message_at.desc())
+        )
+        rag_sessions = rag_result.scalars().all()
 
-        quant_sessions = db.query(ChatSession).filter(
-            ChatSession.user_id == user_id,
-            ChatSession.agent_type == AgentType.QUANT,
-            ChatSession.is_active == True,
-            ChatSession.summary.isnot(None)
-        ).order_by(ChatSession.last_message_at.desc()).all()
+        quant_result = await db.execute(
+            select(ChatSession)
+            .where(
+                ChatSession.user_id == user_id,
+                ChatSession.agent_type == AgentType.QUANT,
+                ChatSession.is_active == True,
+                ChatSession.summary.isnot(None)
+            )
+            .options(selectinload(ChatSession.messages))
+            .order_by(ChatSession.last_message_at.desc())
+        )
+        quant_sessions = quant_result.scalars().all()
 
         rag_summaries = [
             {
@@ -80,9 +93,12 @@ class ChatService:
             for session in quant_sessions
         ]
 
-        consolidated_rows = db.query(ConsolidatedSummary).filter(
-            ConsolidatedSummary.user_id == user_id
-        ).order_by(ConsolidatedSummary.created_at.desc()).all()
+        consolidated_result = await db.execute(
+            select(ConsolidatedSummary)
+            .where(ConsolidatedSummary.user_id == user_id)
+            .order_by(ConsolidatedSummary.created_at.desc())
+        )
+        consolidated_rows = consolidated_result.scalars().all()
 
         for row in consolidated_rows:
             item = {
@@ -105,122 +121,31 @@ class ChatService:
             "quant": quant_summaries,
         }
 
-    # @staticmethod
-    # def generate_chat_summary(
-    #     db: Session,
-    #     session_id: str,
-    #     max_messages: Optional[int] = 50,
-    #     llm_model: str = "gpt-4o-mini",
-    #     store_in_db: bool = True
-    # ) -> Optional[str]:
-    #     """
-    #     Generate LLM summary of chat session history.
-        
-    #     Args:
-    #         db: Database session
-    #         session_id: Session identifier
-    #         max_messages: Maximum recent messages to summarize (default: 50)
-    #         llm_model: LLM model to use for summarization
-            
-    #     Returns:
-    #         Summary text or None if session not found
-    #     """
-    #     from langchain_openai import ChatOpenAI
-    #     from langchain_core.prompts  import ChatPromptTemplate
-    #     # from langchain.prompts import ChatPromptTemplate
-    #     from langchain_core.output_parsers import StrOutputParser
-        
-    #     # Get chat session and recent messages
-    #     chat_session = db.query(ChatSession).filter(
-    #         ChatSession.session_id == session_id
-    #     ).first()
-        
-    #     if not chat_session:
-    #         return None
-        
-    #     messages = ChatService.get_session_messages(
-    #         db=db,
-    #         session_id=session_id,
-    #         limit=max_messages
-    #     )
-        
-    #     if not messages:
-    #         return "No messages in this chat session."
-        
-    #     # Format conversation for LLM
-    #     conversation = []
-    #     for msg in reversed(messages):  # Most recent first for better context
-    #         role = "Human" if msg.role == "user" else "Assistant"
-    #         content_preview = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
-    #         conversation.append(f"{role}: {content_preview}")
-        
-    #     conversation_text = "\n\n".join(conversation[-20:])  # Last 20 exchanges max
-        
-    #     # LLM summarization chain
-    #     llm = ChatOpenAI(model=llm_model, temperature=0.1)
-    #     prompt = ChatPromptTemplate.from_template("""
-    #     Summarize the key topics, questions asked, and main insights from this investment analysis conversation.
-    #     Focus on portfolio analysis, stock insights, document findings, and actionable takeaways.
-    #     Also ensure that you keep a seperate section of all the chart urls that maybe found.
-                                            
-        
-    #     Keep summary concise (2-4 sentences) but comprehensive. Use bullet points for clarity.
-        
-    #     Conversation:
-    #     {conversation}
-        
-    #     Summary:""")
-        
-    #     chain = prompt | llm | StrOutputParser()
-        
-    #     try:
-    #         summary = chain.invoke({"conversation": conversation_text})
-    #         return summary.strip()
-    #         # Store in database if requested
-    #         if store_in_db:
-    #             chat_session = db.query(ChatSession).filter(
-    #                 ChatSession.session_id == session_id
-    #             ).first()
-                
-    #             if chat_session:
-    #                 chat_session.summary = summary
-    #                 chat_session.summary_updated_at = datetime.utcnow()
-    #                 db.commit()
-    #                 db.refresh(chat_session)
-    #         return summary
-    #     except Exception as e:
-    #         return f"Summary generation failed: {str(e)}"
-
-    
-
-    # ... inside your class ...
-
     @staticmethod
-    def generate_chat_summary(
-        db: Session,
+    async def generate_chat_summary(
+        db: AsyncSession,
         session_id: str,
         max_messages: Optional[int] = 50,
         llm_model: str = "gpt-4o-mini",
         store_in_db: bool = True
     ) -> Optional[str]:
-        
+
         # 1. Get chat session
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
-        
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
+
         if not chat_session:
             return None
-        
-        messages = ChatService.get_session_messages(
+
+        messages = await ChatService.get_session_messages(
             db=db,
             session_id=session_id,
             limit=max_messages
         )
-        
+
         if not messages:
             return "No messages in this chat session."
-        
+
         # 2. Format conversation (reversed to chronological for the LLM)
         conversation = []
         for msg in reversed(messages):
@@ -237,8 +162,8 @@ class ChatService:
 
             conversation.append(f"{role}: {content}")
 
-        conversation_text = "\n\n".join(conversation[-20:]) 
-        
+        conversation_text = "\n\n".join(conversation[-20:])
+
         # 3. LLM Setup
         llm = ChatOpenAI(model=llm_model, temperature=0.1)
         prompt = ChatPromptTemplate.from_template("""
@@ -246,7 +171,7 @@ class ChatService:
 
             Focus on portfolio analysis, stock insights, actionable takeaways, and all relevant context.
 
-            IMPORTANT: 
+            IMPORTANT:
             - List all chart URLs found in the conversation in a separate section.
             - In key topics, include comprehensive context from the questions (e.g., if questions mention timelines like 30 & 60 days chart plottings, explicitly note "Timeline: 30-day and 60-day chart generation" within the paragraph).
 
@@ -268,28 +193,28 @@ class ChatService:
 
             Report:
         """)
-        
+
         chain = prompt | llm | StrOutputParser()
-        
+
         try:
-            summary = chain.invoke({"conversation": conversation_text}).strip()
-            
+            summary = (await chain.ainvoke({"conversation": conversation_text})).strip()
+
             # 4. Storage Logic (Must happen BEFORE return)
             if store_in_db:
                 chat_session.summary = summary
                 chat_session.summary_updated_at = datetime.utcnow()
-                db.commit()
-                db.refresh(chat_session)
-                
+                await db.commit()
+                await db.refresh(chat_session)
+
             return summary
-            
+
         except Exception as e:
             # Consider logging the error here instead of just returning a string
             return f"Summary generation failed: {str(e)}"
 
     @staticmethod
-    def generate_consolidated_summary(
-        db: Session,
+    async def generate_consolidated_summary(
+        db: AsyncSession,
         session_ids: List[str],
         max_messages_per_session: int = 30,
         llm_model: str = "gpt-4o-mini"
@@ -315,14 +240,13 @@ class ChatService:
         sessions_data = []
 
         for session_id in session_ids:
-            chat_session = db.query(ChatSession).filter(
-                ChatSession.session_id == session_id
-            ).first()
+            result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+            chat_session = result.scalar_one_or_none()
 
             if not chat_session:
                 continue
 
-            messages = ChatService.get_session_messages(
+            messages = await ChatService.get_session_messages(
                 db=db,
                 session_id=session_id,
                 limit=max_messages_per_session
@@ -418,13 +342,14 @@ class ChatService:
         chain = prompt | llm | StrOutputParser()
 
         try:
-            summary = chain.invoke({"focus": focus, "sessions_text": sessions_text}).strip()
+            summary = (await chain.ainvoke({"focus": focus, "sessions_text": sessions_text})).strip()
 
             # Derive user_id and title from first session
             user_id = sessions_data[0]["session_id"]  # fallback
-            first_session = db.query(ChatSession).filter(
-                ChatSession.session_id == sessions_data[0]["session_id"]
-            ).first()
+            first_result = await db.execute(
+                select(ChatSession).where(ChatSession.session_id == sessions_data[0]["session_id"])
+            )
+            first_session = first_result.scalar_one_or_none()
             if first_session:
                 user_id = first_session.user_id
             title = "Consolidated: " + ", ".join(s["title"] for s in sessions_data[:3])
@@ -441,18 +366,18 @@ class ChatService:
                 sessions_included=len(sessions_data),
             )
             db.add(consolidated)
-            db.commit()
-            db.refresh(consolidated)
+            await db.commit()
+            await db.refresh(consolidated)
 
             return {"summary": summary, "detected_type": detected_type, "id": consolidated.id}
         except Exception as e:
             return {"summary": f"Consolidated summary generation failed: {str(e)}", "detected_type": detected_type}
 
     # ==================== Chat Session Management ====================
-    
+
     @staticmethod
-    def create_or_get_chat_session(
-        db: Session,
+    async def create_or_get_chat_session(
+        db: AsyncSession,
         session_id: str,
         user_id: str,
         agent_type: AgentType,
@@ -476,9 +401,8 @@ class ChatService:
             ChatSession object
         """
         # Check if session exists
-        existing = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        existing = result.scalar_one_or_none()
 
         if existing:
             # Update last_message_at
@@ -492,8 +416,8 @@ class ChatService:
             # Backfill session_metadata if not yet set
             if existing.session_metadata is None and session_metadata is not None:
                 existing.session_metadata = session_metadata
-            db.commit()
-            db.refresh(existing)
+            await db.commit()
+            await db.refresh(existing)
             return existing
 
         # Create new session
@@ -506,13 +430,13 @@ class ChatService:
             session_metadata=session_metadata
         )
         db.add(chat_session)
-        db.commit()
-        db.refresh(chat_session)
+        await db.commit()
+        await db.refresh(chat_session)
         return chat_session
-    
+
     @staticmethod
-    def add_message(
-        db: Session,
+    async def add_message(
+        db: AsyncSession,
         session_id: str,
         role: MessageRole,
         content: str,
@@ -521,7 +445,7 @@ class ChatService:
     ) -> ChatMessage:
         """
         Add a message to a chat session.
-        
+
         Args:
             db: Database session
             session_id: Session identifier
@@ -529,18 +453,17 @@ class ChatService:
             content: Message content
             metadata: Optional metadata (sources, citations, etc.)
             token_count: Optional token count
-            
+
         Returns:
             ChatMessage object
         """
         # Get chat session
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
-        
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
+
         if not chat_session:
             raise ValueError(f"Chat session {session_id} not found")
-        
+
         # Create message - use message_metadata instead of metadata
         message = ChatMessage(
             chat_session_id=chat_session.id,
@@ -550,54 +473,54 @@ class ChatService:
             token_count=token_count
         )
         db.add(message)
-        
+
         # Update session's last_message_at
         chat_session.last_message_at = datetime.utcnow()
-        
-        db.commit()
-        db.refresh(message)
+
+        await db.commit()
+        await db.refresh(message)
         return message
-    
+
     @staticmethod
-    def get_session_messages(
-        db: Session,
+    async def get_session_messages(
+        db: AsyncSession,
         session_id: str,
         limit: Optional[int] = None,
         offset: Optional[int] = 0
     ) -> List[ChatMessage]:
         """
         Get messages for a chat session.
-        
+
         Args:
             db: Database session
             session_id: Session identifier
             limit: Optional limit on number of messages
             offset: Optional offset for pagination
-            
+
         Returns:
             List of ChatMessage objects ordered by created_at
         """
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
-        
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
+
         if not chat_session:
             return []
-        
-        query = db.query(ChatMessage).filter(
+
+        query = select(ChatMessage).where(
             ChatMessage.chat_session_id == chat_session.id
         ).order_by(ChatMessage.created_at.asc())
-        
+
         if offset:
             query = query.offset(offset)
         if limit:
             query = query.limit(limit)
-        
-        return query.all()
-    
+
+        result = await db.execute(query)
+        return list(result.scalars().all())
+
     @staticmethod
-    def get_user_sessions(
-        db: Session,
+    async def get_user_sessions(
+        db: AsyncSession,
         user_id: str,
         agent_type: Optional[AgentType] = None,
         portfolio_id: Optional[int] = None,
@@ -605,129 +528,131 @@ class ChatService:
     ) -> List[ChatSession]:
         """
         Get all chat sessions for a user.
-        
+
         Args:
             db: Database session
             user_id: User identifier
             agent_type: Optional filter by agent type
             portfolio_id: Optional filter by portfolio
             include_inactive: Include inactive sessions
-            
+
         Returns:
             List of ChatSession objects ordered by last_message_at desc
         """
-        query = db.query(ChatSession).filter(ChatSession.user_id == user_id)
-        
+        query = select(ChatSession).where(ChatSession.user_id == user_id).options(selectinload(ChatSession.messages))
+
         if agent_type:
-            query = query.filter(ChatSession.agent_type == agent_type)
-        
+            query = query.where(ChatSession.agent_type == agent_type)
+
         if portfolio_id:
-            query = query.filter(ChatSession.portfolio_id == portfolio_id)
-        
+            query = query.where(ChatSession.portfolio_id == portfolio_id)
+
         if not include_inactive:
-            query = query.filter(ChatSession.is_active == True)
-        
-        return query.order_by(ChatSession.last_message_at.desc()).all()
-    
+            query = query.where(ChatSession.is_active == True)
+
+        query = query.order_by(ChatSession.last_message_at.desc())
+
+        result = await db.execute(query)
+        return list(result.scalars().all())
+
     @staticmethod
-    def get_portfolio_sessions(
-        db: Session,
+    async def get_portfolio_sessions(
+        db: AsyncSession,
         portfolio_id: int,
         agent_type: Optional[AgentType] = None
     ) -> List[ChatSession]:
         """
         Get all chat sessions for a portfolio.
-        
+
         Args:
             db: Database session
             portfolio_id: Portfolio identifier
             agent_type: Optional filter by agent type
-            
+
         Returns:
             List of ChatSession objects
         """
-        query = db.query(ChatSession).filter(
+        query = select(ChatSession).where(
             ChatSession.portfolio_id == portfolio_id,
             ChatSession.is_active == True
-        )
-        
+        ).options(selectinload(ChatSession.messages))
+
         if agent_type:
-            query = query.filter(ChatSession.agent_type == agent_type)
-        
-        return query.order_by(ChatSession.last_message_at.desc()).all()
-    
+            query = query.where(ChatSession.agent_type == agent_type)
+
+        query = query.order_by(ChatSession.last_message_at.desc())
+
+        result = await db.execute(query)
+        return list(result.scalars().all())
+
     @staticmethod
-    def update_session_title(
-        db: Session,
+    async def update_session_title(
+        db: AsyncSession,
         session_id: str,
         title: str
     ) -> Optional[ChatSession]:
         """Update session title"""
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
-        
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
+
         if not chat_session:
             return None
-        
+
         chat_session.title = title
-        db.commit()
-        db.refresh(chat_session)
+        await db.commit()
+        await db.refresh(chat_session)
         return chat_session
-    
+
     @staticmethod
-    def deactivate_session(
-        db: Session,
+    async def deactivate_session(
+        db: AsyncSession,
         session_id: str
     ) -> bool:
         """Mark a session as inactive (soft delete)"""
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
-        
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
+
         if not chat_session:
             return False
-        
+
         chat_session.is_active = False
-        db.commit()
+        await db.commit()
         return True
-    
+
     @staticmethod
-    def clear_session_messages(
-        db: Session,
+    async def clear_session_messages(
+        db: AsyncSession,
         session_id: str
     ) -> int:
         """
         Clear all messages from a session.
-        
+
         Args:
             db: Database session
             session_id: Session identifier
-            
+
         Returns:
             Number of messages deleted
         """
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
 
         if not chat_session:
             return -1  # Sentinel: session does not exist
 
-        count = db.query(ChatMessage).filter(
-            ChatMessage.chat_session_id == chat_session.id
-        ).count()
+        count_result = await db.execute(
+            select(func.count()).select_from(ChatMessage).where(ChatMessage.chat_session_id == chat_session.id)
+        )
+        count = count_result.scalar_one()
 
-        db.query(ChatMessage).filter(
-            ChatMessage.chat_session_id == chat_session.id
-        ).delete()
+        await db.execute(delete(ChatMessage).where(ChatMessage.chat_session_id == chat_session.id))
 
-        db.commit()
+        await db.commit()
         return count  # 0 means session existed but was already empty
-    
+
     @staticmethod
-    def delete_session(
-        db: Session,
+    async def delete_session(
+        db: AsyncSession,
         session_id: str
     ) -> bool:
         """
@@ -745,68 +670,67 @@ class ChatService:
         """
         from app.database.models import Session as PortfolioSession
 
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
 
         if chat_session:
             # Messages are cascade-deleted via relationship
-            db.delete(chat_session)
-            db.commit()
+            await db.delete(chat_session)
+            await db.commit()
             return True
 
         # No ChatSession found — the user may have created a portfolio session
         # (Session table) but never sent a message, so ChatSession was never created.
-        portfolio_session = db.query(PortfolioSession).filter(
-            PortfolioSession.id == session_id
-        ).first()
+        portfolio_result = await db.execute(select(PortfolioSession).where(PortfolioSession.id == session_id))
+        portfolio_session = portfolio_result.scalar_one_or_none()
 
         if portfolio_session:
-            db.delete(portfolio_session)
-            db.commit()
+            await db.delete(portfolio_session)
+            await db.commit()
             return True
 
         return False
-    
+
     @staticmethod
-    def export_session(
-        db: Session,
+    async def export_session(
+        db: AsyncSession,
         session_id: str
     ) -> Optional[Dict[str, Any]]:
         """
         Export a complete chat session with all messages.
-        
+
         Args:
             db: Database session
             session_id: Session identifier
-            
+
         Returns:
             Dictionary with session and messages data
         """
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
-        
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
+
         if not chat_session:
             return None
-        
-        messages = db.query(ChatMessage).filter(
-            ChatMessage.chat_session_id == chat_session.id
-        ).order_by(ChatMessage.created_at.asc()).all()
-        
+
+        messages_result = await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.chat_session_id == chat_session.id)
+            .order_by(ChatMessage.created_at.asc())
+        )
+        messages = list(messages_result.scalars().all())
+
         # Get portfolio info if linked
         portfolio_info = None
         if chat_session.portfolio_id:
-            portfolio = db.query(Portfolio).filter(
-                Portfolio.id == chat_session.portfolio_id
-            ).first()
+            portfolio_result = await db.execute(select(Portfolio).where(Portfolio.id == chat_session.portfolio_id))
+            portfolio = portfolio_result.scalar_one_or_none()
             if portfolio:
                 portfolio_info = {
                     "id": portfolio.id,
                     "name": portfolio.name,
                     "companies": portfolio.company_names
                 }
-        
+
         return {
             "session_id": chat_session.session_id,
             "user_id": chat_session.user_id,
@@ -827,30 +751,29 @@ class ChatService:
                 for msg in messages
             ]
         }
-    
+
     @staticmethod
-    def get_session_stats(
-        db: Session,
+    async def get_session_stats(
+        db: AsyncSession,
         session_id: str
     ) -> Optional[Dict[str, Any]]:
         """Get statistics for a chat session"""
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
-        
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
+
         if not chat_session:
             return None
-        
-        message_count = db.query(ChatMessage).filter(
-            ChatMessage.chat_session_id == chat_session.id
-        ).count()
-        
-        total_tokens = db.query(
-            db.func.sum(ChatMessage.token_count)
-        ).filter(
-            ChatMessage.chat_session_id == chat_session.id
-        ).scalar() or 0
-        
+
+        count_result = await db.execute(
+            select(func.count()).select_from(ChatMessage).where(ChatMessage.chat_session_id == chat_session.id)
+        )
+        message_count = count_result.scalar_one()
+
+        tokens_result = await db.execute(
+            select(func.sum(ChatMessage.token_count)).where(ChatMessage.chat_session_id == chat_session.id)
+        )
+        total_tokens = tokens_result.scalar() or 0
+
         return {
             "session_id": chat_session.session_id,
             "message_count": message_count,
@@ -859,31 +782,41 @@ class ChatService:
             "created_at": chat_session.created_at.isoformat(),
             "last_message_at": chat_session.last_message_at.isoformat() if chat_session.last_message_at else None
         }
-    
+
     @staticmethod
-    def get_user_stats(
-        db: Session,
+    async def get_user_stats(
+        db: AsyncSession,
         user_id: str
     ) -> Dict[str, Any]:
         """Get statistics for all user's chat sessions"""
-        total_sessions = db.query(ChatSession).filter(
-            ChatSession.user_id == user_id
-        ).count()
-        
-        rag_sessions = db.query(ChatSession).filter(
-            ChatSession.user_id == user_id,
-            ChatSession.agent_type == AgentType.RAG
-        ).count()
-        
-        quant_sessions = db.query(ChatSession).filter(
-            ChatSession.user_id == user_id,
-            ChatSession.agent_type == AgentType.QUANT
-        ).count()
-        
-        total_messages = db.query(ChatMessage).join(ChatSession).filter(
-            ChatSession.user_id == user_id
-        ).count()
-        
+        total_result = await db.execute(
+            select(func.count()).select_from(ChatSession).where(ChatSession.user_id == user_id)
+        )
+        total_sessions = total_result.scalar_one()
+
+        rag_result = await db.execute(
+            select(func.count()).select_from(ChatSession).where(
+                ChatSession.user_id == user_id,
+                ChatSession.agent_type == AgentType.RAG
+            )
+        )
+        rag_sessions = rag_result.scalar_one()
+
+        quant_result = await db.execute(
+            select(func.count()).select_from(ChatSession).where(
+                ChatSession.user_id == user_id,
+                ChatSession.agent_type == AgentType.QUANT
+            )
+        )
+        quant_sessions = quant_result.scalar_one()
+
+        messages_result = await db.execute(
+            select(func.count()).select_from(ChatMessage).join(ChatSession).where(
+                ChatSession.user_id == user_id
+            )
+        )
+        total_messages = messages_result.scalar_one()
+
         return {
             "user_id": user_id,
             "total_sessions": total_sessions,

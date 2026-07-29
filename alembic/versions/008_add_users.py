@@ -7,6 +7,7 @@ Create Date: 2026-04-23 00:00:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 revision = '008_add_users'
 down_revision = '007_add_form4_has_common_stock'
@@ -16,9 +17,9 @@ depends_on = None
 
 def upgrade() -> None:
     conn = op.get_bind()
-    tables = {row[0] for row in conn.execute(sa.text("SELECT name FROM sqlite_master WHERE type='table'"))}
+    inspector = inspect(conn)
 
-    if 'users' not in tables:
+    if not inspector.has_table('users'):
         op.create_table(
             'users',
             sa.Column('id', sa.Integer(), nullable=False),

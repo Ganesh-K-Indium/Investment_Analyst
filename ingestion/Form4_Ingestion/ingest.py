@@ -88,7 +88,7 @@ def is_common_stock(security_title: str, is_derivative: bool) -> bool:
     return False
 
 
-def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_database=False):
+async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_database=False):
     """
     Fetches and ingests ALL Form 4 filings from SEC EDGAR since start_date.
     
@@ -113,7 +113,7 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
     # 1. Reset Database (optional)
     if reset_database:
         try:
-            reset_db()
+            await reset_db()
             logger.info("Database reset successfully. All previous data has been deleted.")
         except Exception as e:
             logger.critical(f"Database reset failed: {e}")
@@ -165,18 +165,18 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
     skipped_already_in_db = 0
     fail_count = 0
 
-    with get_db() as db:
+    async with get_db() as db:
         for i, url in enumerate(xml_urls):
             try:
                 logger.info(f"[{i+1}/{len(xml_urls)}] Processing: {url}")
-                
+
                 # Extract accession number from URL for dedup check and storage
                 accession_number = xml_saver._extract_accession_id(url)
 
                 # Check for duplicate
-                existing = db.execute(
+                existing = (await db.execute(
                     select(Form4Transaction).where(Form4Transaction.accession_number == accession_number)
-                ).scalar()
+                )).scalar()
                 
                 if existing:
                     logger.info(f"  -> Skipping (Already in DB)")
@@ -222,7 +222,7 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
                 # If this is a 4/A, delete the original filing's rows for the
                 # same reporter + period so the amendment becomes the sole truth.
                 if doc_type == '4/A' and period and rpt_owner:
-                    deleted = db.execute(
+                    deleted = await db.execute(
                         delete(Form4Transaction).where(
                             Form4Transaction.issuer_symbol == data['issuer_symbol'],
                             Form4Transaction.rpt_owner_name == rpt_owner,
@@ -294,11 +294,11 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
                     transactions_saved_total += tx_count
                     logger.info(f"  -> Success. Saved {tx_count} transactions.")
 
-                db.commit()
-                
+                await db.commit()
+
             except Exception as e:
                 logger.error(f"  -> Critical Error processing {url}: {e}")
-                db.rollback()
+                await db.rollback()
                 fail_count += 1
 
     logger.info("="*50)
@@ -321,7 +321,7 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
     
     # Calculate and display transaction analytics
     try:
-        with get_db() as analytics_db:
+        async with get_db() as analytics_db:
             analytics = TransactionAnalytics(analytics_db)
             analytics.print_summary(ticker=ticker)
     except Exception as e:
@@ -338,7 +338,7 @@ def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_datab
         "date_range": {"start": str(start_date), "end": str(end_date)},
     }
 
-def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None, reset_database=False):
+async def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None, reset_database=False):
     """
     Runs run_form4_ingestion() once per ticker, sequentially, and aggregates the results.
 
@@ -384,7 +384,7 @@ def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None, rese
     # Reset once, up-front, for the whole batch — never per-ticker.
     if reset_database:
         try:
-            reset_db()
+            await reset_db()
             logger.info("Database reset successfully (applied once for the full batch).")
         except Exception as e:
             logger.critical(f"Database reset failed: {e}")
@@ -394,7 +394,7 @@ def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None, rese
     for i, ticker in enumerate(normalized_tickers):
         logger.info(f"=== [{i+1}/{len(normalized_tickers)}] Ingesting ticker: {ticker} ===")
         try:
-            result = run_form4_ingestion(
+            result = await run_form4_ingestion(
                 ticker=ticker,
                 start_date=start_date,
                 end_date=end_date,
@@ -444,5 +444,6 @@ def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None, rese
 
 
 if __name__ == "__main__":
+    import asyncio
     ticker_input = "AAPL" #input("Enter ticker symbol (e.g. NVDA, AAPL, MSFT): ").strip().upper()
-    run_form4_ingestion(ticker=ticker_input)
+    asyncio.run(run_form4_ingestion(ticker=ticker_input))

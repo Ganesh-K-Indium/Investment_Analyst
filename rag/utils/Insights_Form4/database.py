@@ -1,9 +1,9 @@
 """
 Database module for Form 4 transactions.
 
-This module re-exports the Form4Transaction model and database utilities
-from the main application database (portfolios.db / DATABASE_URL env var),
-replacing the old standalone form4_data.db setup.
+This module re-exports the Form4Transaction model and the main application's
+async engine/session (app.database.connection) — the Form4 pipeline shares
+the same async Postgres engine as the rest of the app, not a separate one.
 """
 import os
 import sys
@@ -19,35 +19,35 @@ _project_root = os.path.dirname(
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from app.database.connection import engine, SessionLocal, get_db  # noqa: E402
+from app.database.connection import engine, get_db, get_db_session  # noqa: E402
 from app.database.models import Base, Form4Transaction  # noqa: E402
-from sqlalchemy.orm import Session  # noqa: E402
 
-def init_db():
+__all__ = ['Form4Transaction', 'get_db', 'get_db_session', 'init_db', 'init', 'reset_db']
+
+
+async def init_db():
     """Initialize the database by creating all tables (including form4_transactions)."""
-    Base.metadata.create_all(bind=engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 # Alias for backward compatibility with existing scripts
 init = init_db
 
-__all__ = ['Form4Transaction', 'get_db', 'init_db', 'init', 'reset_db', 'get_session']
 
-
-def reset_db():
+async def reset_db():
     """
     Drops and recreates only the form4_transactions table.
     WARNING: Deletes all Form 4 data!
     """
     from sqlalchemy import inspect
 
-    Form4Transaction.__table__.drop(engine, checkfirst=True)
-    Form4Transaction.__table__.create(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Form4Transaction.__table__.drop(sync_conn, checkfirst=True))
+        await conn.run_sync(lambda sync_conn: Form4Transaction.__table__.create(sync_conn))
 
-    inspector = inspect(engine)
-    print(f"Database reset complete. Active tables: {inspector.get_table_names()}")
+        def _list_tables(sync_conn):
+            return inspect(sync_conn).get_table_names()
 
-
-def get_session() -> Session:
-    """Get a new database session."""
-    return SessionLocal()
+        tables = await conn.run_sync(_list_tables)
+        print(f"Database reset complete. Active tables: {tables}")

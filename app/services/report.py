@@ -3,8 +3,8 @@ Report service — draft clipboard CRUD + analyst report CRUD + search
 """
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import select, delete as sa_delete, func, text
+from sqlalchemy.ext.asyncio import AsyncSession
 import markdown as _markdown
 from markdownify import markdownify as _html_to_markdown
 from app.database.models import ReportDraftItem, AnalystReport, ReportStatus, User
@@ -25,12 +25,18 @@ def _derive_markdown(content_html: Optional[str]) -> Optional[str]:
     return _html_to_markdown(content_html, heading_style="ATX").strip()
 
 
+async def _count(db: AsyncSession, stmt) -> int:
+    """Run a count() over an arbitrary select() statement's filters."""
+    result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    return result.scalar_one()
+
+
 # ---------------------------------------------------------------------------
 # Draft clipboard
 # ---------------------------------------------------------------------------
 
-def add_draft_item(
-    db: Session,
+async def add_draft_item(
+    db: AsyncSession,
     user_id: str,
     item_type: str,
     portfolio_id: Optional[int] = None,
@@ -56,35 +62,33 @@ def add_draft_item(
         sort_order=sort_order,
     )
     db.add(item)
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
     return item
 
 
-def get_draft_items(
-    db: Session,
+async def get_draft_items(
+    db: AsyncSession,
     user_id: str,
     portfolio_id: Optional[int] = None,
 ) -> List[ReportDraftItem]:
-    q = (
-        db.query(ReportDraftItem)
-        .filter(ReportDraftItem.user_id == user_id)
-    )
+    q = select(ReportDraftItem).where(ReportDraftItem.user_id == user_id)
     if portfolio_id is not None:
-        q = q.filter(ReportDraftItem.portfolio_id == portfolio_id)
-    return q.order_by(ReportDraftItem.sort_order, ReportDraftItem.created_at).all()
+        q = q.where(ReportDraftItem.portfolio_id == portfolio_id)
+    q = q.order_by(ReportDraftItem.sort_order, ReportDraftItem.created_at)
+    result = await db.execute(q)
+    return list(result.scalars().all())
 
 
-def get_draft_item(db: Session, item_id: int, user_id: str) -> Optional[ReportDraftItem]:
-    return (
-        db.query(ReportDraftItem)
-        .filter(ReportDraftItem.id == item_id, ReportDraftItem.user_id == user_id)
-        .first()
+async def get_draft_item(db: AsyncSession, item_id: int, user_id: str) -> Optional[ReportDraftItem]:
+    result = await db.execute(
+        select(ReportDraftItem).where(ReportDraftItem.id == item_id, ReportDraftItem.user_id == user_id)
     )
+    return result.scalar_one_or_none()
 
 
-def update_draft_item(
-    db: Session,
+async def update_draft_item(
+    db: AsyncSession,
     item_id: int,
     user_id: str,
     label: Optional[str] = None,
@@ -92,7 +96,7 @@ def update_draft_item(
     html: Optional[str] = None,
     sort_order: Optional[int] = None,
 ) -> Optional[ReportDraftItem]:
-    item = get_draft_item(db, item_id, user_id)
+    item = await get_draft_item(db, item_id, user_id)
     if not item:
         return None
     if label is not None:
@@ -103,36 +107,40 @@ def update_draft_item(
         item.content = content
     if sort_order is not None:
         item.sort_order = sort_order
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
     return item
 
 
-def delete_draft_item(db: Session, item_id: int, user_id: str) -> bool:
-    item = get_draft_item(db, item_id, user_id)
+async def delete_draft_item(db: AsyncSession, item_id: int, user_id: str) -> bool:
+    item = await get_draft_item(db, item_id, user_id)
     if not item:
         return False
-    db.delete(item)
-    db.commit()
+    await db.delete(item)
+    await db.commit()
     return True
 
 
-def clear_draft_items(
-    db: Session,
+async def clear_draft_items(
+    db: AsyncSession,
     user_id: str,
     portfolio_id: Optional[int] = None,
 ) -> int:
-    q = db.query(ReportDraftItem).filter(ReportDraftItem.user_id == user_id)
+    q = select(ReportDraftItem).where(ReportDraftItem.user_id == user_id)
     if portfolio_id is not None:
-        q = q.filter(ReportDraftItem.portfolio_id == portfolio_id)
-    count = q.count()
-    q.delete(synchronize_session=False)
-    db.commit()
+        q = q.where(ReportDraftItem.portfolio_id == portfolio_id)
+    count = await _count(db, q)
+
+    del_stmt = sa_delete(ReportDraftItem).where(ReportDraftItem.user_id == user_id)
+    if portfolio_id is not None:
+        del_stmt = del_stmt.where(ReportDraftItem.portfolio_id == portfolio_id)
+    await db.execute(del_stmt)
+    await db.commit()
     return count
 
 
-def create_report_from_draft(
-    db: Session,
+async def create_report_from_draft(
+    db: AsyncSession,
     user_id: str,
     company_name: str,
     ticker: Optional[str] = None,
@@ -145,7 +153,7 @@ def create_report_from_draft(
     optionally clear it. Text/summary items become content_markdown sections;
     image items become image_urls.
     """
-    items = get_draft_items(db, user_id, portfolio_id=portfolio_id)
+    items = await get_draft_items(db, user_id, portfolio_id=portfolio_id)
     if not items:
         raise ValueError("No draft items found — clipboard is empty for this portfolio")
 
@@ -166,7 +174,7 @@ def create_report_from_draft(
     draft_session_ids = list({i.session_id for i in items if i.session_id})
     merged_session_ids = list(set((source_session_ids or []) + draft_session_ids))
 
-    report = create_report(
+    report = await create_report(
         db=db,
         user_id=user_id,
         company_name=company_name,
@@ -179,37 +187,37 @@ def create_report_from_draft(
     )
 
     if clear_draft:
-        clear_draft_items(db, user_id, portfolio_id=portfolio_id)
+        await clear_draft_items(db, user_id, portfolio_id=portfolio_id)
 
     return report
 
 
-def reorder_draft_items(
-    db: Session,
+async def reorder_draft_items(
+    db: AsyncSession,
     user_id: str,
     ordered_ids: List[int],
     portfolio_id: Optional[int] = None,
 ) -> List[ReportDraftItem]:
-    items_map = {
-        item.id: item
-        for item in db.query(ReportDraftItem).filter(
+    result = await db.execute(
+        select(ReportDraftItem).where(
             ReportDraftItem.user_id == user_id,
             ReportDraftItem.id.in_(ordered_ids),
-        ).all()
-    }
+        )
+    )
+    items_map = {item.id: item for item in result.scalars().all()}
     for position, item_id in enumerate(ordered_ids):
         if item_id in items_map:
             items_map[item_id].sort_order = position
-    db.commit()
-    return get_draft_items(db, user_id, portfolio_id=portfolio_id)
+    await db.commit()
+    return await get_draft_items(db, user_id, portfolio_id=portfolio_id)
 
 
 # ---------------------------------------------------------------------------
 # Analyst report CRUD
 # ---------------------------------------------------------------------------
 
-def create_report(
-    db: Session,
+async def create_report(
+    db: AsyncSession,
     user_id: str,
     company_name: str,
     ticker: Optional[str] = None,
@@ -232,30 +240,30 @@ def create_report(
         status=ReportStatus.DRAFT,
     )
     db.add(report)
-    db.commit()
-    db.refresh(report)
+    await db.commit()
+    await db.refresh(report)
     return report
 
 
-def get_report(db: Session, report_id: int) -> Optional[AnalystReport]:
-    return db.query(AnalystReport).filter(AnalystReport.id == report_id).first()
+async def get_report(db: AsyncSession, report_id: int) -> Optional[AnalystReport]:
+    result = await db.execute(select(AnalystReport).where(AnalystReport.id == report_id))
+    return result.scalar_one_or_none()
 
 
-def get_report_by_user(db: Session, report_id: int, user_id: str) -> Optional[AnalystReport]:
-    return (
-        db.query(AnalystReport)
-        .filter(AnalystReport.id == report_id, AnalystReport.user_id == user_id)
-        .first()
+async def get_report_by_user(db: AsyncSession, report_id: int, user_id: str) -> Optional[AnalystReport]:
+    result = await db.execute(
+        select(AnalystReport).where(AnalystReport.id == report_id, AnalystReport.user_id == user_id)
     )
+    return result.scalar_one_or_none()
 
 
-def update_report(
-    db: Session,
+async def update_report(
+    db: AsyncSession,
     report_id: int,
     user_id: str,
     patch: Dict[str, Any],
 ) -> Optional[AnalystReport]:
-    report = get_report_by_user(db, report_id, user_id)
+    report = await get_report_by_user(db, report_id, user_id)
     if not report:
         return None
 
@@ -271,44 +279,44 @@ def update_report(
         report.content_markdown = _derive_markdown(report.content_html)
 
     report.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(report)
+    await db.commit()
+    await db.refresh(report)
     return report
 
 
-def publish_report(db: Session, report_id: int, user_id: str) -> Optional[AnalystReport]:
-    report = get_report_by_user(db, report_id, user_id)
+async def publish_report(db: AsyncSession, report_id: int, user_id: str) -> Optional[AnalystReport]:
+    report = await get_report_by_user(db, report_id, user_id)
     if not report:
         return None
     report.status = ReportStatus.PUBLISHED
     report.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(report)
+    await db.commit()
+    await db.refresh(report)
     return report
 
 
-def unpublish_report(db: Session, report_id: int, user_id: str) -> Optional[AnalystReport]:
-    report = get_report_by_user(db, report_id, user_id)
+async def unpublish_report(db: AsyncSession, report_id: int, user_id: str) -> Optional[AnalystReport]:
+    report = await get_report_by_user(db, report_id, user_id)
     if not report:
         return None
     report.status = ReportStatus.DRAFT
     report.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(report)
+    await db.commit()
+    await db.refresh(report)
     return report
 
 
-def delete_report(db: Session, report_id: int, user_id: str) -> bool:
-    report = get_report_by_user(db, report_id, user_id)
+async def delete_report(db: AsyncSession, report_id: int, user_id: str) -> bool:
+    report = await get_report_by_user(db, report_id, user_id)
     if not report:
         return False
-    db.delete(report)
-    db.commit()
+    await db.delete(report)
+    await db.commit()
     return True
 
 
-def list_reports(
-    db: Session,
+async def list_reports(
+    db: AsyncSession,
     user_id: Optional[str] = None,
     status: Optional[str] = None,
     company: Optional[str] = None,
@@ -319,34 +327,32 @@ def list_reports(
     page: int = 1,
     page_size: int = 20,
 ) -> Dict[str, Any]:
-    q = db.query(AnalystReport)
+    q = select(AnalystReport)
     if user_id:
-        q = q.filter(AnalystReport.user_id == user_id)
+        q = q.where(AnalystReport.user_id == user_id)
     if status:
-        q = q.filter(AnalystReport.status == ReportStatus(status))
+        q = q.where(AnalystReport.status == ReportStatus(status))
     if company:
-        q = q.filter(AnalystReport.company_name.ilike(f"%{company}%"))
+        q = q.where(AnalystReport.company_name.ilike(f"%{company}%"))
     if ticker:
-        q = q.filter(AnalystReport.ticker.ilike(f"%{ticker}%"))
+        q = q.where(AnalystReport.ticker.ilike(f"%{ticker}%"))
     if portfolio_id:
-        q = q.filter(AnalystReport.portfolio_id == portfolio_id)
+        q = q.where(AnalystReport.portfolio_id == portfolio_id)
     if from_date:
-        q = q.filter(AnalystReport.created_at >= from_date)
+        q = q.where(AnalystReport.created_at >= from_date)
     if to_date:
-        q = q.filter(AnalystReport.created_at <= to_date)
+        q = q.where(AnalystReport.created_at <= to_date)
 
-    total = q.count()
-    reports = (
-        q.order_by(AnalystReport.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
+    total = await _count(db, q)
+    result = await db.execute(
+        q.order_by(AnalystReport.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     )
+    reports = list(result.scalars().all())
     return {"total": total, "page": page, "page_size": page_size, "items": reports}
 
 
-def search_reports(
-    db: Session,
+async def search_reports(
+    db: AsyncSession,
     q: str,
     status: Optional[str] = "published",
     user_id: Optional[str] = None,
@@ -357,92 +363,96 @@ def search_reports(
     page: int = 1,
     page_size: int = 20,
 ) -> Dict[str, Any]:
-    fts_rows = db.execute(
-        text("SELECT rowid FROM analyst_reports_fts WHERE analyst_reports_fts MATCH :q ORDER BY rank"),
+    """Full-text search backed by Postgres tsvector (see migration 014_postgres_fulltext_search)."""
+    fts_result = await db.execute(
+        text(
+            "SELECT id FROM analyst_reports "
+            "WHERE search_vector @@ plainto_tsquery('english', :q) "
+            "ORDER BY ts_rank(search_vector, plainto_tsquery('english', :q)) DESC"
+        ),
         {"q": q},
-    ).fetchall()
-    matched_ids = [r[0] for r in fts_rows]
+    )
+    matched_ids = [row[0] for row in fts_result.fetchall()]
 
     if not matched_ids:
         return {"total": 0, "page": page, "page_size": page_size, "items": []}
 
-    query = db.query(AnalystReport).filter(AnalystReport.id.in_(matched_ids))
+    query = select(AnalystReport).where(AnalystReport.id.in_(matched_ids))
 
     if status:
-        query = query.filter(AnalystReport.status == ReportStatus(status))
+        query = query.where(AnalystReport.status == ReportStatus(status))
     if user_id:
-        query = query.filter(AnalystReport.user_id == user_id)
+        query = query.where(AnalystReport.user_id == user_id)
     if company:
-        query = query.filter(AnalystReport.company_name.ilike(f"%{company}%"))
+        query = query.where(AnalystReport.company_name.ilike(f"%{company}%"))
     if ticker:
-        query = query.filter(AnalystReport.ticker.ilike(f"%{ticker}%"))
+        query = query.where(AnalystReport.ticker.ilike(f"%{ticker}%"))
     if from_date:
-        query = query.filter(AnalystReport.created_at >= from_date)
+        query = query.where(AnalystReport.created_at >= from_date)
     if to_date:
-        query = query.filter(AnalystReport.created_at <= to_date)
+        query = query.where(AnalystReport.created_at <= to_date)
 
-    total = query.count()
-    items = (
-        query.order_by(AnalystReport.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
+    total = await _count(db, query)
+    result = await db.execute(
+        query.order_by(AnalystReport.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     )
+    items = list(result.scalars().all())
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
-def resolve_author_name(db: Session, user_id: str) -> str:
+async def resolve_author_name(db: AsyncSession, user_id: str) -> str:
+    user = None
     try:
-        user = db.query(User).filter(User.id == int(user_id)).first()
+        result = await db.execute(select(User).where(User.id == int(user_id)))
+        user = result.scalar_one_or_none()
     except (ValueError, TypeError):
-        user = db.query(User).filter(User.username == user_id).first()
+        result = await db.execute(select(User).where(User.username == user_id))
+        user = result.scalar_one_or_none()
     if user:
         return (user.full_name or '').strip() or user.username
     return user_id
 
 
-def get_repository_stats(db: Session) -> Dict[str, Any]:
+async def get_repository_stats(db: AsyncSession) -> Dict[str, Any]:
     """Aggregate stats for the Fund Manager dashboard — published reports only."""
-    base = db.query(AnalystReport).filter(AnalystReport.status == ReportStatus.PUBLISHED)
+    base_filter = AnalystReport.status == ReportStatus.PUBLISHED
 
-    total = base.count()
+    total = await _count(db, select(AnalystReport).where(base_filter))
 
-    top_companies = [
-        {"company": row[0], "count": row[1]}
-        for row in db.query(AnalystReport.company_name, func.count())
-            .filter(AnalystReport.status == ReportStatus.PUBLISHED)
-            .group_by(AnalystReport.company_name)
-            .order_by(func.count().desc())
-            .limit(10)
-            .all()
-    ]
+    top_companies_result = await db.execute(
+        select(AnalystReport.company_name, func.count())
+        .where(base_filter)
+        .group_by(AnalystReport.company_name)
+        .order_by(func.count().desc())
+        .limit(10)
+    )
+    top_companies = [{"company": row[0], "count": row[1]} for row in top_companies_result.all()]
 
-    top_analysts = [
-        {"analyst": row[0], "count": row[1]}
-        for row in db.query(AnalystReport.user_id, func.count())
-            .filter(AnalystReport.status == ReportStatus.PUBLISHED)
-            .group_by(AnalystReport.user_id)
-            .order_by(func.count().desc())
-            .limit(10)
-            .all()
-    ]
+    top_analysts_result = await db.execute(
+        select(AnalystReport.user_id, func.count())
+        .where(base_filter)
+        .group_by(AnalystReport.user_id)
+        .order_by(func.count().desc())
+        .limit(10)
+    )
+    top_analysts = [{"analyst": row[0], "count": row[1]} for row in top_analysts_result.all()]
 
     # Published in the last 2 days
     two_days_ago = datetime.utcnow() - timedelta(days=2)
-    recent_published = (
-        base
-        .filter(AnalystReport.created_at >= two_days_ago)
+    recent_result = await db.execute(
+        select(AnalystReport)
+        .where(base_filter, AnalystReport.created_at >= two_days_ago)
         .order_by(AnalystReport.created_at.desc())
         .limit(10)
-        .all()
     )
+    recent_published = list(recent_result.scalars().all())
 
-    def _report_dict(r):
+    async def _report_dict(r):
         return {
             "id": r.id,
             "company_name": r.company_name,
             "ticker": r.ticker,
-            "author": resolve_author_name(db, r.user_id),
+            "author": await resolve_author_name(db, r.user_id),
             "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
             "updated_at": (r.updated_at.isoformat() + "Z") if r.updated_at else None,
         }
@@ -451,5 +461,5 @@ def get_repository_stats(db: Session) -> Dict[str, Any]:
         "total_published": total,
         "top_companies": top_companies,
         "top_analysts": top_analysts,
-        "recent_reports": [_report_dict(r) for r in recent_published],
+        "recent_reports": [await _report_dict(r) for r in recent_published],
     }

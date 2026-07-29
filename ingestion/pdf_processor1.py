@@ -118,10 +118,17 @@ def extract_company_name(file_name: str) -> str:
     
     # Remove common year patterns (e.g., 2020, 2021, etc.)
     name = re.sub(r'\b(19|20)\d{2}\b', '', name)
+
+    # Remove SEC accession numbers (long digit runs, e.g. "000032019326000011")
+    name = re.sub(r'\b\d{6,}\b', '', name)
+
+    # Remove common document type suffixes (10-K, 10-Q, 8-K, annual/quarterly report)
+    name = re.sub(r'\b(10[-\s]?[kq]|8[-\s]?k|annual|quarterly|report)\b', '', name, flags=re.IGNORECASE)
     
-    # Remove common document type suffixes
-    name = re.sub(r'\b(10[-\s]?[kq]|annual|quarterly|report)\b', '', name, flags=re.IGNORECASE)
-    
+    # Remove leftover 1-2 digit fragments (month/day pieces from EDGAR-style
+    # filenames like "..._2026-04-30_...", after the year itself was stripped above)
+    name = re.sub(r'\b\d{1,2}\b', '', name)
+
     # Remove any trailing numbers
     name = re.sub(r'\s+\d+\s*$', '', name)
     
@@ -144,15 +151,59 @@ def extract_company_name(file_name: str) -> str:
     
     return company
 
+VALID_FILING_TYPES = ("10-K", "10-Q", "8-K")
+
+
+def extract_filing_type_from_filename(file_name: str) -> str:
+    """
+    Best-effort detection of SEC filing type from a file name.
+    Falls back to "10-K" (the only filing type ever ingested historically)
+    if no recognizable token is found.
+    """
+    # Normalize separators to spaces first — \b treats "_" as a word character,
+    # so "AAPL_10Q_2024.pdf" would otherwise never match a \b...\b token boundary
+    # right after the underscore.
+    normalized = re.sub(r'[-_.]', ' ', file_name)
+
+    if re.search(r'\b10\s?k\b', normalized, flags=re.IGNORECASE):
+        return "10-K"
+    if re.search(r'\b10\s?q\b', normalized, flags=re.IGNORECASE):
+        return "10-Q"
+    if re.search(r'\b8\s?k\b', normalized, flags=re.IGNORECASE):
+        return "8-K"
+    return "10-K"
+
+
 def extract_year_from_filename(file_name: str) -> int:
     """
     Extract year from a file name. Default to current year if not found.
+
+    Handles both a free-standing 4-digit year (e.g. "AAPL_10K_2024.pdf") and
+    EDGAR-style filenames where the year is glued to a full YYYYMMDD date with
+    no separators (e.g. "aapl-20250628.pdf") — the latter has no word boundary
+    after the year digits, so a plain \\b(19|20)\\d{2}\\b match misses it.
     """
-    match = re.search(r'\b(19|20)\d{2}\b', file_name)
-    if match:
-        return int(match.group(0))
-    # Default to current year or 2024
     current_year = datetime.now().year
+    min_year, max_year = 1995, current_year + 1
+
+    # Free-standing 4-digit year, not adjacent to other digits. Uses digit
+    # lookaround rather than \b — \b treats "_" as a word character, so
+    # "..._2024.pdf" would otherwise fail to match right after the underscore.
+    # Checked FIRST: it has clear boundaries and won't false-match inside an
+    # unrelated long digit run (e.g. an accession number containing "2019").
+    match = re.search(r'(?<!\d)(19|20)\d{2}(?!\d)', file_name)
+    if match:
+        year = int(match.group(0))
+        if min_year <= year <= max_year:
+            return year
+
+    # EDGAR-style contiguous YYYYMMDD date (8 digits, no separators) — take the
+    # leading 4 as the year. Only reached if no free-standing year was found.
+    for match in re.finditer(r'(19|20)\d{6}', file_name):
+        year = int(match.group(0)[:4])
+        if min_year <= year <= max_year:
+            return year
+
     return current_year if current_year > 2000 else 2024
 
 
@@ -289,14 +340,16 @@ def check_document_exists(vectorstore, source_file_name: str, doc_type: str = "t
         print(f"Error checking document existence: {e}")
         return False, []
 
-def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None) -> dict:
+def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None) -> dict:
     """
     Process a PDF file and return a structured result.
-    
+
     Args:
         uploaded_pdf_path: Path to the PDF file
         ticker: Ticker symbol (optional)
-        
+        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional; auto-detected
+            from the filename if omitted, defaulting to "10-K" if no token is found)
+
     Returns:
         dict: Processing result with status and details
     """
@@ -304,6 +357,7 @@ def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None) -> di
         "success": False,
         "file_name": os.path.basename(uploaded_pdf_path),
         "ticker": ticker,
+        "filing_type": filing_type,
         "text_processed": False,
         "text_already_existed": False,
         "text_chunks": 0,
@@ -313,10 +367,10 @@ def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None) -> di
         "messages": [],
         "error": None
     }
-    
+
     try:
         # Collect all progress messages
-        for message in process_pdf_and_stream(uploaded_pdf_path, ticker):
+        for message in process_pdf_and_stream(uploaded_pdf_path, ticker, filing_type):
             result["messages"].append(message)
             
             # Parse key information from messages
@@ -349,13 +403,15 @@ def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None) -> di
         
     return result
 
-def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
+def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None):
     """
     Process a PDF file and stream progress updates.
-    
+
     Args:
         uploaded_pdf_path: Path to the PDF file
         ticker: Ticker symbol (optional)
+        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional; auto-detected
+            from the filename if omitted, defaulting to "10-K" if no token is found)
     """
     if not os.path.exists(uploaded_pdf_path):
         yield f"Error: File does not exist: {uploaded_pdf_path}"
@@ -368,6 +424,14 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
         source_file_name = os.path.basename(uploaded_pdf_path)
         company_name = extract_company_name(source_file_name)
 
+        if filing_type:
+            if filing_type not in VALID_FILING_TYPES:
+                yield f"Error: Invalid filing_type '{filing_type}'. Must be one of {VALID_FILING_TYPES}."
+                return
+        else:
+            filing_type = extract_filing_type_from_filename(source_file_name)
+            yield f"Auto-detected filing_type '{filing_type}' from filename '{source_file_name}'"
+
         # Derive ticker if not provided
         if not ticker:
             ticker = get_ticker(company_name)
@@ -375,7 +439,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
                 yield f"Derived ticker '{ticker}' from company '{company_name}'"
             else:
                 yield f"Warning: Could not derive ticker for company '{company_name}'. Using default unified collection."
-        
+
         # Determine collection name
         if ticker:
             collection_name = f"ticker_{ticker.lower()}"
@@ -413,6 +477,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
                         "content_type": "text",
                         "content_hash": content_hash,
                         "year": extract_year_from_filename(source_file_name),
+                        "filing_type": filing_type,
                         "ingestion_timestamp": str(datetime.now()),
                     }
                     documents.append(Document(page_content=text, metadata=metadata))
@@ -482,6 +547,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None):
                         "content_type": "image",
                         "content_hash": content_hash,
                         "year": extract_year_from_filename(source_file_name),
+                        "filing_type": filing_type,
                         "ingestion_timestamp": str(datetime.now())
                     })
 

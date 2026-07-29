@@ -32,6 +32,7 @@ def format_result(result: dict) -> str:
         "="*60,
         f"File: {result['file_name']}",
         f"Ticker: {result.get('ticker', 'N/A')}",
+        f"Filing type: {result.get('filing_type', 'N/A')}",
         f"Status: {'✓ SUCCESS' if result['success'] else '✗ FAILED'}",
         ""
     ]
@@ -60,14 +61,16 @@ def format_result(result: dict) -> str:
     return "\n".join(lines)
 
 
-def ingest_pdf(pdf_path: str, ticker: str = None) -> dict:
+def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None) -> dict:
     """
     Ingest a PDF file and return the result.
-    
+
     Args:
         pdf_path: Path to the PDF file
         ticker: Ticker symbol (optional)
-        
+        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional; auto-detected
+            from the filename if omitted, defaulting to "10-K" if no token is found)
+
     Returns:
         dict: Processing result
     """
@@ -97,8 +100,10 @@ def ingest_pdf(pdf_path: str, ticker: str = None) -> dict:
     print(f"Ingesting PDF: {pdf_path}")
     if ticker:
         print(f"Ticker: {ticker}")
-        
-    result = process_pdf_and_get_result(pdf_path, ticker=ticker)
+    if filing_type:
+        print(f"Filing type: {filing_type}")
+
+    result = process_pdf_and_get_result(pdf_path, ticker=ticker, filing_type=filing_type)
     return result
 
 
@@ -107,11 +112,17 @@ def main():
     parser = argparse.ArgumentParser(description="Ingest a PDF file into the vector database.")
     parser.add_argument("pdf_path", help="Path to the PDF file")
     parser.add_argument("ticker", nargs="?", help="Ticker symbol (optional)", default=None)
-    
+    parser.add_argument(
+        "--filing-type",
+        choices=["10-K", "10-Q", "8-K"],
+        default=None,
+        help="SEC filing type (optional; auto-detected from filename if omitted, defaulting to 10-K)",
+    )
+
     args = parser.parse_args()
-    
+
     # Process the PDF
-    result = ingest_pdf(args.pdf_path, args.ticker)
+    result = ingest_pdf(args.pdf_path, args.ticker, filing_type=args.filing_type)
     
     # Display formatted result
     print(format_result(result))

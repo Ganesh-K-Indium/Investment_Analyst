@@ -5,7 +5,7 @@ Integrates the multi-agent stock analysis system into the main API
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import HumanMessage
 from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
@@ -72,7 +72,7 @@ def set_agents_status(status: bool):
 async def query_stock_agent(
     payload: StockQueryRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Send a query to the stock analysis supervisor agent.
@@ -98,7 +98,7 @@ async def query_stock_agent(
         if not session_id:
             if payload.portfolio_id:
                 # Link to portfolio if provided
-                portfolio = PortfolioService.get_portfolio(db, payload.portfolio_id)
+                portfolio = await PortfolioService.get_portfolio(db, payload.portfolio_id)
                 if portfolio:
                     session_id = f"quant_portfolio_{payload.portfolio_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 else:
@@ -115,11 +115,11 @@ async def query_stock_agent(
         portfolio_id = payload.portfolio_id
         portfolio_name = None
         if portfolio_id:
-            portfolio = PortfolioService.get_portfolio(db, portfolio_id)
+            portfolio = await PortfolioService.get_portfolio(db, portfolio_id)
             if portfolio:
                 portfolio_name = portfolio.name
-        
-        chat_session = ChatService.create_or_get_chat_session(
+
+        chat_session = await ChatService.create_or_get_chat_session(
             db=db,
             session_id=session_id,
             user_id=payload.user_id,
@@ -127,9 +127,9 @@ async def query_stock_agent(
             portfolio_id=portfolio_id,
             title=f"Stock Analysis: {portfolio_name}" if portfolio_name else "Stock Analysis"
         )
-        
+
         # Save user message
-        ChatService.add_message(
+        await ChatService.add_message(
             db=db,
             session_id=session_id,
             role=MessageRole.USER,
@@ -171,7 +171,7 @@ async def query_stock_agent(
             final_message = all_messages[-1]
         
         # Save assistant message with metadata
-        ChatService.add_message(
+        await ChatService.add_message(
             db=db,
             session_id=session_id,
             role=MessageRole.ASSISTANT,
@@ -354,11 +354,11 @@ async def get_session_history(session_id: str):
 @router.get("/portfolio/{portfolio_id}/sessions")
 async def get_portfolio_stock_sessions(
     portfolio_id: int,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Get all stock analysis sessions linked to a portfolio"""
     # Verify portfolio exists
-    portfolio = PortfolioService.get_portfolio(db, portfolio_id)
+    portfolio = await PortfolioService.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     

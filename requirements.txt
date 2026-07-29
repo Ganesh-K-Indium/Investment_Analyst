@@ -20,6 +20,7 @@ pandas>=2.0.0
 sqlalchemy>=2.0.25
 alembic>=1.13.1
 aiosqlite>=0.20.0
+asyncpg>=0.29.0
 
 # LangChain Core & Extensions
 langchain>=0.3.0

@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-investment_analyst}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-investment_analyst}
+      POSTGRES_DB: ${POSTGRES_DB:-investment_analyst}
+    ports:
+      # Host-side 5433 to avoid clashing with a locally-installed Postgres on
+      # the default 5432 — the container still listens on 5432 internally, so
+      # other services in this compose file (the "postgres" hostname) are unaffected.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-investment_analyst}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Points at the postgres/qdrant services above by default. Override
+      # DATABASE_URL / QDRANT_URL in .env (e.g. to an RDS endpoint or Qdrant
+      # Cloud) to use managed services instead of these local containers.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://investment_analyst:investment_analyst@postgres:5432/investment_analyst}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+    ports:
+      - "8000:8000"
+      - "8565:8565"
+      - "8566:8566"
+      - "8567:8567"
+      - "8568:8568"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    volumes:
+      - ./data:/app/data
+
+volumes:
+  pgdata:
+  qdrant_storage:

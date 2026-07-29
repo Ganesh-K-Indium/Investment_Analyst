@@ -5,7 +5,9 @@ Manages chat sessions, history retrieval, export, and clearing across all agents
 from fastapi import APIRouter, HTTPException, Depends, Response, Query, status
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-from sqlalchemy.orm import Session
+from sqlalchemy import select, update, delete as sa_delete
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.database.connection import get_db_session
 from app.services.chat import ChatService
 from app.database.models import AgentType, ChatSession, ChatMessage, ConsolidatedSummary
@@ -107,28 +109,31 @@ class ConsolidatedSummaryResponse(BaseModel):
     generated_at: str
 
 @router.get("/session/{session_id}/summary", response_model=ChatSummaryResponse)
-def get_session_summary(
+async def get_session_summary(
     session_id: str,
     agent_type: Optional[str] = None,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Get cached chat summary from database (fast, no LLM call).
-    
+
     Use POST endpoint to generate/store new summary.
     """
-    summary = ChatService.get_session_summary(db, session_id)
-    
+    summary = await ChatService.get_session_summary(db, session_id)
+
     if not summary:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail="No summary available. Generate one using POST /chats/session/{session_id}/summary"
         )
-    
-    chat_session = db.query(ChatSession).filter(
-        ChatSession.session_id == session_id
-    ).first()
-    
+
+    result = await db.execute(
+        select(ChatSession)
+        .where(ChatSession.session_id == session_id)
+        .options(selectinload(ChatSession.messages))
+    )
+    chat_session = result.scalar_one_or_none()
+
     return ChatSummaryResponse(
         session_id=session_id,
         summary=summary,
@@ -139,11 +144,11 @@ def get_session_summary(
 
 # Add this new endpoint (place after existing endpoints)
 @router.post("/session/{session_id}/summary", response_model=str)
-def generate_session_summary(
+async def generate_session_summary(
     session_id: str,
     request: ChatSummaryRequest,
     agent_type: Optional[str] = Query(None, description="Agent type (rag/quant)"),
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Generate LLM-powered summary of chat session.
@@ -153,7 +158,7 @@ def generate_session_summary(
     - llm_model: LLM model to use (default: gpt-4o-mini)
     """
     try:
-        summary = ChatService.generate_chat_summary(
+        summary = await ChatService.generate_chat_summary(
             db=db,
             session_id=session_id,
             max_messages=request.max_messages,
@@ -173,9 +178,9 @@ def generate_session_summary(
 
 
 @router.post("/sessions/consolidated-summary", response_model=ConsolidatedSummaryResponse)
-def generate_consolidated_summary(
+async def generate_consolidated_summary(
     request: ConsolidatedSummaryRequest,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Generate a single consolidated summary across multiple chat sessions.
@@ -189,7 +194,7 @@ def generate_consolidated_summary(
     - llm_model: LLM model to use (default: gpt-4o-mini)
     """
     try:
-        result = ChatService.generate_consolidated_summary(
+        result = await ChatService.generate_consolidated_summary(
             db=db,
             session_ids=request.session_ids,
             max_messages_per_session=request.max_messages_per_session,
@@ -217,62 +222,65 @@ def generate_consolidated_summary(
 
 
 @router.get("/user/{user_id}/summaries", response_model=SummariesByAgentResponse)
-def get_user_summaries(
+async def get_user_summaries(
     user_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Get all cached summaries for a user grouped by agent type (rag and quant).
     Returns only sessions with summaries that are active.
     """
     try:
-        summaries = ChatService.get_user_summaries_by_agent(db, user_id)
+        summaries = await ChatService.get_user_summaries_by_agent(db, user_id)
         return SummariesByAgentResponse(**summaries)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/session/{session_id}/summary", status_code=status.HTTP_200_OK)
-def delete_session_summary(
+async def delete_session_summary(
     session_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Clear the summary from a single session or delete a consolidated summary row."""
     if session_id.startswith("consolidated-"):
         row_id = int(session_id.split("-", 1)[1])
-        row = db.query(ConsolidatedSummary).filter(ConsolidatedSummary.id == row_id).first()
+        result = await db.execute(select(ConsolidatedSummary).where(ConsolidatedSummary.id == row_id))
+        row = result.scalar_one_or_none()
         if not row:
             raise HTTPException(status_code=404, detail="Consolidated summary not found")
-        db.delete(row)
+        await db.delete(row)
     else:
-        session = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        session = result.scalar_one_or_none()
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         session.summary = None
         session.summary_updated_at = None
-    db.commit()
+    await db.commit()
     return {"message": "Summary deleted"}
 
 
 @router.delete("/user/{user_id}/summaries", status_code=status.HTTP_200_OK)
-def clear_all_user_summaries(
+async def clear_all_user_summaries(
     user_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Clear all summaries for a user — nullifies ChatSession summaries and deletes consolidated rows."""
-    db.query(ChatSession).filter(
-        ChatSession.user_id == user_id,
-        ChatSession.summary.isnot(None)
-    ).update({"summary": None, "summary_updated_at": None})
-    db.query(ConsolidatedSummary).filter(ConsolidatedSummary.user_id == user_id).delete()
-    db.commit()
+    await db.execute(
+        update(ChatSession)
+        .where(ChatSession.user_id == user_id, ChatSession.summary.isnot(None))
+        .values(summary=None, summary_updated_at=None)
+    )
+    await db.execute(sa_delete(ConsolidatedSummary).where(ConsolidatedSummary.user_id == user_id))
+    await db.commit()
     return {"message": "All summaries cleared"}
 
 
 @router.post("/session")
-def create_chat_session(
+async def create_chat_session(
     payload: CreateChatSessionRequest,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Register a new chat session in the database before any messages are sent.
@@ -288,7 +296,7 @@ def create_chat_session(
         )
 
     try:
-        chat_session = ChatService.create_or_get_chat_session(
+        chat_session = await ChatService.create_or_get_chat_session(
             db=db,
             session_id=payload.session_id,
             user_id=payload.user_id,
@@ -309,16 +317,16 @@ def create_chat_session(
 
 
 @router.get("/user/{user_id}/sessions", response_model=List[ChatSessionResponse])
-def get_user_chat_sessions(
+async def get_user_chat_sessions(
     user_id: str,
     agent_type: Optional[str] = None,
     portfolio_id: Optional[int] = None,
     include_inactive: bool = False,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Get all chat sessions for a user.
-    
+
     Query Parameters:
     - agent_type: Filter by agent type (rag or quant)
     - portfolio_id: Filter by portfolio
@@ -329,8 +337,8 @@ def get_user_chat_sessions(
         agent_filter = None
         if agent_type:
             agent_filter = AgentType(agent_type.lower())
-        
-        sessions = ChatService.get_user_sessions(
+
+        sessions = await ChatService.get_user_sessions(
             db=db,
             user_id=user_id,
             agent_type=agent_filter,
@@ -362,30 +370,29 @@ def get_user_chat_sessions(
 
 
 @router.get("/session/{session_id}", response_model=ChatHistoryResponse)
-def get_session_chat_history(
+async def get_session_chat_history(
     session_id: str,
     limit: Optional[int] = None,
     offset: Optional[int] = 0,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Get complete chat history for a session.
-    
+
     Query Parameters:
     - limit: Maximum number of messages to return
     - offset: Skip first N messages (for pagination)
     """
     try:
         # Get session
-        chat_session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_id
-        ).first()
-        
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        chat_session = result.scalar_one_or_none()
+
         if not chat_session:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        
+
         # Get messages
-        messages = ChatService.get_session_messages(
+        messages = await ChatService.get_session_messages(
             db=db,
             session_id=session_id,
             limit=limit,
@@ -418,19 +425,19 @@ def get_session_chat_history(
 
 
 @router.get("/session/{session_id}/export")
-def export_session(
+async def export_session(
     session_id: str,
     format: str = "json",
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Export chat session to JSON or TXT format.
-    
+
     Query Parameters:
     - format: Export format (json or txt)
     """
     try:
-        export_data = ChatService.export_session(db, session_id)
+        export_data = await ChatService.export_session(db, session_id)
         
         if not export_data:
             raise HTTPException(status_code=404, detail="Chat session not found")
@@ -485,14 +492,14 @@ def export_session(
 
 
 @router.put("/session/{session_id}/title")
-def update_session_title(
+async def update_session_title(
     session_id: str,
     payload: UpdateTitleRequest,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Update the title of a chat session"""
     try:
-        chat_session = ChatService.update_session_title(
+        chat_session = await ChatService.update_session_title(
             db=db,
             session_id=session_id,
             title=payload.title
@@ -514,16 +521,16 @@ def update_session_title(
 
 
 @router.delete("/session/{session_id}/messages")
-def clear_session_messages(
+async def clear_session_messages(
     session_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Clear all messages from a session (keeps the session).
     Useful for starting fresh while maintaining session metadata.
     """
     try:
-        count = ChatService.clear_session_messages(db, session_id)
+        count = await ChatService.clear_session_messages(db, session_id)
 
         if count == -1:
             raise HTTPException(status_code=404, detail="Chat session not found")
@@ -541,16 +548,16 @@ def clear_session_messages(
 
 
 @router.delete("/session/{session_id}")
-def delete_session(
+async def delete_session(
     session_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Permanently delete a chat session and all its messages.
     This action cannot be undone.
     """
     try:
-        success = ChatService.delete_session(db, session_id)
+        success = await ChatService.delete_session(db, session_id)
         
         if not success:
             raise HTTPException(status_code=404, detail="Chat session not found")
@@ -567,16 +574,16 @@ def delete_session(
 
 
 @router.post("/session/{session_id}/deactivate")
-def deactivate_session(
+async def deactivate_session(
     session_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Mark a session as inactive (soft delete).
     Session is hidden but can be recovered.
     """
     try:
-        success = ChatService.deactivate_session(db, session_id)
+        success = await ChatService.deactivate_session(db, session_id)
         
         if not success:
             raise HTTPException(status_code=404, detail="Chat session not found")
@@ -593,13 +600,13 @@ def deactivate_session(
 
 
 @router.get("/session/{session_id}/stats")
-def get_session_stats(
+async def get_session_stats(
     session_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Get statistics for a chat session"""
     try:
-        stats = ChatService.get_session_stats(db, session_id)
+        stats = await ChatService.get_session_stats(db, session_id)
         
         if not stats:
             raise HTTPException(status_code=404, detail="Chat session not found")
@@ -613,13 +620,13 @@ def get_session_stats(
 
 
 @router.get("/user/{user_id}/stats", response_model=ChatStatsResponse)
-def get_user_stats(
+async def get_user_stats(
     user_id: str,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """Get statistics for all user's chat sessions"""
     try:
-        stats = ChatService.get_user_stats(db, user_id)
+        stats = await ChatService.get_user_stats(db, user_id)
         return ChatStatsResponse(**stats)
         
     except Exception as e:
@@ -627,14 +634,14 @@ def get_user_stats(
 
 
 @router.get("/portfolio/{portfolio_id}/sessions", response_model=List[ChatSessionResponse])
-def get_portfolio_chat_sessions(
+async def get_portfolio_chat_sessions(
     portfolio_id: int,
     agent_type: Optional[str] = None,
-    db: Session = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Get all chat sessions for a portfolio.
-    
+
     Query Parameters:
     - agent_type: Filter by agent type (rag or quant)
     """
@@ -643,8 +650,8 @@ def get_portfolio_chat_sessions(
         agent_filter = None
         if agent_type:
             agent_filter = AgentType(agent_type.lower())
-        
-        sessions = ChatService.get_portfolio_sessions(
+
+        sessions = await ChatService.get_portfolio_sessions(
             db=db,
             portfolio_id=portfolio_id,
             agent_type=agent_filter
