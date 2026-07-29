@@ -8,6 +8,7 @@ uvicorn[standard]>=0.30.0
 pydantic>=2.7.0
 python-multipart>=0.0.9
 aiofiles>=23.2.1
+python-dateutil>=2.9.0
 
 # Core Python utilities
 python-dotenv>=1.0.0

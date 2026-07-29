@@ -145,19 +145,36 @@ def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
     prior_year = year_int - 1
 
     for company in companies:
+        # Fiscal-year-end phrasing: most filers use a calendar fiscal year
+        # (year ended December 31), so keep that exact language for them —
+        # this is the majority case and preserves existing retrieval output.
+        # Known non-calendar filers (Apple, Microsoft, etc.) get generic
+        # "fiscal year end {year}" phrasing instead, since asserting
+        # "December 31" for them would be factually wrong and could bias
+        # retrieval toward the wrong period.
+        from app.utils.company_mapping import get_ticker as _get_ticker, get_fiscal_year_end_month as _get_fye_month
+        _ticker = _get_ticker(company)
+        _fye_month = _get_fye_month(_ticker) if _ticker else 12
+        if _fye_month == 12:
+            year_end_phrase = f"year ended December 31 {year}"
+            balance_date_phrase = f"as of December 31 {year}"
+        else:
+            year_end_phrase = f"fiscal year {year} annual period"
+            balance_date_phrase = f"as of fiscal year end {year}"
+
         # 1. REVENUE - Exact 10-K language
         sub_queries.append(
-            f"{company} total revenues net revenues year ended December 31 {year} consolidated statements of operations"
+            f"{company} total revenues net revenues {year_end_phrase} consolidated statements of operations"
         )
 
         # 2. NET INCOME - Exact bottom-line metric
         sub_queries.append(
-            f"{company} net income loss year ended December 31 {year} per share diluted basic"
+            f"{company} net income loss {year_end_phrase} per share diluted basic"
         )
 
         # 3. OPERATING INCOME - Before tax line
         sub_queries.append(
-            f"{company} income from operations operating income year ended December 31 {year}"
+            f"{company} income from operations operating income {year_end_phrase}"
         )
 
         # 4. EARNINGS GROWTH - Explicit comparison language
@@ -167,17 +184,17 @@ def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
 
         # 5. R&D EXPENSES - Operating cost breakout
         sub_queries.append(
-            f"{company} research and development costs and expenses year ended December 31 {year}"
+            f"{company} research and development costs and expenses {year_end_phrase}"
         )
 
         # 6. TOTAL ASSETS - Balance sheet specific date
         sub_queries.append(
-            f"{company} total assets as of December 31 {year} consolidated balance sheets"
+            f"{company} total assets {balance_date_phrase} consolidated balance sheets"
         )
 
         # 7. TOTAL DEBT - Long-term obligations
         sub_queries.append(
-            f"{company} long-term debt total liabilities as of December 31 {year} balance sheets"
+            f"{company} long-term debt total liabilities {balance_date_phrase} balance sheets"
         )
 
         # 8. PROFIT DRIVERS - MD&A results section
@@ -252,7 +269,93 @@ def detect_segment_or_geographic_query(question: str) -> str:
 def _extract_years_from_question(question: str) -> list:
     """Extract explicitly mentioned 4-digit years (2000-2029) from the user question."""
     years = sorted(set(int(y) for y in re.findall(r'\b(20[0-2][0-9])\b', question)))
-    return years if years else [2025]
+    return years if years else [datetime.now().year]
+
+
+# Pure keyword heuristic for filing-type inference — zero LLM/embedding cost.
+# Order matters: check 8-K (event) and 10-Q (quarterly) before falling back to
+# 10-K, since "10-K" mentions are the most common false-positive-free signal
+# but quarterly/event language should win when both could plausibly apply.
+_FILING_TYPE_10K_KEYWORDS = [
+    "10-k", "10k", "annual report", "full year", "full-year", "fiscal year annual",
+    "yearly results", "3-year", "three-year", "comparative financials",
+]
+_FILING_TYPE_10Q_KEYWORDS = [
+    "10-q", "10q", "quarterly", "quarter", "q1", "q2", "q3", "q4",
+    "latest quarter", "most recent quarter", "this quarter", "last quarter",
+    "sequential", "qoq", "quarter-over-quarter",
+]
+_FILING_TYPE_8K_KEYWORDS = [
+    "8-k", "8k", "material event", "press release", "announced", "announcement",
+    "departure", "resignation", "appointed", "appointment", "acquisition of",
+    "merger agreement", "guidance update", "restructuring announcement",
+    "executive change", "ceo change", "cfo change",
+]
+
+
+def detect_filing_type_in_query(question: str) -> Optional[str]:
+    """
+    Infer which SEC filing type (10-K / 10-Q / 8-K) a query implies, using
+    pure keyword heuristics — no LLM call. Returns None when the query
+    doesn't clearly imply a specific filing type, which means "search all
+    filing types" (the safe default that preserves pre-existing behavior for
+    collections/queries where filing type isn't a meaningful signal).
+    """
+    if not question:
+        return None
+    q = question.lower()
+
+    # Explicit type mentions win outright, regardless of order below.
+    if re.search(r'\b10-?k\b', q):
+        return "10-K"
+    if re.search(r'\b10-?q\b', q):
+        return "10-Q"
+    if re.search(r'\b8-?k\b', q):
+        return "8-K"
+
+    if any(kw in q for kw in _FILING_TYPE_8K_KEYWORDS):
+        return "8-K"
+    if any(kw in q for kw in _FILING_TYPE_10Q_KEYWORDS):
+        return "10-Q"
+    if any(kw in q for kw in _FILING_TYPE_10K_KEYWORDS):
+        return "10-K"
+
+    return None
+
+
+_QUARTER_WORDS = {
+    "first quarter": 1, "1st quarter": 1,
+    "second quarter": 2, "2nd quarter": 2,
+    "third quarter": 3, "3rd quarter": 3,
+    "fourth quarter": 4, "4th quarter": 4,
+}
+
+
+def extract_fiscal_quarter_from_question(question: str) -> Optional[int]:
+    """
+    Extract which fiscal quarter (1-4) the question refers to, if any —
+    "Q1"/"Q1 2025"/"first quarter" all resolve to a plain quarter NUMBER.
+
+    Deliberately does NOT attempt to resolve this to a calendar date range
+    here — that would require guessing which company's fiscal calendar
+    applies, and this function runs before tickers are even resolved. The
+    quarter number itself is unambiguous (the user said "Q1"); per-ticker
+    calendar interpretation happens later once we know which companies are
+    involved (see get_fiscal_quarter_calendar_span in company_mapping.py).
+    """
+    if not question:
+        return None
+    q = question.lower()
+
+    m = re.search(r'\bq([1-4])\b', q)
+    if m:
+        return int(m.group(1))
+
+    for phrase, quarter in _QUARTER_WORDS.items():
+        if phrase in q:
+            return quarter
+
+    return None
 
 
 def generate_segment_subqueries(companies: list, question: str = "") -> dict:
@@ -403,7 +506,9 @@ def preprocess_and_analyze_query(state):
             "companies_detected": comparison_companies,
             "sub_query_analysis": sub_query_analysis,
             "requested_years": sub_query_analysis["requested_years"],
-            "sub_query_results": {}
+            "sub_query_results": {},
+            "filing_type": detect_filing_type_in_query(question),
+            "requested_fiscal_quarter": extract_fiscal_quarter_from_question(question)
         }
 
     # -------------------------------------------------------------
@@ -434,7 +539,9 @@ def preprocess_and_analyze_query(state):
                 "companies_detected": companies,
                 "sub_query_analysis": sub_query_analysis,
                 "requested_years": sub_query_analysis["requested_years"],
-                "sub_query_results": {}
+                "sub_query_results": {},
+                "filing_type": detect_filing_type_in_query(question),
+                "requested_fiscal_quarter": extract_fiscal_quarter_from_question(question)
             }
         else:
             print(f"  {seg_geo_type.upper()} query detected but no companies identified, falling through to LLM analysis")
@@ -453,6 +560,10 @@ def preprocess_and_analyze_query(state):
     # Analyze the question
     analysis = sub_query_analyzer.invoke({"question": question})
     
+    # filing_type: prefer the LLM's structured hint (free — rides the existing
+    # call), fall back to the keyword heuristic if the LLM left it unresolved.
+    filing_type = getattr(analysis, "filing_type_hint", None) or detect_filing_type_in_query(question)
+
     # Convert to dict for state storage
     sub_query_analysis = {
         "needs_sub_queries": analysis.needs_sub_queries,
@@ -462,13 +573,14 @@ def preprocess_and_analyze_query(state):
         "requested_years": analysis.requested_years,
         "reasoning": analysis.reasoning
     }
-    
+
     # Log analysis results
     print(f"[ANALYSIS] Query Type: {analysis.query_type}")
     print(f"[ANALYSIS] Companies: {analysis.companies_detected if analysis.companies_detected else 'None'}")
     print(f"[ANALYSIS] Needs Sub-Queries: {analysis.needs_sub_queries}")
     print(f"[ANALYSIS] Requested Years: {analysis.requested_years}")
-    
+    print(f"[ANALYSIS] Filing Type: {filing_type or 'unresolved (search all)'}")
+
     if analysis.needs_sub_queries:
         print(f"[ANALYSIS] Generated {len(analysis.sub_queries)} sub-queries:")
         for i, sq in enumerate(analysis.sub_queries, 1):
@@ -476,13 +588,15 @@ def preprocess_and_analyze_query(state):
         print(f"[ANALYSIS] Reasoning: {analysis.reasoning}")
     else:
         print(f"[ANALYSIS] Direct retrieval recommended: {analysis.reasoning}")
-    
+
     # Return state updates
     return {
         "companies_detected": analysis.companies_detected,
         "sub_query_analysis": sub_query_analysis,
         "requested_years": analysis.requested_years,
-        "sub_query_results": {}
+        "sub_query_results": {},
+        "filing_type": filing_type,
+        "requested_fiscal_quarter": extract_fiscal_quarter_from_question(question)
     }
 
 def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
@@ -534,6 +648,24 @@ def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
                         break
 
     return matched_tickers
+
+
+async def _hybrid_search_with_quarter_fallback(db_instance, fiscal_quarter: Optional[int], **kwargs):
+    """
+    Wrap hybrid_search with a safe fallback for the fiscal_quarter filter:
+    try WITH the quarter filter first (precise), but if it returns nothing,
+    retry WITHOUT it. This protects against the exact scenario where a
+    collection has real 10-Q data that predates fiscal_quarter tagging (or
+    the ingested doc's fiscal_quarter didn't resolve at ingestion time) — a
+    hard filter on an untagged field would otherwise silently return zero
+    results for data that's actually there and relevant.
+    """
+    if fiscal_quarter:
+        results = await db_instance.hybrid_search(fiscal_quarter=fiscal_quarter, **kwargs)
+        if results:
+            return results
+        print(f"    No results with fiscal_quarter={fiscal_quarter} filter (likely un-tagged older data) — retrying without it")
+    return await db_instance.hybrid_search(**kwargs)
 
 
 async def retrieve(state, config):
@@ -589,20 +721,50 @@ async def retrieve(state, config):
     # Fall back to sub_query_analysis for backward compatibility
     requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [2025]
 
+    # filing_type: resolved by preprocess_and_analyze_query via keyword heuristic
+    # (+ free LLM structured-output field). None means "unresolved — search all
+    # filing types", which is the pre-existing behavior for every query today.
+    filing_type = state.get("filing_type")
+
+    comparison_spans_multiple_filings = False
+    comparison_span_details = None
+
     # SEGMENT / GEOGRAPHIC OPTIMISATION:
-    # A 10-K covers the filing year + 2 prior years (3-year comparative).
-    #  span == 2  →  e.g. [2022, 2023, 2024]: the 2024 10-K already contains all three
-    #                years → query ONLY the last year.
-    #  span  > 2  →  e.g. [2020..2024]: no single 10-K covers the full range → query
-    #                first + last (their 10-Ks together cover the entire window).
+    # A 10-K covers the filing year + 2 prior years (3-year comparative). This
+    # collapse ONLY applies to 10-K-sourced data — 10-Qs are single-quarter
+    # (no 3-year comparative table) and 8-Ks are single-event (no multi-year
+    # structure at all). When filing_type is None/unresolved or explicitly
+    # "10-K", behavior is byte-for-byte identical to before this branch existed.
     if query_type in ("segment", "geographic") and len(requested_years) > 1:
-        year_span = requested_years[-1] - requested_years[0]
-        if year_span == 2:
-            requested_years = [requested_years[-1]]
-            print(f" Span=2y → querying only [{requested_years[0]}] (single 10-K covers all 3 years)")
-        elif year_span > 2:
-            requested_years = [requested_years[0], requested_years[-1]]
-            print(f" Span={year_span}y → querying [{requested_years[0]}, {requested_years[-1]}] (first+last 10-K covers full range)")
+        if filing_type in (None, "10-K"):
+            year_span = requested_years[-1] - requested_years[0]
+            if year_span == 2:
+                comparison_spans_multiple_filings = False
+                requested_years = [requested_years[-1]]
+                print(f" Span=2y → querying only [{requested_years[0]}] (single 10-K covers all 3 years)")
+            elif year_span > 2:
+                comparison_spans_multiple_filings = True
+                comparison_span_details = (
+                    f"Requested years {requested_years[0]}-{requested_years[-1]} span more than one "
+                    f"10-K's 3-year comparative window; queried the {requested_years[0]} and "
+                    f"{requested_years[-1]} 10-Ks together to cover the full range."
+                )
+                requested_years = [requested_years[0], requested_years[-1]]
+                print(f" Span={year_span}y → querying [{requested_years[0]}, {requested_years[-1]}] (first+last 10-K covers full range)")
+        elif filing_type == "10-Q":
+            # No 3-year comparative window on a 10-Q — query each requested
+            # year/quarter individually rather than collapsing.
+            print(f" filing_type=10-Q → no 3-year window collapse, querying each requested year individually: {requested_years}")
+            if len(requested_years) > 1:
+                comparison_spans_multiple_filings = True
+                comparison_span_details = (
+                    f"Requested years {requested_years} span multiple 10-Q filings (each a single "
+                    f"quarter, not directly comparable to a 10-K's audited annual figures)."
+                )
+        elif filing_type == "8-K":
+            # Single point-in-time event — a multi-year span is a no-op here,
+            # just keep the requested years as-is (no comparative structure to collapse).
+            print(f" filing_type=8-K → single-event filing, no window collapse applied: {requested_years}")
 
     target_tickers = set()
 
@@ -647,10 +809,42 @@ async def retrieve(state, config):
                         target_tickers.add(company_name.lower())
 
     print(f" Identified Target Tickers: {list(target_tickers) or 'None'}")
-    
+
     # If primary_ticker was empty, set it to the first found ticker for downstream consistency
     if not primary_ticker and target_tickers:
         primary_ticker = list(target_tickers)[0]
+
+    # requested_fiscal_quarter: resolved by preprocess_and_analyze_query from
+    # plain "Q1"/"first quarter" phrasing — an unambiguous quarter NUMBER.
+    # Whether that number means the same calendar months for every company
+    # in this query depends on each ticker's fiscal calendar, checked next.
+    requested_fiscal_quarter = state.get("requested_fiscal_quarter")
+
+    if requested_fiscal_quarter and len(target_tickers) > 1:
+        from app.utils.company_mapping import get_fiscal_year_end_month, get_fiscal_quarter_calendar_span
+        fye_months = {t: get_fiscal_year_end_month(t) for t in target_tickers}
+        if len(set(fye_months.values())) > 1:
+            # Different fiscal calendars → the SAME quarter number covers
+            # DIFFERENT calendar months for each company. Flag it so the
+            # prompt warns the user instead of presenting a clean comparison.
+            comparison_spans_multiple_filings = True
+            spans = ", ".join(
+                f"{t.upper()} ({get_fiscal_quarter_calendar_span(t, requested_fiscal_quarter)})"
+                for t in sorted(target_tickers)
+            )
+            note = (
+                f"Requested fiscal Q{requested_fiscal_quarter} does not cover the same calendar "
+                f"months for every company here, since they have different fiscal year ends: {spans}."
+            )
+            comparison_span_details = (
+                f"{comparison_span_details} {note}" if comparison_span_details else note
+            )
+            print(f" Fiscal quarter misalignment detected: {note}")
+
+    # Only meaningful (and only ever tagged) on 10-Q chunks — applying it
+    # when filing_type isn't resolved to "10-Q" would incorrectly exclude
+    # 10-K/8-K chunks that never carry this field.
+    fiscal_quarter_filter = requested_fiscal_quarter if filing_type == "10-Q" else None
 
     # ============================================================================
     # SUB-QUERY MODE: Targeted retrieval for each sub-query (Multi-Collection)
@@ -695,10 +889,13 @@ async def retrieve(state, config):
                     # Perform search per requested year to ensure representation
                     docs_from_ticker = 0
                     for year_filter in requested_years:
-                        search_results = await db_instance.hybrid_search(
+                        search_results = await _hybrid_search_with_quarter_fallback(
+                            db_instance,
+                            fiscal_quarter=fiscal_quarter_filter,
                             query=sq,
                             content_type=None,
                             years=[year_filter],
+                            filing_type=filing_type,
                             limit=5, # Reduced limit per ticker/sub-query
                             dense_limit=50,
                             sparse_limit=50
@@ -785,11 +982,14 @@ async def retrieve(state, config):
                     
                     current_collection_docs = 0
                     for year_filter in requested_years:
-                        search_results = await db_instance.hybrid_search(
+                        search_results = await _hybrid_search_with_quarter_fallback(
+                            db_instance,
+                            fiscal_quarter=fiscal_quarter_filter,
                             query=question,
                             content_type=None,
                             years=[year_filter],
-                            limit=10, 
+                            filing_type=filing_type,
+                            limit=10,
                             dense_limit=100,
                             sparse_limit=100
                         )
@@ -847,7 +1047,11 @@ async def retrieve(state, config):
         "documents": all_documents,
         "vectorstore_searched": True,
         "sub_query_results": sub_query_results,
-        "ticker": primary_ticker  # Store resolved ticker in state
+        "ticker": primary_ticker,  # Store resolved ticker in state
+        "filing_type": filing_type,
+        "comparison_spans_multiple_filings": comparison_spans_multiple_filings,
+        "comparison_span_details": comparison_span_details,
+        "requested_fiscal_quarter": requested_fiscal_quarter
     }
 
 
@@ -943,7 +1147,8 @@ def generate(state):
     if alpha_pillar:
         print(f" [GENERATE] Alpha pillar mode: {alpha_pillar}")
 
-    rag_chain = get_rag_chain(llm, query_type=query_type, alpha_pillar=alpha_pillar)
+    comparison_span_note = state.get("comparison_span_details") if state.get("comparison_spans_multiple_filings") else None
+    rag_chain = get_rag_chain(llm, query_type=query_type, alpha_pillar=alpha_pillar, comparison_span_note=comparison_span_note)
     
     generation_input = {
         "documents": documents,
@@ -1124,21 +1329,27 @@ def web_search(state):
     # Optimize search query for SEC filings
     search_query = enriched_query if enriched_query != question else question
     question_lower = question.lower()
-    is_sec_filing_query = any(kw in question_lower for kw in 
-        ['10-k', '10k', '10-q', '10q', 'annual report', 'md&a', 'mda', 
+    is_sec_filing_query = any(kw in question_lower for kw in
+        ['10-k', '10k', '10-q', '10q', '8-k', '8k', 'annual report', 'md&a', 'mda',
          'management discussion', 'sec filing', 'edgar'])
-    
+
     target_company = companies_detected[0] if companies_detected else None
-    
+
     if is_sec_filing_query and target_company:
         print(f"---SEC FILING QUERY DETECTED FOR {target_company.upper()}---")
         import re
         years = re.findall(r'\b(20\d{2})\b', question)
-        
+
+        # Vary the SEC filing type in the search query by what's actually
+        # detected/inferred, instead of always assuming 10-K — a "latest
+        # quarter" or "recent announcement" question shouldn't be forced
+        # into a 10-K-only web search.
+        detected_filing_type = state.get("filing_type") or detect_filing_type_in_query(question) or "10-K"
+
         if 'md&a' in question_lower or 'management discussion' in question_lower:
-            search_query = f"{target_company} MD&A Management Discussion Analysis {' '.join(years) if years else ''} SEC 10-K site:sec.gov"
-        elif '10-k' in question_lower or 'annual report' in question_lower:
-            search_query = f"{target_company} 10-K annual report {' '.join(years) if years else ''} site:sec.gov"
+            search_query = f"{target_company} MD&A Management Discussion Analysis {' '.join(years) if years else ''} SEC {detected_filing_type} site:sec.gov"
+        else:
+            search_query = f"{target_company} {detected_filing_type} {' '.join(years) if years else ''} site:sec.gov"
         print(f"✓ Optimized search: {search_query}")
     
     # UNIVERSAL SUB-QUERY WEB SEARCH
@@ -1996,7 +2207,8 @@ async def alpha_dimension_retrieve(state):
     from langchain_tavily import TavilySearch
     
     vectordb_mgr = get_vectordb_manager()
-    _cur_yr = datetime.now().year - 1
+    from app.utils.company_mapping import get_most_recent_filed_fiscal_year
+    _cur_yr = get_most_recent_filed_fiscal_year(ticker)
     # All web searches restricted to trusted financial domains, capped to the last 1 year
     web_search = TavilySearch(max_results=3, include_domains=TRUSTED_FINANCIAL_DOMAINS, time_range="year")
     # Trends / notable trends (Horizon) fetched exclusively from SeekingAlpha, capped to the last 1 year
@@ -2451,7 +2663,7 @@ def alpha_generate_report(state):
                 )
 
         try:
-            chain = chain_func(llm)
+            chain = chain_func(llm, ticker=ticker) if dim_key == 'performance' else chain_func(llm)
             result = chain.invoke(invoke_kwargs)
 
             analysis = result.analysis

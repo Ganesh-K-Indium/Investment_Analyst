@@ -11,19 +11,22 @@ from schemas.models import (GradeHallucinations, GradeAnswer,
                                         StructuredFinancialData)
 
 
-def get_rag_chain(llm_generate, query_type: str = "general", alpha_pillar: str = None):
+def get_rag_chain(llm_generate, query_type: str = "general", alpha_pillar: str = None, comparison_span_note: str = None):
     cur_year = _current_year()
     
     # Base system prompt used for all queries
-    base_prompt = f"""You are a senior Investment Analyst with expertise in equity research, SEC filings (10-K, 10-Q), and financial statement analysis. You think like a Wall Street analyst — data-driven, precise, and always connecting numbers to investment implications.
+    base_prompt = f"""You are a senior Investment Analyst with expertise in equity research, SEC filings (10-K, 10-Q, 8-K), and financial statement analysis. You think like a Wall Street analyst — data-driven, precise, and always connecting numbers to investment implications.
 
 **YOUR ROLE:**
 Provide accurate, insightful, investment-grade answers grounded strictly in the provided documents. Go beyond data presentation — interpret what the numbers mean for investors.
 
 **DOCUMENT SOURCES:**
-Documents come from SEC 10-K filings, annual reports, or real-time web search results. Current fiscal year context: {cur_year}.
+Documents come from SEC 10-K, 10-Q, and 8-K filings, or real-time web search results. Current fiscal year context: {cur_year}. These filing types are NOT interchangeable:
+- **10-K** = comprehensive annual filing — audited, full 3-year comparative financial statements, complete segment/geographic/risk disclosure. The most complete document type.
+- **10-Q** = quarterly filing — UNAUDITED, covers a single quarter (or year-to-date), condensed footnotes, no multi-year comparative table. Do not expect 3-year comparative figures or full segment detail from a 10-Q.
+- **8-K** = event-driven disclosure — a single material event (M&A, executive change, guidance update, restructuring). Not a financial-statement source; do not expect balance sheet or income statement detail from an 8-K.
 - When you see "Source:" headers with URLs → web search results
-- Otherwise → authoritative 10-K/annual report data
+- Otherwise → authoritative SEC filing data — check which filing type each chunk is drawn from (10-K/10-Q/8-K) before assuming what level of detail it should contain
 
 **DATA EXTRACTION RULES:**
 - EXTRACT ALL relevant numerical data from documents — never say "not available" if numbers exist
@@ -197,6 +200,18 @@ OUTPUT FORMAT FOR INSIDER TRADING:
     if alpha_pillar_rules:
         dynamic_rules = alpha_pillar_rules  # pillar rules replace generic rules
 
+    cross_period_note = ""
+    if comparison_span_note:
+        cross_period_note = f"""
+
+**CROSS-PERIOD COMPARABILITY WARNING:**
+{comparison_span_note}
+Before presenting any comparison across these periods, explicitly tell the user that the compared
+figures are drawn from different filings/fiscal periods and may not be directly comparable
+(different fiscal calendars, potential segment/non-GAAP definition changes between filings,
+audited vs. unaudited figures). State this plainly rather than presenting the numbers as a clean
+apples-to-apples comparison."""
+
     closing_prompt = f"""
 **RESPONSE GUIDELINES:**
 - Speak as a professional investment analyst — never expose internal terms like "vectorstore", "retrieved documents", "web search results"
@@ -205,6 +220,10 @@ OUTPUT FORMAT FOR INSIDER TRADING:
 - For comparison, segment, and geographic queries: ALWAYS use markdown tabular format
 - For all other queries: use narrative with structured data points
 - **NEVER say "data not available"** if ANY relevant figures exist in the documents
+- If the retrieved documents span different filing types (10-K vs. 10-Q vs. 8-K), different fiscal
+  years, or a company whose fiscal year doesn't align with the calendar year, state this explicitly
+  before presenting any comparison — never silently blend incompatible periods or filing types as
+  if they were directly comparable{cross_period_note}
 
 **IMPORTANT:** Search every document thoroughly before concluding information is unavailable."""
 
@@ -379,7 +398,7 @@ Grade: no (completely irrelevant)
 
 def get_question_rewriter_chain(llm):
     cur_year = _current_year()
-    SYSTEM_QUESTION_REWRITER = f"""You are a financial research specialist that rewrites user questions into optimized queries for retrieving data from SEC 10-K filings and annual report documents stored in a vector database.
+    SYSTEM_QUESTION_REWRITER = f"""You are a financial research specialist that rewrites user questions into optimized queries for retrieving data from SEC 10-K, 10-Q, and 8-K filings stored in a vector database.
 
 **Your Goal**: Rewrite the question to maximize retrieval accuracy from financial documents.
 
@@ -392,6 +411,7 @@ def get_question_rewriter_chain(llm):
 6. **For ratio/metric queries**: include the formula components (e.g., "current ratio current assets current liabilities balance sheet")
 7. **For segment queries**: add "segment information reportable segments operating segments notes to financial statements"
 8. **For geographic queries**: add "geographic information revenue by region domestic international"
+9. **Preserve and sharpen filing-type intent**: if the question implies a specific filing type, make that explicit in the rewrite rather than leaving it implicit — "latest quarter" / "this quarter" / "Q1/Q2/Q3/Q4" → keep "quarterly" in the rewrite (implies 10-Q); "recent announcement" / "departure" / "acquisition" / "executive change" → keep that event language (implies 8-K); "full-year" / "annual" / "fiscal year comparison" → keep "annual" (implies 10-K). Do not strip these signals out during expansion — they help route retrieval to the right filing type.
 
 **Examples**:
 - "What's Tesla's ROE?" → "Tesla return on equity net income shareholders equity stockholders equity balance sheet income statement"
@@ -420,11 +440,17 @@ def get_universal_sub_query_analyzer(llm):
     from schemas.models import UniversalSubQueryAnalysis
     structured_llm = llm.with_structured_output(UniversalSubQueryAnalysis)
     
-    SYSTEM_PROMPT = """You are an ELITE FINANCIAL ANALYST AI with 20+ years of experience analyzing SEC filings, 10-K annual reports, and financial statements. You understand EXACTLY how financial data is structured, labeled, and hidden in 10-K documents. Your specialty is decomposing complex financial questions into precise sub-queries that retrieve the exact data needed.
+    SYSTEM_PROMPT = """You are an ELITE FINANCIAL ANALYST AI with 20+ years of experience analyzing SEC filings — 10-K annual reports, 10-Q quarterly reports, and 8-K event disclosures — and financial statements. You understand EXACTLY how financial data is structured, labeled, and hidden in these documents. Your specialty is decomposing complex financial questions into precise sub-queries that retrieve the exact data needed.
+
+**FILING TYPE DIFFERENCES (important for setting expectations, not just retrieval):**
+- **10-K** = audited annual filing, full 3-year comparative financial statements, complete segment/geographic/risk disclosure. The structure and terminology guidance below is written primarily around 10-Ks since they're the most complete document.
+- **10-Q** = unaudited quarterly filing, single-quarter or year-to-date figures, condensed footnotes (segment/geographic notes are typically abbreviated versions of the 10-K's, not absent, but far less detailed). No 3-year comparative table exists in a 10-Q.
+- **8-K** = event-driven disclosure (M&A, executive change, guidance update, restructuring) — NOT a financial-statement source. Do not generate sub-queries expecting balance sheet/income statement/segment detail from an 8-K; its content is about a specific event.
+- **Set `filing_type_hint`** based on what the question implies: "latest quarter"/"Q1-Q4"/"quarterly" → "10-Q"; a specific event ("announced", "departure", "acquisition of", "guidance update") → "8-K"; "annual"/"full-year"/multi-year comparative language, or no clear signal either way → "10-K" is the safest default only when the query is clearly annual/comparative in nature; otherwise leave it null so retrieval searches all filing types for that company/year.
 
 **YOUR EXPERTISE:**
-- **10-K Document Archaeology**: You know where EVERY type of financial data lives in 10-K reports
-- **Terminology Mastery**: You use multiple synonyms and variations because 10-K documents use different terms
+- **SEC Filing Document Archaeology**: You know where EVERY type of financial data lives across 10-K, 10-Q, and 8-K filings
+- **Terminology Mastery**: You use multiple synonyms and variations because SEC filings use different terms
 - **Financial Statement Fluency**: Balance Sheets, Income Statements, Cash Flow, MD&A, Notes, Schedules
 - **Calculation Intelligence**: You know every input needed for financial ratios and metrics
 - **Segment Data Specialist**: Expert at finding segment/business unit data (often hidden in notes)
@@ -1112,7 +1138,7 @@ Analyze the macro/micro environment (Liquidity dimension) using only the latest 
     return prompt | structured_llm
 
 
-def get_alpha_performance_chain(llm):
+def get_alpha_performance_chain(llm, ticker: str = None):
     """
     ALPHA - Performance: Earnings & Fundamentals Analysis
     Analyzes financials, calculates key metrics, detects anomalies
@@ -1120,10 +1146,15 @@ def get_alpha_performance_chain(llm):
     from schemas.models import AlphaDimensionOutput
     structured_llm = llm.with_structured_output(AlphaDimensionOutput)
 
-    # 10-K filings lag the calendar year — e.g. in 2026 the most recent FILED
-    # fiscal year is 2025, not 2026. Anchor the comparison one year back from
-    # "today" so we're not asking for a fiscal year whose 10-K doesn't exist yet.
-    fiscal_year = _current_year() - 1
+    # 10-K filings lag the FISCAL year, not necessarily the calendar year —
+    # e.g. Apple's FY2025 10-K (fiscal year ended Sept 2025) is filed ~Nov
+    # 2025, so by early 2026 FY2025 is the most recent filed 10-K, not
+    # FY2024. get_most_recent_filed_fiscal_year() accounts for each
+    # ticker's actual fiscal-year-end month; calendar-year filers (the
+    # default when ticker is unresolved) get the exact same `_current_year()
+    # - 1` result as before this change.
+    from app.utils.company_mapping import get_most_recent_filed_fiscal_year
+    fiscal_year = get_most_recent_filed_fiscal_year(ticker) if ticker else _current_year() - 1
     prior_year = fiscal_year - 1
     prior_year2 = fiscal_year - 2
 

@@ -154,11 +154,14 @@ def extract_company_name(file_name: str) -> str:
 VALID_FILING_TYPES = ("10-K", "10-Q", "8-K")
 
 
-def extract_filing_type_from_filename(file_name: str) -> str:
+def extract_filing_type_from_filename(file_name: str):
     """
-    Best-effort detection of SEC filing type from a file name.
-    Falls back to "10-K" (the only filing type ever ingested historically)
-    if no recognizable token is found.
+    Best-effort detection of SEC filing type from a file name alone.
+
+    Returns None if no recognizable token is found — callers must not treat
+    a missing filename token as "must be a 10-K". Filenames are the weakest
+    of the three signals (explicit param > document cover-page text >
+    filename), since a user can name an uploaded file anything.
     """
     # Normalize separators to spaces first — \b treats "_" as a word character,
     # so "AAPL_10Q_2024.pdf" would otherwise never match a \b...\b token boundary
@@ -171,7 +174,64 @@ def extract_filing_type_from_filename(file_name: str) -> str:
         return "10-Q"
     if re.search(r'\b8\s?k\b', normalized, flags=re.IGNORECASE):
         return "8-K"
-    return "10-K"
+    return None
+
+
+def extract_cover_page_info(pdf_document, max_pages: int = 3) -> dict:
+    """
+    Extract filing_type and period_end_date directly from the document's own
+    cover-page text — reliable regardless of how the file was named, since
+    SEC filings use a standardized cover page:
+      - 10-K:  "FORM 10-K" ... "for the fiscal year ended <date>"
+      - 10-Q:  "FORM 10-Q" ... "for the quarterly period ended <date>"
+      - 8-K:   "FORM 8-K"  ... "Date of Report (Date of earliest event reported): <date>"
+
+    Returns:
+        dict: {"filing_type": Optional[str], "period_end_date": Optional[str] (ISO date)}
+        Both None if the cover page doesn't match the standard pattern (e.g. a
+        non-SEC or non-standard document) — callers fall back to filename
+        heuristics, never to a silent guess.
+    """
+    result = {"filing_type": None, "period_end_date": None}
+
+    try:
+        cover_text = ""
+        for i, page in enumerate(pdf_document):
+            if i >= max_pages:
+                break
+            cover_text += page.get_text("text") + "\n"
+    except Exception as e:
+        print(f"Warning: Could not read cover-page text for filing_type/period_end_date detection: {e}")
+        return result
+
+    if not cover_text.strip():
+        return result
+
+    if re.search(r'\bform\s*10[-\s]?k\b', cover_text, re.IGNORECASE):
+        result["filing_type"] = "10-K"
+    elif re.search(r'\bform\s*10[-\s]?q\b', cover_text, re.IGNORECASE):
+        result["filing_type"] = "10-Q"
+    elif re.search(r'\bform\s*8[-\s]?k\b', cover_text, re.IGNORECASE):
+        result["filing_type"] = "8-K"
+
+    date_capture = r'([A-Za-z]+\s+\d{1,2},?\s+\d{4})'
+    date_match = (
+        re.search(r'for\s+the\s+fiscal\s+year\s+ended\s+' + date_capture, cover_text, re.IGNORECASE)
+        or re.search(r'for\s+the\s+year\s+ended\s+' + date_capture, cover_text, re.IGNORECASE)
+        or re.search(r'for\s+the\s+quarterly\s+period\s+ended\s+' + date_capture, cover_text, re.IGNORECASE)
+        or re.search(r'date\s+of\s+report[^:]*:\s*' + date_capture, cover_text, re.IGNORECASE)
+        or re.search(r'for\s+the\s+transition\s+period\s+from.*?to\s+' + date_capture, cover_text, re.IGNORECASE | re.DOTALL)
+    )
+
+    if date_match:
+        try:
+            from dateutil import parser as date_parser
+            parsed_date = date_parser.parse(date_match.group(1), fuzzy=True)
+            result["period_end_date"] = parsed_date.date().isoformat()
+        except Exception as e:
+            print(f"Warning: Found a period-end date phrase but couldn't parse '{date_match.group(1)}': {e}")
+
+    return result
 
 
 def extract_year_from_filename(file_name: str) -> int:
@@ -343,15 +403,22 @@ async def check_document_exists(db_loader, source_file_name: str, doc_type: str 
         print(f"Error checking document existence: {e}")
         return False, []
 
-async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None) -> dict:
+async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None,
+                                      period_end_date: str = None) -> dict:
     """
     Process a PDF file and return a structured result.
 
     Args:
         uploaded_pdf_path: Path to the PDF file
         ticker: Ticker symbol (optional)
-        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional; auto-detected
-            from the filename if omitted, defaulting to "10-K" if no token is found)
+        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional). Resolution
+            order: this explicit value > detected from the document's own cover-page
+            text > detected from the filename. Falls back to "10-K" with a loud
+            warning only if none of the three resolve — never a silent guess.
+        period_end_date: ISO date (YYYY-MM-DD) of the exact period this filing covers
+            (fiscal year end for a 10-K, fiscal quarter end for a 10-Q, event date for
+            an 8-K) — optional; pass this when the caller has an authoritative value
+            (e.g. SEC EDGAR's reportDate). Otherwise detected from cover-page text.
 
     Returns:
         dict: Processing result with status and details
@@ -361,6 +428,8 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
         "file_name": os.path.basename(uploaded_pdf_path),
         "ticker": ticker,
         "filing_type": filing_type,
+        "period_end_date": period_end_date,
+        "fiscal_quarter": None,
         "text_processed": False,
         "text_already_existed": False,
         "text_chunks": 0,
@@ -373,9 +442,9 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
 
     try:
         # Collect all progress messages
-        async for message in process_pdf_and_stream(uploaded_pdf_path, ticker, filing_type):
+        async for message in process_pdf_and_stream(uploaded_pdf_path, ticker, filing_type, period_end_date):
             result["messages"].append(message)
-            
+
             # Parse key information from messages
             if "already ingested (text)" in message:
                 result["text_already_existed"] = True
@@ -391,30 +460,47 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
                 match = re.search(r'Added (\d+) image captions', message)
                 if match:
                     result["image_count"] = int(match.group(1))
+            elif message.startswith("Resolved filing_type:"):
+                m = re.search(r"Resolved filing_type:\s*'?([\w-]+)'?", message)
+                if m:
+                    result["filing_type"] = m.group(1)
+            elif message.startswith("Resolved period_end_date:"):
+                m = re.search(r"Resolved period_end_date:\s*'?([\d-]+)'?", message)
+                if m:
+                    result["period_end_date"] = m.group(1)
+            elif "Derived fiscal_quarter" in message:
+                m = re.search(r"Derived fiscal_quarter Q(\d)", message)
+                if m:
+                    result["fiscal_quarter"] = int(m.group(1))
             elif "Error" in message:
                 result["error"] = message
-                
+
         # Determine overall success
         result["success"] = not result["error"] and (
             result["text_processed"] or result["text_already_existed"] or
             result["images_processed"] or result["images_already_existed"]
         )
-        
+
     except Exception as e:
         result["error"] = f"Processing failed: {str(e)}"
         result["messages"].append(result["error"])
-        
+
     return result
 
-async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None):
+async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None,
+                                  period_end_date: str = None):
     """
     Process a PDF file and stream progress updates.
 
     Args:
         uploaded_pdf_path: Path to the PDF file
         ticker: Ticker symbol (optional)
-        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional; auto-detected
-            from the filename if omitted, defaulting to "10-K" if no token is found)
+        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional). Resolution
+            order: this explicit value > document cover-page text > filename. Falls
+            back to "10-K" with a loud warning only if all three are inconclusive.
+        period_end_date: ISO date (YYYY-MM-DD) this filing covers (optional, explicit
+            override). Resolution order: this explicit value > cover-page text. Left
+            as None (never guessed) if neither resolves.
     """
     if not os.path.exists(uploaded_pdf_path):
         yield f"Error: File does not exist: {uploaded_pdf_path}"
@@ -427,13 +513,45 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
         source_file_name = os.path.basename(uploaded_pdf_path)
         company_name = extract_company_name(source_file_name)
 
+        # Resolve filing_type and period_end_date with a clear, non-silent
+        # priority order: explicit caller value > document cover-page text
+        # (reliable regardless of filename) > filename token (weakest signal,
+        # fails for arbitrary user-chosen filenames).
+        cover_info = extract_cover_page_info(pdf_document)
+
         if filing_type:
             if filing_type not in VALID_FILING_TYPES:
                 yield f"Error: Invalid filing_type '{filing_type}'. Must be one of {VALID_FILING_TYPES}."
                 return
+            yield f"Using explicitly provided filing_type '{filing_type}'"
+        elif cover_info["filing_type"]:
+            filing_type = cover_info["filing_type"]
+            yield f"Detected filing_type '{filing_type}' from document cover page (FORM {filing_type})"
         else:
-            filing_type = extract_filing_type_from_filename(source_file_name)
-            yield f"Auto-detected filing_type '{filing_type}' from filename '{source_file_name}'"
+            filename_filing_type = extract_filing_type_from_filename(source_file_name)
+            if filename_filing_type:
+                filing_type = filename_filing_type
+                yield f"Auto-detected filing_type '{filing_type}' from filename '{source_file_name}' (cover page didn't match a recognizable pattern)"
+            else:
+                filing_type = "10-K"
+                yield (
+                    f"WARNING: Could not determine filing_type from document cover page or filename "
+                    f"'{source_file_name}' — defaulting to '10-K'. Verify this is correct; pass filing_type "
+                    f"explicitly if not."
+                )
+        yield f"Resolved filing_type: '{filing_type}'"
+
+        if not period_end_date:
+            if cover_info["period_end_date"]:
+                period_end_date = cover_info["period_end_date"]
+                yield f"Detected period_end_date '{period_end_date}' from document cover page"
+            else:
+                yield (
+                    f"WARNING: Could not determine period_end_date from document cover page "
+                    f"for '{source_file_name}'. Leaving unset rather than guessing — retrieval "
+                    f"filters/comparisons that rely on an exact period will not have this filing's precise date."
+                )
+        yield f"Resolved period_end_date: '{period_end_date}'"
 
         # Derive ticker if not provided
         if not ticker:
@@ -442,6 +560,18 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                 yield f"Derived ticker '{ticker}' from company '{company_name}'"
             else:
                 yield f"Warning: Could not derive ticker for company '{company_name}'. Using default unified collection."
+
+        # Derive fiscal_quarter (1-4) for 10-Q filings ONLY — this is ground-truth
+        # derivation from the real period_end_date + the ticker's actual fiscal
+        # calendar, not a guess. 10-Ks cover the whole fiscal year (no single
+        # quarter) and 8-Ks are single events, so fiscal_quarter stays None for
+        # both — tagging either would be misleading.
+        fiscal_quarter = None
+        if filing_type == "10-Q" and period_end_date and ticker:
+            from app.utils.company_mapping import get_fiscal_quarter
+            fiscal_quarter = get_fiscal_quarter(period_end_date, ticker)
+            if fiscal_quarter:
+                yield f"Derived fiscal_quarter Q{fiscal_quarter} from period_end_date '{period_end_date}' and {ticker}'s fiscal calendar"
 
         # Determine collection name
         if ticker:
@@ -481,6 +611,8 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                         "content_hash": content_hash,
                         "year": extract_year_from_filename(source_file_name),
                         "filing_type": filing_type,
+                        "period_end_date": period_end_date,
+                        "fiscal_quarter": fiscal_quarter,
                         "ingestion_timestamp": str(datetime.now()),
                     }
                     documents.append(Document(page_content=text, metadata=metadata))
@@ -551,6 +683,8 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                         "content_hash": content_hash,
                         "year": extract_year_from_filename(source_file_name),
                         "filing_type": filing_type,
+                        "period_end_date": period_end_date,
+                        "fiscal_quarter": fiscal_quarter,
                         "ingestion_timestamp": str(datetime.now())
                     })
 

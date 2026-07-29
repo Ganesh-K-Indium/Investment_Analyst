@@ -33,6 +33,7 @@ def format_result(result: dict) -> str:
         f"File: {result['file_name']}",
         f"Ticker: {result.get('ticker', 'N/A')}",
         f"Filing type: {result.get('filing_type', 'N/A')}",
+        f"Period end date: {result.get('period_end_date') or 'N/A'}",
         f"Status: {'✓ SUCCESS' if result['success'] else '✗ FAILED'}",
         ""
     ]
@@ -61,15 +62,20 @@ def format_result(result: dict) -> str:
     return "\n".join(lines)
 
 
-async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None) -> dict:
+async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None, period_end_date: str = None) -> dict:
     """
     Ingest a PDF file and return the result.
 
     Args:
         pdf_path: Path to the PDF file
         ticker: Ticker symbol (optional)
-        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional; auto-detected
-            from the filename if omitted, defaulting to "10-K" if no token is found)
+        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional). Resolution
+            order if omitted: document cover-page text > filename token > "10-K"
+            default with a loud warning (never a silent guess).
+        period_end_date: ISO date (YYYY-MM-DD) this filing covers — fiscal year end
+            for a 10-K, fiscal quarter end for a 10-Q, event date for an 8-K
+            (optional; pass this when the caller has an authoritative value, e.g.
+            SEC EDGAR's reportDate — otherwise detected from cover-page text)
 
     Returns:
         dict: Processing result
@@ -103,7 +109,7 @@ async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None)
     if filing_type:
         print(f"Filing type: {filing_type}")
 
-    result = await process_pdf_and_get_result(pdf_path, ticker=ticker, filing_type=filing_type)
+    result = await process_pdf_and_get_result(pdf_path, ticker=ticker, filing_type=filing_type, period_end_date=period_end_date)
     return result
 
 
@@ -116,13 +122,18 @@ async def main():
         "--filing-type",
         choices=["10-K", "10-Q", "8-K"],
         default=None,
-        help="SEC filing type (optional; auto-detected from filename if omitted, defaulting to 10-K)",
+        help="SEC filing type (optional; detected from the document's cover page, then filename, if omitted)",
+    )
+    parser.add_argument(
+        "--period-end-date",
+        default=None,
+        help="ISO date (YYYY-MM-DD) this filing covers (optional; detected from cover page if omitted)",
     )
 
     args = parser.parse_args()
 
     # Process the PDF
-    result = await ingest_pdf(args.pdf_path, args.ticker, filing_type=args.filing_type)
+    result = await ingest_pdf(args.pdf_path, args.ticker, filing_type=args.filing_type, period_end_date=args.period_end_date)
 
     # Display formatted result
     print(format_result(result))

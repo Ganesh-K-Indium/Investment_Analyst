@@ -103,6 +103,8 @@ class load_vector_database():
                 "metadata.year": PayloadSchemaType.INTEGER,
                 "metadata.ingestion_timestamp": PayloadSchemaType.KEYWORD,
                 "metadata.filing_type": PayloadSchemaType.KEYWORD,
+                "metadata.period_end_date": PayloadSchemaType.KEYWORD,
+                "metadata.fiscal_quarter": PayloadSchemaType.INTEGER,
             }
 
             if not exists:
@@ -182,7 +184,8 @@ class load_vector_database():
         return vectorstore
     
     async def hybrid_search(self, query: str, content_type: str = None, company: str = None,
-                     years: list = None,
+                     years: list = None, filing_type: str = None, period_end_date: str = None,
+                     fiscal_quarter: int = None,
                      limit: int = 10, dense_limit: int = 100, sparse_limit: int = 100):
         """
         Advanced hybrid search using prefetch and fusion queries (RRF).
@@ -192,6 +195,16 @@ class load_vector_database():
             content_type: Filter by content type ("text" or "image"), None for both
             company: Filter by company name
             years: Filter by list of years
+            filing_type: Filter by SEC filing type ("10-K", "10-Q", "8-K"), None to search
+                all filing types in the collection (default — safe for collections that
+                predate filing_type tagging, and for queries where filing type wasn't inferred)
+            period_end_date: Filter by exact period-end date (ISO "YYYY-MM-DD" — fiscal
+                year end for a 10-K, fiscal quarter end for a 10-Q). None to search all
+                periods (default — most chunks don't have a caller-resolved exact date to
+                filter on, so this stays inert unless a caller has one)
+            fiscal_quarter: Filter by fiscal quarter number (1-4), only meaningful for
+                10-Q chunks (10-K/8-K chunks have this unset). None to search all quarters
+                (default). Safe to combine with filing_type="10-Q" and years.
             limit: Final number of results to return
             dense_limit: Number of results from dense vector search
             sparse_limit: Number of results from sparse (BM25) search
@@ -260,7 +273,28 @@ class load_vector_database():
                     match=models.MatchAny(any=years)
                 )
             )
-        
+        if filing_type:
+            filter_conditions.append(
+                models.FieldCondition(
+                    key="metadata.filing_type",
+                    match=models.MatchValue(value=filing_type)
+                )
+            )
+        if period_end_date:
+            filter_conditions.append(
+                models.FieldCondition(
+                    key="metadata.period_end_date",
+                    match=models.MatchValue(value=period_end_date)
+                )
+            )
+        if fiscal_quarter:
+            filter_conditions.append(
+                models.FieldCondition(
+                    key="metadata.fiscal_quarter",
+                    match=models.MatchValue(value=fiscal_quarter)
+                )
+            )
+
         global_filter = models.Filter(must=filter_conditions) if filter_conditions else None
         
         # Build hybrid query with prefetch and fusion

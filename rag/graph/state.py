@@ -78,3 +78,8 @@ class GraphState(TypedDict):
     macro_calculation_results: List[Dict[str, Any]]  # Step 2 output: deterministic calculation results from Python
     macro_report: str                      # Step 3 output: LLM-formatted final answer
     qdrant_error: Optional[str]            # Set when Qdrant connection fails (not collection-not-found)
+    # Filing-type-aware retrieval fields (RAG multi-filing-type support)
+    filing_type: Optional[str]             # Inferred/resolved filing type filter: "10-K" | "10-Q" | "8-K" | None (search all)
+    comparison_spans_multiple_filings: bool  # True when a requested year range required querying more than one filing/year window
+    comparison_span_details: Optional[str]   # Human-readable note on which years/filing types were combined, threaded to the generation prompt
+    requested_fiscal_quarter: Optional[int]  # Fiscal quarter (1-4) explicitly requested in the question (e.g. "Q1"), None if not quarter-specific

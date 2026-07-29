@@ -10,12 +10,14 @@ picks up exactly where it left off.
 Input modes (pick one):
 
   --manifest manifest.json
-      Explicit list of files with per-file ticker/filing_type, e.g.:
+      Explicit list of files with per-file ticker/filing_type/period_end_date, e.g.:
       [
-        {"path": "/data/AAPL_10K_2024.pdf", "ticker": "AAPL", "filing_type": "10-K"},
+        {"path": "/data/AAPL_10K_2024.pdf", "ticker": "AAPL", "filing_type": "10-K", "period_end_date": "2024-09-28"},
         {"path": "/data/AAPL_10Q_2024Q3.pdf", "ticker": "AAPL", "filing_type": "10-Q"}
       ]
-      "filing_type" is optional per-entry (auto-detected from filename if omitted).
+      "filing_type" and "period_end_date" are both optional per-entry — if omitted,
+      each is detected from the document's own cover-page text first, then filename
+      (filing_type only; period_end_date is never guessed from a filename).
 
   --dir /path/to/pdfs --ticker AAPL --filing-type 10-Q
       Recursively ingests every *.pdf under the directory, applying the same
@@ -153,6 +155,7 @@ async def main():
         path = entry["path"]
         ticker = entry.get("ticker")
         filing_type = entry.get("filing_type")
+        period_end_date = entry.get("period_end_date")
 
         if not os.path.exists(path):
             progress[path] = {
@@ -168,7 +171,7 @@ async def main():
             continue
 
         try:
-            result = await ingest_pdf(path, ticker=ticker, filing_type=filing_type)
+            result = await ingest_pdf(path, ticker=ticker, filing_type=filing_type, period_end_date=period_end_date)
         except Exception:
             tb = traceback.format_exc()
             progress[path] = {
@@ -188,6 +191,7 @@ async def main():
                 "status": "success",
                 "ticker": result.get("ticker"),
                 "filing_type": result.get("filing_type"),
+                "period_end_date": result.get("period_end_date"),
                 "text_chunks": result.get("text_chunks", 0),
                 "image_count": result.get("image_count", 0),
                 "timestamp": str(datetime.now()),

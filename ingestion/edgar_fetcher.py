@@ -9,6 +9,10 @@ embeddings via OpenAI's async client, upserts via Qdrant's AsyncQdrantClient.
 Filings ingest concurrently (bounded by a semaphore) without blocking the
 event loop or needing a thread-offload.
 
+Each filing's exact period_end_date is taken from EDGAR's own `reportDate`
+field (SEC ground truth, not re-derived from the document) and passed to
+ingest_pdf() as an explicit override.
+
 Supersedes the old root-level download_10q_pdfs.py (10-Q-only, hardcoded to
 AAPL/2025, no ingestion hookup).
 """
@@ -163,13 +167,27 @@ class SecEdgarFetcher:
             accession = accession_raw.replace("-", "")
             primary_doc = filings["primaryDocument"][i]
 
+            # EDGAR's `reportDate` is the actual period this filing covers (fiscal
+            # year end for a 10-K, fiscal quarter end for a 10-Q, event date for an
+            # 8-K) — distinct from `filingDate` (when it was submitted, typically
+            # weeks later). This is SEC ground truth, so it's passed to ingest_pdf()
+            # as an explicit override — it always wins over cover-page/filename
+            # detection rather than being re-derived.
+            report_date_str = filings.get("reportDate", [None] * len(filings["form"]))[i] or None
+
             filing_url = (
                 f"https://www.sec.gov/Archives/edgar/data/"
                 f"{int(cik)}/{accession}/{primary_doc}"
             )
             pdf_path = os.path.join(ticker_dir, f"{ticker.upper()}_{form.replace('/', '-')}_{filing_date_str}_{accession}.pdf")
 
-            to_fetch.append({"form": form, "filing_date": filing_date_str, "url": filing_url, "pdf_path": pdf_path})
+            to_fetch.append({
+                "form": form,
+                "filing_date": filing_date_str,
+                "period_end_date": report_date_str,
+                "url": filing_url,
+                "pdf_path": pdf_path
+            })
 
         results = []
         semaphore = asyncio.Semaphore(max_concurrent_ingests)
@@ -186,7 +204,10 @@ class SecEdgarFetcher:
                 if ingest:
                     async with semaphore:
                         from ingestion.ingest_pdf import ingest_pdf
-                        ingest_result = await ingest_pdf(item["pdf_path"], ticker=ticker.upper(), filing_type=item["form"])
+                        ingest_result = await ingest_pdf(
+                            item["pdf_path"], ticker=ticker.upper(), filing_type=item["form"],
+                            period_end_date=item.get("period_end_date")
+                        )
                     if ingest_result.get("success"):
                         result["status"] = "ingested"
                         result["chunks_added"] = ingest_result.get("text_chunks", 0)

@@ -28,7 +28,8 @@ class FileImportService:
         integration_id: int,
         file_paths: List[str],
         ticker: str,
-        filing_type: str = None
+        filing_type: str = None,
+        period_end_date: str = None
     ) -> List[Dict]:
         """
         Import files from an integration and ingest them into the vector database,
@@ -39,8 +40,15 @@ class FileImportService:
             integration_id: Integration ID to import from
             file_paths: List of file paths to import
             ticker: Ticker symbol for these files (e.g., AAPL, GOOGL)
-            filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional; auto-detected
-                from each file's name if omitted, defaulting to "10-K" if no token is found)
+            filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional). Resolution
+                order if omitted: each file's own cover-page text > filename token >
+                "10-K" default with a loud warning — never a silent guess. Note this
+                explicit value, if passed, applies to ALL files in this batch; leave it
+                unset when importing a mixed batch of filing types and let cover-page
+                detection resolve each file individually.
+            period_end_date: ISO date (YYYY-MM-DD) this filing covers (optional; applies
+                to ALL files in this batch if passed — leave unset for a mixed batch and
+                let cover-page detection resolve each file individually)
 
         Returns:
             List[Dict]: List of import results for each file, in the same order as file_paths
@@ -66,6 +74,8 @@ class FileImportService:
                 "success": False,
                 "message": "",
                 "chunks_added": None,
+                "filing_type": None,
+                "period_end_date": None,
                 "error": None
             }
 
@@ -88,14 +98,20 @@ class FileImportService:
                     try:
                         from ingestion.ingest_pdf import ingest_pdf
 
-                        ingest_result = await ingest_pdf(local_path, ticker=ticker, filing_type=filing_type)
+                        ingest_result = await ingest_pdf(local_path, ticker=ticker, filing_type=filing_type, period_end_date=period_end_date)
 
                         if ingest_result.get("success"):
                             result["status"] = "completed"
                             result["success"] = True
                             result["chunks_added"] = ingest_result.get("text_chunks", 0)
                             result["ticker"] = ticker
-                            result["message"] = f"Successfully ingested to ticker_{ticker.lower()} collection. Added {result['chunks_added']} text chunks"
+                            result["filing_type"] = ingest_result.get("filing_type")
+                            result["period_end_date"] = ingest_result.get("period_end_date")
+                            result["message"] = (
+                                f"Successfully ingested to ticker_{ticker.lower()} collection as "
+                                f"{result['filing_type']} (period end: {result['period_end_date'] or 'unknown'}). "
+                                f"Added {result['chunks_added']} text chunks"
+                            )
                         else:
                             result["status"] = "failed"
                             result["error"] = ingest_result.get("error", "Unknown error")
