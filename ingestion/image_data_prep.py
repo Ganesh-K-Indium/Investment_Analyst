@@ -22,13 +22,16 @@ if _tesseract_cmd:
 
 class ImageDescription:
     "This method is used to get the description of the image."
-    def __init__(self,pdf_path):
+    def __init__(self, pdf_path, filing_type: str = None):
         """
         This constructor is used to initialize the path of the pdf.
         Args:
             pdf_path : The path of the pdf.
+            filing_type: SEC filing type ("10-K", "10-Q", "8-K"), if known — used to
+                frame the vision-analysis prompt accurately instead of assuming 10-K.
         """
         self.pdf_path = pdf_path
+        self.filing_type = filing_type
         self.openai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     
     def extract_text_from_image_ocr(self, image_path):
@@ -70,8 +73,6 @@ class ImageDescription:
                 return "[OCR unavailable - using GPT-4o vision only]"
             print(f"     OCR extraction failed for {os.path.basename(image_path)}: {e}")
             return ""
-        if not self.openai_client.api_key:
-            raise ValueError("OpenAI API key not found in environment variables")
     
     def calculate_image_content_hash(self, image_data: bytes) -> str:
         """Calculate a deterministic hash of individual image content."""
@@ -391,16 +392,17 @@ class ImageDescription:
                 return "Error: Failed to encode image"
             
             # Step 3: Enhanced prompt with OCR data - OPTIMIZED FOR RAG RETRIEVAL
+            filing_label = f"{self.filing_type} filing" if self.filing_type else "SEC filing"
             prompt = f"""
-            You are analyzing a financial document image (10-K filing). Your job is to extract EVERY piece of financial data in a format optimized for semantic search and retrieval.
-            
+            You are analyzing a financial document image ({filing_label}). Your job is to extract EVERY piece of financial data in a format optimized for semantic search and retrieval.
+
             CONTEXT FROM SURROUNDING TEXT IN PDF:
             {context_text}
-            
+
             OCR-EXTRACTED TEXT FROM IMAGE:
             {ocr_text}
-            
-            CRITICAL INSTRUCTIONS FOR 10-K DOCUMENTS:
+
+            CRITICAL INSTRUCTIONS FOR {filing_label.upper()} DOCUMENTS:
             ============================================
             1. Extract EVERY SINGLE NUMBER visible in the image
             2. Extract ALL row and column headers from tables
@@ -493,7 +495,7 @@ class ImageDescription:
                 messages=[
                     {
                         "role": "system",
-                        "content": """You are a financial data extraction specialist for 10-K SEC filings optimized for RAG retrieval systems. 
+                        "content": f"""You are a financial data extraction specialist for SEC filings (10-K, 10-Q, 8-K) optimized for RAG retrieval systems. This image is from a {filing_label}.
                         Your SOLE PURPOSE is to extract EVERY SINGLE piece of data from financial images in a format that enables precise semantic search.
                         
                         MANDATORY EXTRACTION RULES:
@@ -643,18 +645,22 @@ class ImageDescription:
             # Use os.path.sep for cross-platform compatibility
             path_parts = image_path.replace("\\", "/").split("/")
             filename = path_parts[-1]
-            
-            # Extract page number more reliably
-            if "_p" in filename:
-                pagenumber = filename.split("_p")[1].split("_")[0]
+
+            # Filenames are produced by save_images() as exactly:
+            #   financial_img_{xref}_page{page_num}_{hash}.png
+            # Parse with a regex matching that literal format rather than
+            # fragile split()/substring logic — a prior version matched on
+            # "_p" which also matches inside "_page", producing garbage
+            # like pagenumber="age5" and image_xref="img".
+            import re as _re
+            match = _re.match(r'financial_img_(\d+)_page(\d+)_', filename)
+            if match:
+                image_xref = match.group(1)
+                pagenumber = match.group(2)
             else:
-                pagenumber = "1"  # fallback
-            
-            # Extract xref more reliably
-            if "_" in filename:
-                image_xref = filename.split("_")[1] if len(filename.split("_")) > 1 else "0"
-            else:
+                # Fallback for any non-standard filename (e.g. externally supplied images)
                 image_xref = "0"
+                pagenumber = "1"
             
             file_name = os.path.basename(self.pdf_path).replace(".pdf", "")
             image_source_in_file = f"{file_name}-page{pagenumber}-{image_xref}"
@@ -665,8 +671,8 @@ class ImageDescription:
                 "image": image_path,
                 "company": company,
                 "type": "image",
-                "page_num": pagenumber,
-                "caption": caption 
+                "page_num": int(pagenumber),  # Qdrant indexes metadata.page_num as INTEGER
+                "caption": caption
             }
             return image_metadata
         except Exception as e:

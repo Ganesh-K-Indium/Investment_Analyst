@@ -3,6 +3,7 @@ import json
 import uuid
 import re
 import hashlib
+import asyncio
 import traceback
 from datetime import datetime
 import fitz  # PyMuPDF
@@ -13,6 +14,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from rag.vectordb.client import load_vector_database
 from image_data_prep import ImageDescription
+from table_extractor import extract_tables_markdown_for_page
 from dotenv import load_dotenv
 
 # Import company mapping utility
@@ -403,6 +405,40 @@ async def check_document_exists(db_loader, source_file_name: str, doc_type: str 
         print(f"Error checking document existence: {e}")
         return False, []
 
+async def find_new_image_hashes(db_loader, image_hashes: dict) -> dict:
+    """
+    Given this document's freshly-computed image_hashes ({img_id: {hash, path, ...}}),
+    return the subset whose hash does NOT already exist in the collection — the
+    genuinely new images to analyze/ingest.
+
+    Checks each image's hash individually (concurrently) rather than short-circuiting
+    on the first match: a single shared image (e.g. a repeated company logo or
+    boilerplate chart appearing in an earlier filing too) must not cause the ENTIRE
+    document's images to be skipped — only that specific image should be treated as
+    a duplicate, while every genuinely new chart/table still gets ingested.
+    """
+    semaphore = asyncio.Semaphore(10)
+
+    async def _check_one(img_id, img_info):
+        async with semaphore:
+            try:
+                count_response = await db_loader.async_qdrant_client.count(
+                    collection_name=db_loader.collection_name,
+                    count_filter=models.Filter(must=[
+                        models.FieldCondition(key="metadata.content_type", match=models.MatchValue(value="image")),
+                        models.FieldCondition(key="metadata.image_content_hash", match=models.MatchValue(value=img_info["hash"])),
+                    ])
+                )
+                return img_id, count_response.count == 0
+            except Exception as e:
+                print(f"Warning: could not check existence of image hash {img_info['hash'][:16]}...: {e}; treating as new")
+                return img_id, True
+
+    results = await asyncio.gather(*(_check_one(img_id, info) for img_id, info in image_hashes.items()))
+    is_new = dict(results)
+    return {img_id: info for img_id, info in image_hashes.items() if is_new.get(img_id)}
+
+
 async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None,
                                       period_end_date: str = None) -> dict:
     """
@@ -573,6 +609,23 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
             if fiscal_quarter:
                 yield f"Derived fiscal_quarter Q{fiscal_quarter} from period_end_date '{period_end_date}' and {ticker}'s fiscal calendar"
 
+        # Resolve the "year" tag used for retrieval filtering. MUST prefer
+        # period_end_date's year over the filename-derived year: EDGAR
+        # filenames embed the FILING date, not the period the document
+        # covers, and a 10-K is filed 1-2 months into the NEXT calendar
+        # year — e.g. a 10-K covering fiscal year 2025 (period_end_date
+        # 2025-12-31) is typically filed in 2026, so its filename contains
+        # "2026". Tagging it year=2026 would make it invisible to any
+        # query for "2025" data, which is how a user naturally refers to
+        # this filing. Falls back to the filename heuristic only when
+        # period_end_date wasn't resolved (e.g. a non-standard document
+        # whose cover page didn't match).
+        if period_end_date:
+            resolved_year = int(period_end_date[:4])
+        else:
+            resolved_year = extract_year_from_filename(source_file_name)
+        yield f"Resolved year: {resolved_year}" + (" (from period_end_date)" if period_end_date else " (from filename, no period_end_date available)")
+
         # Determine collection name
         if ticker:
             collection_name = f"ticker_{ticker.lower()}"
@@ -601,6 +654,20 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
             print(f"\n Extracting text from {len(pdf_document)} pages...")
             for page_num, page in enumerate(tqdm(pdf_document, desc="Extracting text", unit="page")):
                 text = page.get_text("text")
+
+                # Native PDF tables (not image-embedded) lose column alignment
+                # when flattened to plain text — critical for financial tables
+                # where the columns ARE the data (e.g. "2024 | 2023 | 2022").
+                # Append a structured markdown rendering when a table is
+                # actually detected on this page; a no-op for the common case
+                # of pure narrative-text pages.
+                try:
+                    tables_md = extract_tables_markdown_for_page(page, page_num + 1)
+                    if tables_md:
+                        text = text + "\n\n[TABLES]\n" + tables_md
+                except Exception as e:
+                    print(f"Warning: table extraction failed on page {page_num + 1}: {e}")
+
                 if text.strip():
                     metadata = {
                         "source_file": source_file_name,
@@ -609,7 +676,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                         "ticker": ticker if ticker else "unknown",
                         "content_type": "text",
                         "content_hash": content_hash,
-                        "year": extract_year_from_filename(source_file_name),
+                        "year": resolved_year,
                         "filing_type": filing_type,
                         "period_end_date": period_end_date,
                         "fiscal_quarter": fiscal_quarter,
@@ -638,26 +705,34 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
 
         # --- Image ingestion ---
         image_already_exists = False
-        
+
         yield f"Extracting and hashing images from {source_file_name}..."
-        img_processor = ImageDescription(uploaded_pdf_path)
-        
+        img_processor = ImageDescription(uploaded_pdf_path, filing_type=filing_type)
+
         image_info, image_hashes = img_processor.get_image_information()
-        
+
         if image_hashes:
-            yield f"Found {len(image_hashes)} images to check for duplicates."
-            
-            exists, existing_img_points = await check_document_exists(db_loader, source_file_name, "image", content_hash, image_hashes)
+            yield f"Found {len(image_hashes)} images; checking which are already ingested..."
 
-            if not exists:
-                exists, existing_img_points = await check_document_exists(db_loader, source_file_name, "image", content_hash)
+            new_image_hashes = await find_new_image_hashes(db_loader, image_hashes)
+            already_existing_count = len(image_hashes) - len(new_image_hashes)
 
-            if not exists:
-                exists, existing_img_points = await check_document_exists(db_loader, source_file_name, "image")
+            if already_existing_count:
+                yield (
+                    f"{already_existing_count}/{len(image_hashes)} image(s) already ingested "
+                    f"(matched by content hash) — skipping those, keeping {len(new_image_hashes)} new."
+                )
 
-            if exists:
+            # Narrow image_info (path -> context_text) down to only the genuinely
+            # new images, so a single repeated image (e.g. a logo) never causes
+            # every other new chart/table in this document to be skipped.
+            new_paths = {info["path"] for info in new_image_hashes.values()}
+            image_info = {path: ctx for path, ctx in image_info.items() if path in new_paths}
+            image_hashes = new_image_hashes
+
+            if not image_info:
                 image_already_exists = True
-                yield f"{source_file_name} already exists in image store. Skipping image ingestion."
+                yield f"{source_file_name}: all images already ingested. Skipping image ingestion."
 
         if not image_already_exists:
             if image_info:
@@ -681,18 +756,24 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                         "ticker": ticker if ticker else "unknown",
                         "content_type": "image",
                         "content_hash": content_hash,
-                        "year": extract_year_from_filename(source_file_name),
+                        "year": resolved_year,
                         "filing_type": filing_type,
                         "period_end_date": period_end_date,
                         "fiscal_quarter": fiscal_quarter,
                         "ingestion_timestamp": str(datetime.now())
                     })
 
-                img_ids = [generate_doc_id(doc.metadata, i, "image") for i, doc in enumerate(image_documents)]
-                
-                num_img_ingested = await ingest_documents_with_hybrid_vectors(db_loader, image_documents, img_ids)
-                
-                yield f"Added {num_img_ingested} image captions to collection '{collection_name}'."
+                if image_documents:
+                    img_ids = [generate_doc_id(doc.metadata, i, "image") for i, doc in enumerate(image_documents)]
+
+                    num_img_ingested = await ingest_documents_with_hybrid_vectors(db_loader, image_documents, img_ids)
+
+                    yield f"Added {num_img_ingested} image captions to collection '{collection_name}'."
+                else:
+                    # All candidate images were classified as decorative/invalid by
+                    # the vision model — an empty upsert to Qdrant is a 400 error,
+                    # not a no-op, so this must be a distinct guarded branch.
+                    yield "All candidate images were classified as decorative/invalid — no image captions added."
             else:
                 yield "No images found in PDF."
 

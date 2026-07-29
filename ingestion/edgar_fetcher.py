@@ -110,30 +110,31 @@ class SecEdgarFetcher:
             finally:
                 await browser.close()
 
-    async def fetch_filings(
+    async def list_filings(
         self,
         ticker: str,
         form_types: Sequence[str] = VALID_FORM_TYPES,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         output_dir: str = "sec_filings",
-        ingest: bool = True,
-        max_concurrent_ingests: int = 3,
-    ) -> Dict:
+    ) -> List[Dict]:
         """
-        Fetch, download, and (optionally) ingest filings for a ticker.
+        List available filings for a ticker WITHOUT downloading/ingesting anything —
+        metadata only (form type, filing date, period-end date, accession number,
+        the URL and local pdf_path it would use). Used to let a caller (e.g. an
+        interactive CLI) show what's available and pick specific ones before any
+        network-heavy work happens.
 
         Args:
             ticker: Stock ticker symbol.
-            form_types: SEC form types to fetch (subset of "10-K", "10-Q", "8-K").
+            form_types: SEC form types to include (subset of "10-K", "10-Q", "8-K").
             start_date: Only include filings on/after this date. Defaults to no lower bound.
             end_date: Only include filings on/before this date. Defaults to today.
-            output_dir: Directory to save rendered PDFs under (one subfolder per ticker).
-            ingest: If True, ingest each downloaded PDF into the vector store.
-            max_concurrent_ingests: Bound on concurrent ingestion (embedding/Qdrant calls).
+            output_dir: Directory that would hold rendered PDFs (used to build pdf_path).
 
         Returns:
-            Summary dict with per-filing results and aggregate counts.
+            List of dicts, most recent first: {form, filing_date, period_end_date,
+            accession, url, pdf_path}.
         """
         invalid = [f for f in form_types if f not in VALID_FORM_TYPES]
         if invalid:
@@ -148,9 +149,8 @@ class SecEdgarFetcher:
         filings = data["filings"]["recent"]
 
         ticker_dir = os.path.join(output_dir, ticker.upper())
-        os.makedirs(ticker_dir, exist_ok=True)
 
-        to_fetch = []
+        available = []
         for i in range(len(filings["form"])):
             form = filings["form"][i]
             if form not in form_types:
@@ -181,13 +181,55 @@ class SecEdgarFetcher:
             )
             pdf_path = os.path.join(ticker_dir, f"{ticker.upper()}_{form.replace('/', '-')}_{filing_date_str}_{accession}.pdf")
 
-            to_fetch.append({
+            available.append({
                 "form": form,
                 "filing_date": filing_date_str,
                 "period_end_date": report_date_str,
+                "accession": accession,
                 "url": filing_url,
                 "pdf_path": pdf_path
             })
+
+        return available
+
+    async def fetch_filings(
+        self,
+        ticker: str,
+        form_types: Sequence[str] = VALID_FORM_TYPES,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        output_dir: str = "sec_filings",
+        ingest: bool = True,
+        max_concurrent_ingests: int = 3,
+        accession_filter: Optional[set] = None,
+    ) -> Dict:
+        """
+        Fetch, download, and (optionally) ingest filings for a ticker.
+
+        Args:
+            ticker: Stock ticker symbol.
+            form_types: SEC form types to fetch (subset of "10-K", "10-Q", "8-K").
+            start_date: Only include filings on/after this date. Defaults to no lower bound.
+            end_date: Only include filings on/before this date. Defaults to today.
+            output_dir: Directory to save rendered PDFs under (one subfolder per ticker).
+            ingest: If True, ingest each downloaded PDF into the vector store.
+            max_concurrent_ingests: Bound on concurrent ingestion (embedding/Qdrant calls).
+            accession_filter: If provided, only process filings whose accession number
+                (no dashes) is in this set — use with list_filings() to let a caller
+                fetch/ingest a specific hand-picked subset instead of everything
+                matching form_types/date range.
+
+        Returns:
+            Summary dict with per-filing results and aggregate counts.
+        """
+        available = await self.list_filings(ticker, form_types, start_date, end_date, output_dir)
+
+        os.makedirs(os.path.join(output_dir, ticker.upper()), exist_ok=True)
+
+        if accession_filter:
+            to_fetch = [item for item in available if item["accession"] in accession_filter]
+        else:
+            to_fetch = available
 
         results = []
         semaphore = asyncio.Semaphore(max_concurrent_ingests)
