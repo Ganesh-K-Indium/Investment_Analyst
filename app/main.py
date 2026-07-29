@@ -60,7 +60,7 @@ async def macro_sync_loop():
         await asyncio.sleep(86400) # Wait 24 hours
         try:
             logger.info("Running scheduled macro data sync...")
-            await asyncio.to_thread(run_ingestion)
+            await run_ingestion()
         except Exception as e:
             logger.error(f"Scheduled macro sync failed: {e}")
 
@@ -130,7 +130,7 @@ async def startup_event():
     macro_metadata = Path("data/macro/metadata.json")
     if not macro_metadata.exists():
         logger.info("Macro data missing. Scheduling background ingestion (non-blocking)...")
-        asyncio.create_task(asyncio.to_thread(run_ingestion))
+        asyncio.create_task(run_ingestion())
     else:
         logger.info("Macro data found.")
         

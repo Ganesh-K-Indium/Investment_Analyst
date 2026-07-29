@@ -29,7 +29,7 @@ class ImageDescription:
             pdf_path : The path of the pdf.
         """
         self.pdf_path = pdf_path
-        self.openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.openai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     
     def extract_text_from_image_ocr(self, image_path):
         """
@@ -367,7 +367,7 @@ class ImageDescription:
             print(f"Error encoding image {image_path}: {e}")
             return None
 
-    def analyze_image_with_context(self, image_path, context_text):
+    async def analyze_image_with_context(self, image_path, context_text):
         """
         COMPREHENSIVE image analysis using OCR + GPT-4o Vision.
         Ensures ALL financial data is extracted - critical for 10-K documents.
@@ -488,7 +488,7 @@ class ImageDescription:
             Only respond "INVALID_IMAGE" if this is purely decorative (logo, border, background) with ZERO data.
             """
 
-            response = self.openai_client.chat.completions.create(
+            response = await self.openai_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {
@@ -568,40 +568,54 @@ class ImageDescription:
 
         
     
-    def get_image_description(self, contexts):
+    async def get_image_description(self, contexts):
         """Simple image description processing with clean output for efficient RAG."""
+        import asyncio
+
         image_analyses = {}
         output_file = os.path.splitext(self.pdf_path)[0] + "_analysis.json"
-        
+
         print(f"\n Analyzing {len(contexts)} images with GPT-4o...")
         processed_count = 0
         skipped_count = 0
-        
-        for image_path, context_text in tqdm(contexts.items(), desc="Analyzing images", unit="img"):
-            try:
-                result = self.analyze_image_with_context(image_path, context_text)
-                
-                # Only skip if explicitly None (truly invalid decoration)
-                if result is None:
-                    skipped_count += 1
-                    print(f"\n  Skipped decorative image: {os.path.basename(image_path)}")
-                    continue
-                
-                # Store result even if it contains INVALID_IMAGE string (might have other data)
-                # or if it's a placeholder for failed analysis
-                image_analyses[image_path] = result
-                processed_count += 1
-                
-                # Warn if result seems insufficient
-                if len(result) < 50:
-                    print(f"\n  Short description for {os.path.basename(image_path)}: {len(result)} chars")
-                
-            except Exception as e:
-                print(f"\n Error analyzing {image_path}: {e}")
-                # Store error message instead of skipping
-                image_analyses[image_path] = f"[Analysis error: {str(e)}]"
+
+        # Bounded concurrency — GPT-4o vision calls are slow; running them
+        # concurrently (rather than one at a time) is the main ingestion speedup here.
+        semaphore = asyncio.Semaphore(5)
+
+        async def _analyze_one(image_path, context_text):
+            async with semaphore:
+                try:
+                    result = await self.analyze_image_with_context(image_path, context_text)
+                    return image_path, result, None
+                except Exception as e:
+                    return image_path, None, e
+
+        analysis_results = await asyncio.gather(*(
+            _analyze_one(image_path, context_text) for image_path, context_text in contexts.items()
+        ))
+
+        for image_path, result, error in analysis_results:
+            if error is not None:
+                print(f"\n Error analyzing {image_path}: {error}")
+                image_analyses[image_path] = f"[Analysis error: {str(error)}]"
                 continue
-        
+
+            # Only skip if explicitly None (truly invalid decoration)
+            if result is None:
+                skipped_count += 1
+                print(f"\n  Skipped decorative image: {os.path.basename(image_path)}")
+                continue
+
+            # Store result even if it contains INVALID_IMAGE string (might have other data)
+            # or if it's a placeholder for failed analysis
+            image_analyses[image_path] = result
+            processed_count += 1
+
+            # Warn if result seems insufficient
+            if len(result) < 50:
+                print(f"\n  Short description for {os.path.basename(image_path)}: {len(result)} chars")
+
         # Save simple analysis results
         analysis_data = {
             "pdf_source": self.pdf_path,

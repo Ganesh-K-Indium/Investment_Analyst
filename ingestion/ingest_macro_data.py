@@ -3,13 +3,14 @@ Macro Data Ingestion Script
 Fetches macroeconomic indicators from the FRED API and stores them as local CSVs.
 Designed to run standalone (cron/manual) or be imported by the FastAPI startup hook.
 """
+import asyncio
 import os
 import json
 import logging
 import datetime
 from pathlib import Path
 import pandas as pd
-import requests
+import httpx
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,11 +58,11 @@ def _get_api_key() -> str:
         )
     return key
 
-def fetch_fred_series(series_id: str, api_key: str, years: int = 5) -> pd.DataFrame:
+async def fetch_fred_series(client: httpx.AsyncClient, series_id: str, api_key: str, years: int = 5) -> pd.DataFrame:
     """Fetch recent data for a FRED series using the official API."""
     # Calculate observation_start
     start_date = (datetime.date.today() - datetime.timedelta(days=365 * years)).strftime("%Y-%m-%d")
-    
+
     url = "https://api.stlouisfed.org/fred/series/observations"
     params = {
         "series_id": series_id,
@@ -70,8 +71,8 @@ def fetch_fred_series(series_id: str, api_key: str, years: int = 5) -> pd.DataFr
         "observation_start": start_date,
         "sort_order": "desc"
     }
-    
-    response = requests.get(url, params=params, timeout=30)
+
+    response = await client.get(url, params=params, timeout=30)
     response.raise_for_status()
     data = response.json()
     
@@ -93,11 +94,40 @@ def fetch_fred_series(series_id: str, api_key: str, years: int = 5) -> pd.DataFr
         df = df.sort_values("date", ascending=True).reset_index(drop=True)
     return df
 
-def run_ingestion():
-    """Run the macro data ingestion process."""
+async def _fetch_and_save_one(client: httpx.AsyncClient, semaphore: asyncio.Semaphore, indicator: str, config: dict, api_key: str) -> bool:
+    """Fetch one FRED series and atomically write its CSV. Returns True on success."""
+    async with semaphore:
+        try:
+            logger.info(f"Fetching {indicator} ({config['series_id']})...")
+            # Fetch 20 years of history for annual series to ensure sufficient data points, otherwise 5 years.
+            fetch_years = 20 if config.get("frequency") == "annual" else 5
+            df = await fetch_fred_series(client, config["series_id"], api_key=api_key, years=fetch_years)
+
+            if df.empty:
+                logger.warning(f"No data returned for {indicator}.")
+                return False
+
+            csv_path = DATA_DIR / f"{indicator.lower()}.csv"
+            tmp_path = DATA_DIR / f"{indicator.lower()}.csv.tmp"
+
+            # Atomic write: write to temp file, then rename to final path.
+            # This prevents a concurrent reader from seeing a half-written CSV.
+            df.to_csv(tmp_path, index=False)
+            tmp_path.rename(csv_path)
+
+            logger.info(f"Successfully saved {indicator} data ({len(df)} rows).")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to fetch {indicator}: {e}")
+            return False
+
+
+async def run_ingestion():
+    """Run the macro data ingestion process. Fetches all FRED series concurrently (bounded)."""
     api_key = _get_api_key()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     # --- Cross-process lock to prevent multi-worker race conditions ---
     try:
         import fcntl
@@ -111,36 +141,20 @@ def run_ingestion():
         logger.info("Ingestion is already running in another process. Skipping.")
         return
     # ------------------------------------------------------------------
-    
+
     logger.info("Starting Macro Data Ingestion...")
     logger.info(f"  Data directory: {DATA_DIR}")
-    success_count = 0
-    
-    for indicator, config in FRED_SERIES.items():
-        try:
-            logger.info(f"Fetching {indicator} ({config['series_id']})...")
-            # Fetch 20 years of history for annual series to ensure sufficient data points, otherwise 5 years.
-            fetch_years = 20 if config.get("frequency") == "annual" else 5
-            df = fetch_fred_series(config["series_id"], api_key=api_key, years=fetch_years)
-            
-            if df.empty:
-                logger.warning(f"No data returned for {indicator}.")
-                continue
-                
-            csv_path = DATA_DIR / f"{indicator.lower()}.csv"
-            tmp_path = DATA_DIR / f"{indicator.lower()}.csv.tmp"
-            
-            # Atomic write: write to temp file, then rename to final path.
-            # This prevents a concurrent reader from seeing a half-written CSV.
-            df.to_csv(tmp_path, index=False)
-            tmp_path.rename(csv_path)
-            
-            logger.info(f"Successfully saved {indicator} data ({len(df)} rows).")
-            success_count += 1
-            
-        except Exception as e:
-            logger.error(f"Failed to fetch {indicator}: {e}")
-            
+
+    # Bounded concurrency — FRED's API has no documented hard rate limit, but this keeps
+    # request bursts modest rather than firing all ~17 series at once.
+    semaphore = asyncio.Semaphore(5)
+    async with httpx.AsyncClient() as client:
+        results = await asyncio.gather(*(
+            _fetch_and_save_one(client, semaphore, indicator, config, api_key)
+            for indicator, config in FRED_SERIES.items()
+        ))
+    success_count = sum(results)
+
     if success_count > 0:
         metadata = {
             "last_sync": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -159,4 +173,4 @@ def run_ingestion():
         logger.warning("Ingestion failed for all indicators.")
 
 if __name__ == "__main__":
-    run_ingestion()
+    asyncio.run(run_ingestion())

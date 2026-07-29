@@ -4,11 +4,10 @@ renders each to PDF, and ingests them into the RAG vector store with the
 correct filing_type tag.
 
 Async throughout: HTTP fetches use httpx.AsyncClient, PDF rendering uses
-Playwright's async API. The actual PDF ingestion (parse/chunk/embed/upsert,
-in ingestion/pdf_processor1.py) is still synchronous internally — CPU/IO
-work with nothing to gain from being async internally — so it's offloaded
-via asyncio.to_thread() per filing, letting multiple filings ingest
-concurrently without blocking the event loop.
+Playwright's async API, and ingestion itself (pdf_processor1.py) is async —
+embeddings via OpenAI's async client, upserts via Qdrant's AsyncQdrantClient.
+Filings ingest concurrently (bounded by a semaphore) without blocking the
+event loop or needing a thread-offload.
 
 Supersedes the old root-level download_10q_pdfs.py (10-Q-only, hardcoded to
 AAPL/2025, no ingestion hookup).
@@ -187,9 +186,7 @@ class SecEdgarFetcher:
                 if ingest:
                     async with semaphore:
                         from ingestion.ingest_pdf import ingest_pdf
-                        ingest_result = await asyncio.to_thread(
-                            ingest_pdf, item["pdf_path"], ticker=ticker.upper(), filing_type=item["form"]
-                        )
+                        ingest_result = await ingest_pdf(item["pdf_path"], ticker=ticker.upper(), filing_type=item["form"])
                     if ingest_result.get("success"):
                         result["status"] = "ingested"
                         result["chunks_added"] = ingest_result.get("text_chunks", 0)

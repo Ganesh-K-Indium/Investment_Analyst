@@ -95,7 +95,7 @@ def save_progress(progress_path: str, progress: dict):
     os.replace(tmp_path, progress_path)
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--manifest", help="Path to a JSON manifest of {path, ticker, filing_type} entries.")
@@ -168,7 +168,7 @@ def main():
             continue
 
         try:
-            result = ingest_pdf(path, ticker=ticker, filing_type=filing_type)
+            result = await ingest_pdf(path, ticker=ticker, filing_type=filing_type)
         except Exception:
             tb = traceback.format_exc()
             progress[path] = {
@@ -224,4 +224,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())

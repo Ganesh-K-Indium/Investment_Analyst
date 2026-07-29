@@ -2,6 +2,7 @@
 this module is used for loading the unified RAG database with hybrid search capabilities
 """
 
+import asyncio
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore, RetrievalMode
@@ -327,13 +328,13 @@ class load_vector_database():
             print(f"Error in fallback search: {e}")
             return []
     
-    def generate_embeddings_for_ingestion(self, texts: list[str]) -> dict:
+    async def generate_embeddings_for_ingestion(self, texts: list[str]) -> dict:
         """
         Generate all required embeddings (dense, sparse) for document ingestion.
-        
+
         Args:
             texts: List of text strings to embed
-            
+
         Returns:
             dict with 'dense' and 'sparse' embedding lists
         """
@@ -341,13 +342,14 @@ class load_vector_database():
             'dense': [],
             'sparse': []
         }
-        
-        # Generate dense embeddings in batches of 100 (OpenAI limit is 2048, stay well under)
+
+        # Generate dense embeddings in batches of 100 (OpenAI limit is 2048, stay well under),
+        # all batches concurrently rather than one at a time.
         BATCH_SIZE = 100
-        print(f"\nGenerating dense embeddings for {len(texts)} documents (batch size={BATCH_SIZE})...")
-        for batch_start in tqdm(range(0, len(texts), BATCH_SIZE), desc="Dense embeddings (OpenAI)", unit="batch"):
-            batch = texts[batch_start:batch_start + BATCH_SIZE]
-            batch_embeddings = self.embeddings.embed_documents(batch)
+        batches = [texts[i:i + BATCH_SIZE] for i in range(0, len(texts), BATCH_SIZE)]
+        print(f"\nGenerating dense embeddings for {len(texts)} documents ({len(batches)} batch(es) of {BATCH_SIZE}, concurrent)...")
+        batch_results = await asyncio.gather(*(self.embeddings.aembed_documents(batch) for batch in batches))
+        for batch_embeddings in batch_results:
             result['dense'].extend(batch_embeddings)
         
         # Generate sparse embeddings (BM25)

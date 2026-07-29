@@ -61,7 +61,7 @@ def format_result(result: dict) -> str:
     return "\n".join(lines)
 
 
-def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None) -> dict:
+async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None) -> dict:
     """
     Ingest a PDF file and return the result.
 
@@ -103,11 +103,11 @@ def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None) -> di
     if filing_type:
         print(f"Filing type: {filing_type}")
 
-    result = process_pdf_and_get_result(pdf_path, ticker=ticker, filing_type=filing_type)
+    result = await process_pdf_and_get_result(pdf_path, ticker=ticker, filing_type=filing_type)
     return result
 
 
-def main():
+async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Ingest a PDF file into the vector database.")
     parser.add_argument("pdf_path", help="Path to the PDF file")
@@ -122,14 +122,15 @@ def main():
     args = parser.parse_args()
 
     # Process the PDF
-    result = ingest_pdf(args.pdf_path, args.ticker, filing_type=args.filing_type)
-    
+    result = await ingest_pdf(args.pdf_path, args.ticker, filing_type=args.filing_type)
+
     # Display formatted result
     print(format_result(result))
-    
+
     # Return appropriate exit code
     sys.exit(0 if result['success'] else 1)
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())

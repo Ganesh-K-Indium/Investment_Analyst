@@ -88,10 +88,7 @@ class FileImportService:
                     try:
                         from ingestion.ingest_pdf import ingest_pdf
 
-                        # PDF parsing + embedding + Qdrant upsert is sync/CPU+IO-bound — offload to a thread.
-                        ingest_result = await asyncio.to_thread(
-                            ingest_pdf, local_path, ticker=ticker, filing_type=filing_type
-                        )
+                        ingest_result = await ingest_pdf(local_path, ticker=ticker, filing_type=filing_type)
 
                         if ingest_result.get("success"):
                             result["status"] = "completed"

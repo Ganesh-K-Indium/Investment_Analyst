@@ -55,10 +55,10 @@ def init_vector_stores(collection_name: str = None, use_hybrid_search: bool = No
     
     return db_init, vectorstore
 
-def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids):
+async def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids):
     """
     Ingest documents with hybrid vectors (dense + sparse).
-    
+
     Args:
         db_loader: The load_vector_database instance
         documents: List of LangChain Document objects
@@ -66,9 +66,9 @@ def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids):
     """
     # Extract text content from documents
     texts = [doc.page_content for doc in documents]
-    
+
     # Generate all embeddings (dense + sparse)
-    embeddings_dict = db_loader.generate_embeddings_for_ingestion(texts)
+    embeddings_dict = await db_loader.generate_embeddings_for_ingestion(texts)
     
     # Build points for Qdrant
     points = []
@@ -91,12 +91,12 @@ def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids):
         )
         points.append(point)
     
-    # Upload to Qdrant using client directly
-    db_loader.qdrant_client.upsert(
+    # Upload to Qdrant using the async client directly
+    await db_loader.async_qdrant_client.upsert(
         collection_name=db_loader.collection_name,
         points=points
     )
-    
+
     return len(points)
 
 def extract_company_name(file_name: str) -> str:
@@ -242,23 +242,26 @@ def generate_doc_id(doc_metadata: dict, index: int, doc_type: str = "text") -> s
         return str(uuid.uuid5(uuid.NAMESPACE_DNS,
                            f"{doc_metadata.get('company', 'NA')}_{doc_metadata['source_file']}_{index}"))
 
-def check_document_exists(vectorstore, source_file_name: str, doc_type: str = "text", content_hash: str = None, image_hashes: dict = None) -> tuple[bool, list]:
+async def check_document_exists(db_loader, source_file_name: str, doc_type: str = "text", content_hash: str = None, image_hashes: dict = None) -> tuple[bool, list]:
     """
     Check if a document already exists in the vector store using metadata filters.
-    
+
     Args:
-        vectorstore: The vector store to check
+        db_loader: The load_vector_database instance (uses its async_qdrant_client)
         source_file_name: Name of the source file
         doc_type: Type of document ("text" or "image")
         content_hash: Hash of the document content for duplicate detection
-    
+
     Returns:
         tuple[bool, list]: (exists, existing_points)
     """
     try:
         print(f"\n=== Checking existence of {source_file_name} ({doc_type}) ===")
-        print(f"Collection name: {vectorstore.collection_name}")
-        
+        print(f"Collection name: {db_loader.collection_name}")
+
+        client = db_loader.async_qdrant_client
+        collection_name = db_loader.collection_name
+
         # Build the filter based on content hash if available, otherwise fallback to filename
         filter_conditions = [
             models.FieldCondition(
@@ -266,7 +269,7 @@ def check_document_exists(vectorstore, source_file_name: str, doc_type: str = "t
                 match=models.MatchValue(value=doc_type)
             )
         ]
-        
+
         # For images, check individual image hashes first if available
         if doc_type == "image" and image_hashes:
             # Check if any individual image hash already exists
@@ -283,24 +286,24 @@ def check_document_exists(vectorstore, source_file_name: str, doc_type: str = "t
                         )
                     ]
                 )
-                
-                count_response = vectorstore.client.count(
-                    collection_name=vectorstore.collection_name,
+
+                count_response = await client.count(
+                    collection_name=collection_name,
                     count_filter=individual_filter
                 )
-                
+
                 if count_response.count > 0:
                     print(f"Found existing image with hash {img_info['hash'][:16]}...")
-                    points = vectorstore.client.scroll(
-                        collection_name=vectorstore.collection_name,
+                    points = (await client.scroll(
+                        collection_name=collection_name,
                         scroll_filter=individual_filter,
                         with_payload=True,
                         limit=count_response.count
-                    )[0]
+                    ))[0]
                     return True, points
-            
+
             print("No individual image hashes found, checking by PDF content hash...")
-        
+
         if content_hash:
             filter_conditions.append(
                 models.FieldCondition(
@@ -315,32 +318,32 @@ def check_document_exists(vectorstore, source_file_name: str, doc_type: str = "t
                     match=models.MatchValue(value=source_file_name)
                 )
             )
-            
+
         search_filter = models.Filter(must=filter_conditions)
-        
-        count_response = vectorstore.client.count(
-            collection_name=vectorstore.collection_name,
+
+        count_response = await client.count(
+            collection_name=collection_name,
             count_filter=search_filter
         )
         print(f"\nDebug: Found {count_response.count} matching points")
-        
+
         if count_response.count > 0:
-            points = vectorstore.client.scroll(
-                collection_name=vectorstore.collection_name,
+            points = (await client.scroll(
+                collection_name=collection_name,
                 scroll_filter=search_filter,
                 with_payload=True,
                 limit=count_response.count
-            )[0]
-            
+            ))[0]
+
             return True, points
-            
+
         return False, []
-        
+
     except Exception as e:
         print(f"Error checking document existence: {e}")
         return False, []
 
-def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None) -> dict:
+async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None) -> dict:
     """
     Process a PDF file and return a structured result.
 
@@ -370,7 +373,7 @@ def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None, filin
 
     try:
         # Collect all progress messages
-        for message in process_pdf_and_stream(uploaded_pdf_path, ticker, filing_type):
+        async for message in process_pdf_and_stream(uploaded_pdf_path, ticker, filing_type):
             result["messages"].append(message)
             
             # Parse key information from messages
@@ -403,7 +406,7 @@ def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None, filin
         
     return result
 
-def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None):
+async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None):
     """
     Process a PDF file and stream progress updates.
 
@@ -449,7 +452,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_ty
             yield f"Using fallback collection: {collection_name}"
 
         # Initialize vector store with specific collection
-        db_loader, unified_vectorstore = init_vector_stores(collection_name=collection_name)
+        db_loader, _ = init_vector_stores(collection_name=collection_name)
         
         # Calculate content hash for duplicate detection
         content_hash = calculate_content_hash(uploaded_pdf_path)
@@ -457,7 +460,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_ty
         
         # --- Text ingestion ---
         text_already_exists = False
-        exists, existing_points = check_document_exists(unified_vectorstore, source_file_name, "text", content_hash)
+        exists, existing_points = await check_document_exists(db_loader, source_file_name, "text", content_hash)
         
         if exists:
             text_already_exists = True
@@ -495,7 +498,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_ty
                 ids = [generate_doc_id(doc.metadata, i, "text") for i, doc in enumerate(text_chunks)]
                 
                 # Ingest with hybrid vectors
-                num_ingested = ingest_documents_with_hybrid_vectors(db_loader, text_chunks, ids)
+                num_ingested = await ingest_documents_with_hybrid_vectors(db_loader, text_chunks, ids)
                 
                 yield f"Added {num_ingested} text chunks to collection '{collection_name}'."
             else:
@@ -512,13 +515,13 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_ty
         if image_hashes:
             yield f"Found {len(image_hashes)} images to check for duplicates."
             
-            exists, existing_img_points = check_document_exists(unified_vectorstore, source_file_name, "image", content_hash, image_hashes)
-            
+            exists, existing_img_points = await check_document_exists(db_loader, source_file_name, "image", content_hash, image_hashes)
+
             if not exists:
-                exists, existing_img_points = check_document_exists(unified_vectorstore, source_file_name, "image", content_hash)
-            
+                exists, existing_img_points = await check_document_exists(db_loader, source_file_name, "image", content_hash)
+
             if not exists:
-                exists, existing_img_points = check_document_exists(unified_vectorstore, source_file_name, "image")
+                exists, existing_img_points = await check_document_exists(db_loader, source_file_name, "image")
 
             if exists:
                 image_already_exists = True
@@ -527,7 +530,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_ty
         if not image_already_exists:
             if image_info:
                 yield f" Analyzing {len(image_info)} images with GPT-4o..."
-                image_descriptions = img_processor.get_image_description(image_info)
+                image_descriptions = await img_processor.get_image_description(image_info)
                 
                 metadata_path = f"metadata_{source_file_name}.json"
                 metadata_to_save = image_descriptions
@@ -553,7 +556,7 @@ def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_ty
 
                 img_ids = [generate_doc_id(doc.metadata, i, "image") for i, doc in enumerate(image_documents)]
                 
-                num_img_ingested = ingest_documents_with_hybrid_vectors(db_loader, image_documents, img_ids)
+                num_img_ingested = await ingest_documents_with_hybrid_vectors(db_loader, image_documents, img_ids)
                 
                 yield f"Added {num_img_ingested} image captions to collection '{collection_name}'."
             else:
