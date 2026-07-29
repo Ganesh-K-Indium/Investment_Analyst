@@ -8,10 +8,12 @@ import re
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
 
 from app.services.form4_ingestion import run_form4_ingestion, run_form4_ingestion_multi
+from app.database.models import User
+from app.auth.deps import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +96,10 @@ class Form4BatchIngestResponse(BaseModel):
         "by accession number, and persists new records to the application database."
     ),
 )
-async def ingest_form4(request: Form4IngestRequest):
+async def ingest_form4(
+    request: Form4IngestRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
     Import Form 4 insider trading filings from SEC EDGAR for a specific ticker.
 
@@ -136,7 +141,10 @@ async def ingest_form4(request: Form4IngestRequest):
         "looped across tickers with one combined summary."
     ),
 )
-async def ingest_form4_batch(request: Form4BatchIngestRequest):
+async def ingest_form4_batch(
+    request: Form4BatchIngestRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
     Import Form 4 insider trading filings from SEC EDGAR for multiple tickers in one call.
 

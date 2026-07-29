@@ -2,20 +2,29 @@
 Quant Stock Analysis API endpoints with chat persistence
 Integrates the multi-agent stock analysis system into the main API
 """
+import logging
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import HumanMessage
 from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
 from app.services.chat import ChatService
-from app.database.models import AgentType, MessageRole
+from app.database.models import AgentType, MessageRole, User, ChatSession
+from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from datetime import datetime
 import json
 import os
 
+logger = logging.getLogger("api.quant")
 router = APIRouter(prefix="/quant", tags=["Quant Analysis"])
+
+# Debug-only: dump full multi-agent response payloads to output/json/quant/ on
+# every query. Off by default — was previously unconditional, growing that
+# directory without bound on every request in any environment.
+_SAVE_DEBUG_RESPONSES = os.getenv("SAVE_DEBUG_RESPONSES", "false").lower() == "true"
 
 
 # Pydantic Models
@@ -72,26 +81,28 @@ def set_agents_status(status: bool):
 async def query_stock_agent(
     payload: StockQueryRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Send a query to the stock analysis supervisor agent.
-    
+
     The agent can:
     - Analyze stock fundamentals (prices, financials, news)
     - Perform technical analysis (RSI, SMA, MACD, etc.)
     - Research analyst ratings and sentiment
     - Find ticker symbols from company names
-    
+
     Maintains conversation context per session_id.
     """
-    
+    verify_user_id_matches(payload.user_id, current_user)
+
     if not agents_initialized or stock_supervisor is None:
         raise HTTPException(
             status_code=503,
             detail="Stock analysis agents not initialized. Please check system status."
         )
-    
+
     try:
         # Generate session ID if not provided
         session_id = payload.session_id
@@ -105,18 +116,17 @@ async def query_stock_agent(
                     session_id = f"quant_{payload.user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             else:
                 session_id = f"quant_{payload.user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        print(f"Processing stock query for session {session_id}")
-        print(f"   User: {payload.user_id}")
-        print(f"   Portfolio: {payload.portfolio_id}")
-        print(f"   Query: {payload.query[:100]}...")
-        
+
+        logger.info("Processing stock query: session=%s user=%s portfolio=%s query=%.100s",
+                    session_id, payload.user_id, payload.portfolio_id, payload.query)
+
         # Create or get chat session for persistence
         portfolio_id = payload.portfolio_id
         portfolio_name = None
         if portfolio_id:
             portfolio = await PortfolioService.get_portfolio(db, portfolio_id)
             if portfolio:
+                verify_owner(portfolio.user_id, current_user)
                 portfolio_name = portfolio.name
 
         chat_session = await ChatService.create_or_get_chat_session(
@@ -127,6 +137,10 @@ async def query_stock_agent(
             portfolio_id=portfolio_id,
             title=f"Stock Analysis: {portfolio_name}" if portfolio_name else "Stock Analysis"
         )
+        # If session_id referenced a PRE-EXISTING session, guard against it
+        # belonging to a different user (create_or_get returns the existing
+        # row rather than creating a new one in that case).
+        verify_owner(chat_session.user_id, current_user)
 
         # Save user message
         await ChatService.add_message(
@@ -138,14 +152,14 @@ async def query_stock_agent(
         
         # Get the current state to know how many messages exist
         current_state = await stock_supervisor.aget_state(
-            config={"configurable": {"thread_id": session_id}}
+            config={"configurable": {"thread_id": f"quant:{session_id}"}}
         )
         messages_before = len(current_state.values.get('messages', [])) if current_state.values else 0
         
         # Invoke supervisor with thread_id for memory persistence
         response = await stock_supervisor.ainvoke(
             {"messages": [HumanMessage(content=payload.query)]},
-            config={"configurable": {"thread_id": session_id}}
+            config={"configurable": {"thread_id": f"quant:{session_id}"}}
         )
         
         # Extract only NEW messages from this turn
@@ -184,17 +198,15 @@ async def query_stock_agent(
             }
         )
         
-        print(f"Chat persisted to database")
-        
-        # Save response to file in background
-        background_tasks.add_task(
-            save_quant_response,
-            response,
-            session_id,
-            payload.user_id,
-            payload.portfolio_id
-        )
-        
+        if _SAVE_DEBUG_RESPONSES:
+            background_tasks.add_task(
+                save_quant_response,
+                response,
+                session_id,
+                payload.user_id,
+                payload.portfolio_id
+            )
+
         return StockQueryResponse(
             response=final_message.content,
             session_id=session_id,
@@ -209,9 +221,7 @@ async def query_stock_agent(
         )
         
     except Exception as e:
-        print(f"ERROR: Error processing stock query: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Error processing stock query: %s", e)
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
 
 
@@ -240,7 +250,7 @@ async def health_check():
             sock.close()
             return result == 0
         except Exception as e:
-            print(f"ERROR: Server check failed for {url}: {str(e)}")
+            logger.warning("Server check failed for %s: %s", url, e)
             return False
     
     # Check all MCP servers
@@ -315,17 +325,27 @@ async def get_capabilities():
 
 
 @router.get("/sessions/{session_id}")
-async def get_session_history(session_id: str):
+async def get_session_history(
+    session_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """Get conversation history for a specific stock analysis session"""
     if not agents_initialized or stock_supervisor is None:
         raise HTTPException(
             status_code=503,
             detail="Stock analysis agents not initialized."
         )
-    
+
+    result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+    chat_session = result.scalar_one_or_none()
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    verify_owner(chat_session.user_id, current_user)
+
     try:
         state = await stock_supervisor.aget_state(
-            config={"configurable": {"thread_id": session_id}}
+            config={"configurable": {"thread_id": f"quant:{session_id}"}}
         )
         messages = state.values.get('messages', []) if state.values else []
         
@@ -354,14 +374,17 @@ async def get_session_history(session_id: str):
 @router.get("/portfolio/{portfolio_id}/sessions")
 async def get_portfolio_stock_sessions(
     portfolio_id: int,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Get all stock analysis sessions linked to a portfolio"""
     # Verify portfolio exists
     portfolio = await PortfolioService.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    
+    verify_owner(portfolio.user_id, current_user)
+
+
     # This would require a database table to track quant sessions
     # For now, return portfolio info
     return {
@@ -411,6 +434,6 @@ def save_quant_response(response, session_id: str, user_id: str, portfolio_id: O
         with open(filepath, "w") as f:
             json.dump(response_data, f, indent=4)
         
-        print(f" Stock analysis response saved to {filepath}")
+        logger.info("Stock analysis response saved to %s", filepath)
     except Exception as e:
-        print(f"ERROR: Failed to save quant response: {str(e)}")
+        logger.error("Failed to save quant response: %s", e)

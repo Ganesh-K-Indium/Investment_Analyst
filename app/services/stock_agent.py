@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from typing import Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.base import BaseCheckpointSaver
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -16,7 +16,6 @@ load_dotenv()
 # Global references
 _stock_supervisor = None
 _stock_saver = None
-_stock_saver_cm = None
 _agents_initialized = False
 
 
@@ -55,45 +54,37 @@ async def wait_for_server(url: str, timeout: int = 10) -> bool:
     return False
 
 
-async def initialize_stock_agents(checkpointer: Optional[AsyncSqliteSaver] = None):
+async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = None):
     """
     Initialize the stock analysis supervisor and sub-agents.
-    
+
     Args:
-        checkpointer: Optional shared checkpointer. NOT USED - always creates separate one.
-        
+        checkpointer: Shared LangGraph checkpointer (the same Postgres-backed
+            saver used by the RAG graph — see app/main.py). Required; the
+            stock supervisor no longer creates its own separate SQLite store.
+
     Returns:
         Tuple of (supervisor, initialized_status)
     """
-    global _stock_supervisor, _stock_saver, _stock_saver_cm, _agents_initialized
-    
+    global _stock_supervisor, _stock_saver, _agents_initialized
+
     if _agents_initialized and _stock_supervisor is not None:
         print("Stock agents already initialized, reusing...")
         return _stock_supervisor, True
-    
+
+    if checkpointer is None:
+        print("ERROR: initialize_stock_agents() requires a shared checkpointer (none was provided)")
+        _agents_initialized = False
+        return None, False
+
     try:
         print("\nInitializing Stock Analysis Supervisor Agent...")
         print("="*70)
-        
-        # ALWAYS create separate checkpointer for stock agents
-        print("Initializing SEPARATE SQLite memory for stock agents...")
-        db_path = os.getenv("STOCK_SQLITE_DB_PATH", "checkpoints_stock.sqlite")
-        print(f"Using database path: {db_path}")
-        
-        try:
-            _stock_saver_cm = AsyncSqliteSaver.from_conn_string(db_path)
-            print("Created AsyncSqliteSaver context manager")
-            _stock_saver = await _stock_saver_cm.__aenter__()
-            print("Entered saver context manager")
-            await _stock_saver.setup()  # Creates tables if needed
-            print("Stock agent memory initialized successfully")
-        except Exception as saver_error:
-            print(f"ERROR: Failed to initialize saver: {str(saver_error)}")
-            print(f"ERROR: Database path: {db_path}")
-            import traceback
-            traceback.print_exc()
-            raise
-        
+
+        # Shared checkpointer (same Postgres-backed saver as the RAG graph) —
+        # already set up (tables created) by the caller, nothing to do here.
+        _stock_saver = checkpointer
+
         # Wait for MCP servers to be ready (with timeout)
         print("Checking MCP servers...")
         servers = [
@@ -297,17 +288,15 @@ CRITICAL:
 
 
 async def cleanup_stock_agents():
-    """Cleanup stock agent resources"""
-    global _stock_saver_cm, _stock_supervisor, _agents_initialized
-    
-    if _stock_saver_cm is not None:
-        try:
-            await _stock_saver_cm.__aexit__(None, None, None)
-            print("Stock agent memory saver cleaned up successfully")
-        except Exception as e:
-            print(f"WARNING: Error cleaning up stock agent memory saver: {e}")
-    
+    """
+    Cleanup stock agent resources. The checkpointer itself is shared with the
+    RAG graph and owned by app/main.py's startup/shutdown lifecycle — this
+    only resets this module's references, it does not close the checkpointer.
+    """
+    global _stock_supervisor, _stock_saver, _agents_initialized
+
     _stock_supervisor = None
+    _stock_saver = None
     _agents_initialized = False
     print("Stock agents cleaned up")
 

@@ -1,6 +1,7 @@
 """
 Integration management and file import endpoints
 """
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
@@ -10,6 +11,8 @@ from app.services.integration import IntegrationService
 from app.services.connectors.base import BaseConnector
 from app.services.file_import import FileImportService
 from app.services.portfolio import PortfolioService
+from app.database.models import User
+from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from schemas.integrations import (
     IntegrationCreate,
     IntegrationUpdate,
@@ -22,6 +25,7 @@ from schemas.integrations import (
     RemoteFile
 )
 
+logger = logging.getLogger("api.integrations")
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
 
@@ -30,7 +34,8 @@ router = APIRouter(prefix="/integrations", tags=["Integrations"])
 @router.post("/", response_model=IntegrationResponse)
 async def create_integration(
     payload: IntegrationCreate,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new data source integration
@@ -44,6 +49,7 @@ async def create_integration(
     - aws_s3: AWS S3
     - sftp: SFTP Server
     """
+    verify_user_id_matches(payload.user_id, current_user)
     try:
         integration = await IntegrationService.create_integration(
             db=db,
@@ -79,13 +85,15 @@ async def create_integration(
 @router.get("/{integration_id}", response_model=IntegrationResponse)
 async def get_integration(
     integration_id: int,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Get integration by ID"""
     integration = await IntegrationService.get_integration(db, integration_id)
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
-    
+    verify_owner(integration.user_id, current_user)
+
     credentials_summary = IntegrationService.mask_credentials(integration.credentials)
     
     return IntegrationResponse(
@@ -107,9 +115,11 @@ async def get_integration(
 async def get_user_integrations(
     user_id: str,
     vendor: Optional[str] = None,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Get all integrations for a user, optionally filtered by vendor"""
+    verify_user_id_matches(user_id, current_user)
     integrations = await IntegrationService.get_user_integrations(db, user_id, vendor)
     
     return [
@@ -134,9 +144,15 @@ async def get_user_integrations(
 async def update_integration(
     integration_id: int,
     payload: IntegrationUpdate,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Update an existing integration"""
+    existing = await IntegrationService.get_integration(db, integration_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_owner(existing.user_id, current_user)
+
     integration = await IntegrationService.update_integration(
         db=db,
         integration_id=integration_id,
@@ -146,7 +162,7 @@ async def update_integration(
         description=payload.description,
         status=payload.status
     )
-    
+
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
     
@@ -170,9 +186,15 @@ async def update_integration(
 @router.delete("/{integration_id}")
 async def delete_integration(
     integration_id: int,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Delete an integration"""
+    existing = await IntegrationService.get_integration(db, integration_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_owner(existing.user_id, current_user)
+
     success = await IntegrationService.delete_integration(db, integration_id)
     if not success:
         raise HTTPException(status_code=404, detail="Integration not found")
@@ -183,9 +205,15 @@ async def delete_integration(
 @router.post("/{integration_id}/disconnect")
 async def disconnect_integration(
     integration_id: int,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Mark an integration as disconnected"""
+    existing = await IntegrationService.get_integration(db, integration_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_owner(existing.user_id, current_user)
+
     integration = await IntegrationService.disconnect_integration(db, integration_id)
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
@@ -196,13 +224,15 @@ async def disconnect_integration(
 @router.post("/{integration_id}/test", response_model=ConnectionTestResponse)
 async def test_integration_connection(
     integration_id: int,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Test connection to an integration"""
     integration = await IntegrationService.get_integration(db, integration_id)
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
-    
+    verify_owner(integration.user_id, current_user)
+
     try:
         connector = BaseConnector.get_connector(
             vendor=integration.vendor,
@@ -242,7 +272,8 @@ async def test_integration_connection(
 @router.post("/browse", response_model=BrowseFilesResponse)
 async def browse_integration_files(
     payload: BrowseFilesRequest,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Browse files from an integration
@@ -258,34 +289,43 @@ async def browse_integration_files(
     integration = await IntegrationService.get_integration(db, payload.integration_id)
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
+    verify_owner(integration.user_id, current_user)
+
+    if payload.user_id:
+        verify_user_id_matches(payload.user_id, current_user)
+
+    if payload.portfolio_id:
+        portfolio_check = await PortfolioService.get_portfolio(db, payload.portfolio_id)
+        if portfolio_check:
+            verify_owner(portfolio_check.user_id, current_user)
 
     try:
-        print(f"\n=== Browse Files Debug ===")
-        print(f"Integration ID: {payload.integration_id}")
-        print(f"Vendor: {integration.vendor}")
-        print(f"URL: {integration.url}")
-        print(f"Path: {payload.path}")
-        print(f"Credentials keys: {list(integration.credentials.keys())}")
-        
+        logger.info("=== Browse Files Debug ===")
+        logger.info("Integration ID: %s", payload.integration_id)
+        logger.info("Vendor: %s", integration.vendor)
+        logger.info("URL: %s", integration.url)
+        logger.info("Path: %s", payload.path)
+        logger.info("Credentials keys: %s", list(integration.credentials.keys()))
+
         connector = BaseConnector.get_connector(
             vendor=integration.vendor,
             credentials=integration.credentials,
             url=integration.url
         )
-        
-        print(f"Connector created: {type(connector).__name__}")
-        
+
+        logger.info("Connector created: %s", type(connector).__name__)
+
         files = connector.list_files(
             path=payload.path,
             search_query=payload.search_query
         )
-        
-        print(f"Files retrieved: {len(files) if files else 0}")
-        
+
+        logger.info("Files retrieved: %d", len(files) if files else 0)
+
         # Ensure files is a list
         if files is None:
             files = []
-        
+
         # Convert RemoteFile objects to schema objects
         file_dicts = []
         for f in files:
@@ -300,11 +340,11 @@ async def browse_integration_files(
                 )
                 file_dicts.append(file_dict)
             except Exception as e:
-                print(f"Error converting file {getattr(f, 'name', 'unknown')}: {e}")
+                logger.error("Error converting file %s: %s", getattr(f, 'name', 'unknown'), e)
                 continue
-        
-        print(f"Files converted: {len(file_dicts)}")
-        print("=== End Debug ===\n")
+
+        logger.info("Files converted: %d", len(file_dicts))
+        logger.info("=== End Debug ===")
 
         # Fetch available tickers from portfolio if provided
         available_tickers = None
@@ -318,7 +358,7 @@ async def browse_integration_files(
                 available_tickers = [ticker.upper() for ticker in portfolio.company_names]
                 portfolio_name = portfolio.name
                 portfolio_id_used = portfolio.id
-                print(f"Loaded {len(available_tickers)} tickers from portfolio '{portfolio_name}'")
+                logger.info("Loaded %d tickers from portfolio '%s'", len(available_tickers), portfolio_name)
         elif payload.user_id:
             # Get all portfolios for the user and collect unique tickers
             portfolios = await PortfolioService.get_user_portfolios(db, payload.user_id)
@@ -328,7 +368,7 @@ async def browse_integration_files(
                 for portfolio in portfolios:
                     ticker_set.update(portfolio.company_names)
                 available_tickers = sorted([ticker.upper() for ticker in ticker_set])
-                print(f"Loaded {len(available_tickers)} unique tickers from {len(portfolios)} portfolios")
+                logger.info("Loaded %d unique tickers from %d portfolios", len(available_tickers), len(portfolios))
 
         response = BrowseFilesResponse(
             integration_id=payload.integration_id,
@@ -346,9 +386,9 @@ async def browse_integration_files(
     except Exception as e:
         import traceback
         error_detail = f"Failed to browse files: {str(e)}\n{traceback.format_exc()}"
-        print(f"\n=== Browse Error ===")
-        print(error_detail)
-        print("=== End Error ===\n")
+        logger.error("=== Browse Error ===")
+        logger.error(error_detail)
+        logger.error("=== End Error ===")
         raise HTTPException(status_code=500, detail=f"Failed to browse files: {str(e)}")
 
 
@@ -357,7 +397,8 @@ async def browse_integration_files(
 @router.post("/import", response_model=FileImportResponse)
 async def import_files(
     payload: FileImportRequest,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Import and ingest files from an integration
@@ -369,6 +410,16 @@ async def import_files(
 
     Note: All files in a single import request will be ingested to the same ticker collection.
     """
+    integration = await IntegrationService.get_integration(db, payload.integration_id)
+    if not integration:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_owner(integration.user_id, current_user)
+
+    if payload.portfolio_id:
+        portfolio_check = await PortfolioService.get_portfolio(db, payload.portfolio_id)
+        if portfolio_check:
+            verify_owner(portfolio_check.user_id, current_user)
+
     try:
         # Validate ticker format (should be uppercase alphanumeric)
         ticker = payload.ticker.upper().strip()

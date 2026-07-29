@@ -5,7 +5,10 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 import tempfile
 import os
+import logging
 from .base import BaseConnector, RemoteFile
+
+logger = logging.getLogger("connectors.onedrive")
 
 
 class OneDriveConnector(BaseConnector):
@@ -97,56 +100,56 @@ class OneDriveConnector(BaseConnector):
         try:
             import requests
 
-            print(f"\n[OneDrive] Starting file listing...")
-            print(f"[OneDrive] Path: {path}, Search: {search_query}")
+            logger.info("[OneDrive] Starting file listing...")
+            logger.info("[OneDrive] Path: %s, Search: %s", path, search_query)
 
             # Get authentication token
             try:
                 token = self._get_access_token()
-                print(f"[OneDrive] Access token obtained")
+                logger.info("[OneDrive] Access token obtained")
             except Exception as e:
-                print(f"[OneDrive] Failed to get access token: {e}")
+                logger.error("[OneDrive] Failed to get access token: %s", e)
                 raise Exception(f"Authentication failed: {str(e)}")
 
             # Get drive ID
             try:
                 drive_id = self._get_drive_id()
-                print(f"[OneDrive] Drive ID: {drive_id}")
+                logger.info("[OneDrive] Drive ID: %s", drive_id)
             except Exception as e:
-                print(f"[OneDrive] Failed to get drive ID: {e}")
+                logger.error("[OneDrive] Failed to get drive ID: %s", e)
                 raise Exception(f"Failed to access OneDrive: {str(e)}")
 
             headers = {'Authorization': f'Bearer {token}'}
 
             # Determine the folder to list
             folder_path = path or self.folder_path
-            print(f"[OneDrive] Folder path: {folder_path}")
+            logger.info("[OneDrive] Folder path: %s", folder_path)
 
             # Build the API URL
             if not folder_path or folder_path == "/" or not folder_path.strip():
                 # List from root
                 items_url = f"https://graph.microsoft.com/v1.0/me/drive/root/children"
-                print(f"[OneDrive] Listing root directory")
+                logger.info("[OneDrive] Listing root directory")
             else:
                 # List from specific folder path
                 # Path format: "folder_name" or "folder_name/subfolder_name"
                 items_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{folder_path}:/children"
-                print(f"[OneDrive] Listing folder: {folder_path}")
+                logger.info("[OneDrive] Listing folder: %s", folder_path)
 
-            print(f"[OneDrive] API URL: {items_url}")
+            logger.info("[OneDrive] API URL: %s", items_url)
 
             try:
                 response = requests.get(items_url, headers=headers)
                 response.raise_for_status()
                 items = response.json().get('value', [])
-                print(f"[OneDrive] Found {len(items)} item(s)")
+                logger.info("[OneDrive] Found %d item(s)", len(items))
             except requests.exceptions.HTTPError as e:
                 error_detail = ""
                 try:
                     error_detail = response.json()
                 except:
                     error_detail = response.text
-                print(f"[OneDrive] HTTP Error: {e}, Response: {error_detail}")
+                logger.error("[OneDrive] HTTP Error: %s, Response: %s", e, error_detail)
                 raise Exception(f"Failed to list files: {str(e)}")
 
             # Convert to RemoteFile objects
@@ -193,18 +196,18 @@ class OneDriveConnector(BaseConnector):
                         remote_files.append(remote_file)
 
                 except Exception as e:
-                    print(f"[OneDrive] Error processing item {item.get('name', 'unknown')}: {e}")
+                    logger.error("[OneDrive] Error processing item %s: %s", item.get('name', 'unknown'), e)
                     continue
 
-            print(f"[OneDrive] Returning {len(remote_files)} file(s)")
+            logger.info("[OneDrive] Returning %d file(s)", len(remote_files))
             return remote_files
 
         except ImportError as e:
             raise Exception(f"Missing dependencies: {str(e)}")
         except Exception as e:
             import traceback
-            print(f"[OneDrive] Exception: {e}")
-            print(traceback.format_exc())
+            logger.error("[OneDrive] Exception: %s", e)
+            logger.error(traceback.format_exc())
             raise Exception(f"Failed to list OneDrive files: {str(e)}")
 
     def download_file(self, file_path: str) -> str:
@@ -249,7 +252,7 @@ class OneDriveConnector(BaseConnector):
                     error_detail = file_response.json()
                 except:
                     error_detail = file_response.text
-                print(f"[OneDrive] HTTP Error: {e}, Response: {error_detail}")
+                logger.error("[OneDrive] HTTP Error: %s, Response: %s", e, error_detail)
                 raise Exception(f"Failed to download file: {str(e)}")
 
         except ImportError as e:

@@ -1,15 +1,18 @@
 """
 RAG endpoints (ask and compare) with portfolio integration and chat persistence
 """
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import HumanMessage
 from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
 from app.services.chat import ChatService
-from app.database.models import AgentType, MessageRole
+from app.database.models import AgentType, MessageRole, User, ChatSession
+from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.services.vectordb_manager import get_vectordb_manager
 from app.utils.company_mapping import get_ticker
 import uuid
@@ -17,7 +20,28 @@ import json
 import datetime
 import os
 
+logger = logging.getLogger("api.rag")
 router = APIRouter(tags=["RAG"])
+
+# Debug-only: dump full response payloads to output/json/ on every /ask or
+# /compare call. Off by default — was previously unconditional, growing
+# output/json/ without bound on every request in any environment.
+_SAVE_DEBUG_RESPONSES = os.getenv("SAVE_DEBUG_RESPONSES", "false").lower() == "true"
+
+
+def _maybe_save_debug_response(response_data: dict, prefix: str) -> None:
+    if not _SAVE_DEBUG_RESPONSES:
+        return
+    try:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        json_dir = "output/json"
+        os.makedirs(json_dir, exist_ok=True)
+        json_path = os.path.join(json_dir, f"{prefix}_{timestamp}.json")
+        with open(json_path, 'w') as f:
+            json.dump(response_data, f, indent=4)
+        logger.info("Debug response saved to: %s", json_path)
+    except Exception as e:
+        logger.warning("Failed to save debug response: %s", e)
 
 
 # Pydantic Models
@@ -67,7 +91,8 @@ def set_agent(agent_instance):
 @router.post("/ask")
 async def ask_agent(
     payload: AskInput,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Handle RAG queries with portfolio-based filtering and chat persistence.
@@ -76,10 +101,10 @@ async def ask_agent(
     try:
         if not agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
-        
+
         query = payload.query
         thread_id = payload.thread_id
-        
+
         # Get session and associated portfolio
         session = await PortfolioService.get_session(db, thread_id)
         if not session:
@@ -87,6 +112,7 @@ async def ask_agent(
                 status_code=404,
                 detail=f"Session not found. Please create a portfolio session first."
             )
+        verify_owner(session.user_id, current_user)
 
         portfolio = session.portfolio
 
@@ -129,11 +155,9 @@ async def ask_agent(
         vectordb_mgr = get_vectordb_manager()
         vectordb_mgr.register_session(thread_id, portfolio.id)
                 
-        print(f"Using portfolio-scoped context")
-        print(f"   Portfolio: {portfolio.name}")
-        print(f"   Tickers: {company_tickers}")
+        logger.info("Portfolio-scoped context: %s | Tickers: %s", portfolio.name, company_tickers)
         
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {"configurable": {"thread_id": f"rag:{thread_id}"}}
         
         # Standard execution
         inputs = {
@@ -191,11 +215,8 @@ async def ask_agent(
             }
         )
         
-        print(f"Query: {query}")
-        print(f"Thread ID: {thread_id}")
-        print(f"Answer: {answer[:200]}...")
-        print(f"Chat persisted to database")
-        
+        logger.info("Query: %s | Thread: %s | Answer: %.200s...", query, thread_id, answer)
+
         # Prepare response
         response_data = {
             "answer": answer,
@@ -233,39 +254,33 @@ async def ask_agent(
             "sub_query_results": result.get("sub_query_results", {})
         }
         
-        # Save response to output/json directory
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        json_dir = "output/json"
-        os.makedirs(json_dir, exist_ok=True)
-        json_path = os.path.join(json_dir, f"{timestamp}.json")
-        with open(json_path, 'w') as f:
-            json.dump(response_data, f, indent=4)
-        
-        print(f"Response saved to: {json_path}")
-        
+        _maybe_save_debug_response(response_data, "ask")
+
         return response_data
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error: {str(e)}")
+        logger.error("Error in /ask: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/compare")
 async def compare_companies(
     payload: CompareInput,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Handle company comparison queries with chat persistence.
     Creates a TEMPORARY Vector DB instance with specified companies.
     Does NOT affect portfolio-scoped DB instances.
     """
+    verify_user_id_matches(payload.user_id, current_user)
     try:
         if not agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
-        
+
         company1 = payload.company1
         company2 = payload.company2
         company3 = payload.company3
@@ -298,7 +313,7 @@ async def compare_companies(
                     # For now keep it as is, retrieve will fail to find collection and fallback to web search probably.
                     pass
         
-        print(f"Mapped companies {companies} to tickers: {tickers}")
+        logger.info("Mapped companies %s to tickers: %s", companies, tickers)
         
         # Generate a stable session ID based on user + companies if not provided.
         # Using a deterministic hash ensures the same comparison always continues
@@ -325,7 +340,11 @@ async def compare_companies(
                 "year": payload.year
             }
         )
-        
+        # If payload.thread_id referenced a PRE-EXISTING session, guard against
+        # it belonging to a different user (create_or_get_chat_session returns
+        # the existing row rather than creating a new one in that case).
+        verify_owner(chat_session.user_id, current_user)
+
         # Build year string for the query
         year_str = str(payload.year) if payload.year else "2024"
         
@@ -354,11 +373,9 @@ Compare {comparison_str} {year_str}:
         # Commenting out create_temporary as we want to use existing collections
         # If we need ad-hoc ingestion for comparison, that's a separate feature.
         
-        print(f"Compare mode: Using ticker-based collections")
-        print(f"   Tickers: {tickers}")
-        print(f"   Session ID: {thread_id}")
+        logger.info("Compare mode: tickers=%s session=%s", tickers, thread_id)
         
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {"configurable": {"thread_id": f"rag:{thread_id}"}}
         
         # Prepare inputs with comparison mode enabled
         inputs = {
@@ -429,11 +446,7 @@ Compare {comparison_str} {year_str}:
             }
         )
         
-        print(f"Comparison Query: {comparison_str}")
-        print(f"Thread ID: {thread_id}")
-        print(f"Chart URL: {chart_url}")
-        print(f"Answer: {answer[:200]}...")
-        print(f"Chat persisted to database")
+        logger.info("Comparison query: %s | Thread: %s | Chart: %s", comparison_str, thread_id, chart_url)
         
         # Prepare response
         response_data = {
@@ -472,25 +485,20 @@ Compare {comparison_str} {year_str}:
             "sub_query_results": result.get("sub_query_results", {})
         }
         
-        # Save response to output/json directory
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        json_dir = "output/json"
-        os.makedirs(json_dir, exist_ok=True)
-        json_path = os.path.join(json_dir, f"comparison_{timestamp}.json")
-        with open(json_path, 'w') as f:
-            json.dump(response_data, f, indent=4)
-        
+        _maybe_save_debug_response(response_data, "comparison")
+
         return response_data
-        
+
     except Exception as e:
-        print(f"Error: {str(e)}")
+        logger.error("Error in /compare: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/alpha")
 async def run_alpha(
     payload: AlphaInput,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Run the ALPHA framework directly for a list of tickers — no free-text query.
@@ -498,6 +506,7 @@ async def run_alpha(
     portfolio's ticker symbols and triggers the full 5-dimension analysis
     per ticker, bypassing the (now-disabled) keyword detection in general chat.
     """
+    verify_user_id_matches(payload.user_id, current_user)
     try:
         if not agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
@@ -510,6 +519,7 @@ async def run_alpha(
                 status_code=404,
                 detail=f"Session not found. Please create a portfolio session first."
             )
+        verify_owner(session.user_id, current_user)
 
         portfolio = session.portfolio
 
@@ -541,11 +551,11 @@ async def run_alpha(
 
         results = []
         for ticker in resolved_tickers:
-            print(f"Running ALPHA for ticker: {ticker}")
+            logger.info("Running ALPHA for ticker: %s", ticker)
 
             # Each ticker gets its own checkpointer thread so per-ticker
             # alpha_dimensions/state don't leak into one another.
-            config = {"configurable": {"thread_id": f"{thread_id}-alpha-{ticker}"}}
+            config = {"configurable": {"thread_id": f"rag:{thread_id}-alpha-{ticker}"}}
 
             inputs = {
                 "messages": [HumanMessage(content=f"ALPHA analysis for {ticker}")],
@@ -599,7 +609,7 @@ async def run_alpha(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error: {str(e)}")
+        logger.error("Error in /alpha: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -667,10 +677,14 @@ async def get_capabilities():
 
 
 @router.get("/sessions/{session_id}")
-async def get_session_history(session_id: str):
+async def get_session_history(
+    session_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """
     Get conversation history for a specific RAG session.
-    
+
     Returns the LangGraph conversation state including all messages
     and intermediate states for this session.
     """
@@ -679,10 +693,16 @@ async def get_session_history(session_id: str):
             status_code=503,
             detail="RAG agent not initialized."
         )
-    
+
+    result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+    chat_session = result.scalar_one_or_none()
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    verify_owner(chat_session.user_id, current_user)
+
     try:
         state = await agent.aget_state(
-            config={"configurable": {"thread_id": session_id}}
+            config={"configurable": {"thread_id": f"rag:{session_id}"}}
         )
         messages = state.values.get('messages', []) if state.values else []
         
@@ -714,18 +734,20 @@ async def get_session_history(session_id: str):
 @router.get("/portfolio/{portfolio_id}/sessions")
 async def get_portfolio_rag_sessions(
     portfolio_id: int,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get all RAG sessions (ask + compare) linked to a portfolio.
-    
-    Returns all chat sessions where agent_type='rag' and 
+
+    Returns all chat sessions where agent_type='rag' and
     portfolio_id matches the requested portfolio.
     """
     # Verify portfolio exists
     portfolio = await PortfolioService.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
+    verify_owner(portfolio.user_id, current_user)
 
     # Get all RAG sessions for this portfolio
     sessions = await ChatService.get_portfolio_sessions(

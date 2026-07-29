@@ -10,10 +10,12 @@ import re
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 from ingestion.edgar_fetcher import SecEdgarFetcher, VALID_FORM_TYPES
+from app.database.models import User
+from app.auth.deps import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +102,10 @@ class EdgarIngestResponse(BaseModel):
         "ingested (by content hash), are skipped automatically."
     ),
 )
-async def ingest_edgar_filings(request: EdgarIngestRequest):
+async def ingest_edgar_filings(
+    request: EdgarIngestRequest,
+    current_user: User = Depends(get_current_user),
+):
     ticker = _validate_ticker(request.ticker)
 
     invalid_types = [t for t in request.form_types if t not in VALID_FORM_TYPES]

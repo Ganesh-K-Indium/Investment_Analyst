@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.database.connection import get_db_session
 from app.services.chat import ChatService
-from app.database.models import AgentType, ChatSession, ChatMessage, ConsolidatedSummary
+from app.database.models import AgentType, ChatSession, ChatMessage, ConsolidatedSummary, Portfolio, User
+from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from datetime import datetime
 import json
 
@@ -112,27 +113,35 @@ class ConsolidatedSummaryResponse(BaseModel):
 async def get_session_summary(
     session_id: str,
     agent_type: Optional[str] = None,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get cached chat summary from database (fast, no LLM call).
 
     Use POST endpoint to generate/store new summary.
     """
-    summary = await ChatService.get_session_summary(db, session_id)
-
-    if not summary:
-        raise HTTPException(
-            status_code=404,
-            detail="No summary available. Generate one using POST /chats/session/{session_id}/summary"
-        )
-
     result = await db.execute(
         select(ChatSession)
         .where(ChatSession.session_id == session_id)
         .options(selectinload(ChatSession.messages))
     )
     chat_session = result.scalar_one_or_none()
+
+    if not chat_session:
+        raise HTTPException(
+            status_code=404,
+            detail="No summary available. Generate one using POST /chats/session/{session_id}/summary"
+        )
+    verify_owner(chat_session.user_id, current_user)
+
+    summary = chat_session.summary
+
+    if not summary:
+        raise HTTPException(
+            status_code=404,
+            detail="No summary available. Generate one using POST /chats/session/{session_id}/summary"
+        )
 
     return ChatSummaryResponse(
         session_id=session_id,
@@ -148,7 +157,8 @@ async def generate_session_summary(
     session_id: str,
     request: ChatSummaryRequest,
     agent_type: Optional[str] = Query(None, description="Agent type (rag/quant)"),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Generate LLM-powered summary of chat session.
@@ -157,6 +167,12 @@ async def generate_session_summary(
     - max_messages: Number of recent messages to include (10-100)
     - llm_model: LLM model to use (default: gpt-4o-mini)
     """
+    result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+    chat_session = result.scalar_one_or_none()
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    verify_owner(chat_session.user_id, current_user)
+
     try:
         summary = await ChatService.generate_chat_summary(
             db=db,
@@ -180,7 +196,8 @@ async def generate_session_summary(
 @router.post("/sessions/consolidated-summary", response_model=ConsolidatedSummaryResponse)
 async def generate_consolidated_summary(
     request: ConsolidatedSummaryRequest,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Generate a single consolidated summary across multiple chat sessions.
@@ -193,6 +210,16 @@ async def generate_consolidated_summary(
     - max_messages_per_session: Messages to include per session (5-100, default 30)
     - llm_model: LLM model to use (default: gpt-4o-mini)
     """
+    # No explicit user_id field on this request — verify ownership of every
+    # session_id supplied so a user can't pull another user's session into
+    # their consolidated summary. Sessions that don't exist are left for
+    # ChatService.generate_consolidated_summary to skip as usual.
+    for sid in request.session_ids:
+        sess_result = await db.execute(select(ChatSession).where(ChatSession.session_id == sid))
+        sess = sess_result.scalar_one_or_none()
+        if sess:
+            verify_owner(sess.user_id, current_user)
+
     try:
         result = await ChatService.generate_consolidated_summary(
             db=db,
@@ -224,12 +251,14 @@ async def generate_consolidated_summary(
 @router.get("/user/{user_id}/summaries", response_model=SummariesByAgentResponse)
 async def get_user_summaries(
     user_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get all cached summaries for a user grouped by agent type (rag and quant).
     Returns only sessions with summaries that are active.
     """
+    verify_user_id_matches(user_id, current_user)
     try:
         summaries = await ChatService.get_user_summaries_by_agent(db, user_id)
         return SummariesByAgentResponse(**summaries)
@@ -240,7 +269,8 @@ async def get_user_summaries(
 @router.delete("/session/{session_id}/summary", status_code=status.HTTP_200_OK)
 async def delete_session_summary(
     session_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Clear the summary from a single session or delete a consolidated summary row."""
     if session_id.startswith("consolidated-"):
@@ -249,12 +279,14 @@ async def delete_session_summary(
         row = result.scalar_one_or_none()
         if not row:
             raise HTTPException(status_code=404, detail="Consolidated summary not found")
+        verify_owner(row.user_id, current_user)
         await db.delete(row)
     else:
         result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
         session = result.scalar_one_or_none()
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        verify_owner(session.user_id, current_user)
         session.summary = None
         session.summary_updated_at = None
     await db.commit()
@@ -264,9 +296,11 @@ async def delete_session_summary(
 @router.delete("/user/{user_id}/summaries", status_code=status.HTTP_200_OK)
 async def clear_all_user_summaries(
     user_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Clear all summaries for a user — nullifies ChatSession summaries and deletes consolidated rows."""
+    verify_user_id_matches(user_id, current_user)
     await db.execute(
         update(ChatSession)
         .where(ChatSession.user_id == user_id, ChatSession.summary.isnot(None))
@@ -280,13 +314,15 @@ async def clear_all_user_summaries(
 @router.post("/session")
 async def create_chat_session(
     payload: CreateChatSessionRequest,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Register a new chat session in the database before any messages are sent.
     Call this when the user opens a new chat so the session can be deleted
     even if no messages have been sent yet.
     """
+    verify_user_id_matches(payload.user_id, current_user)
     try:
         agent_type_enum = AgentType(payload.agent_type.lower())
     except ValueError:
@@ -322,7 +358,8 @@ async def get_user_chat_sessions(
     agent_type: Optional[str] = None,
     portfolio_id: Optional[int] = None,
     include_inactive: bool = False,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get all chat sessions for a user.
@@ -332,6 +369,7 @@ async def get_user_chat_sessions(
     - portfolio_id: Filter by portfolio
     - include_inactive: Include inactive/archived sessions
     """
+    verify_user_id_matches(user_id, current_user)
     try:
         # Parse agent type if provided
         agent_filter = None
@@ -374,7 +412,8 @@ async def get_session_chat_history(
     session_id: str,
     limit: Optional[int] = None,
     offset: Optional[int] = 0,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get complete chat history for a session.
@@ -390,6 +429,7 @@ async def get_session_chat_history(
 
         if not chat_session:
             raise HTTPException(status_code=404, detail="Chat session not found")
+        verify_owner(chat_session.user_id, current_user)
 
         # Get messages
         messages = await ChatService.get_session_messages(
@@ -428,7 +468,8 @@ async def get_session_chat_history(
 async def export_session(
     session_id: str,
     format: str = "json",
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Export chat session to JSON or TXT format.
@@ -438,10 +479,11 @@ async def export_session(
     """
     try:
         export_data = await ChatService.export_session(db, session_id)
-        
+
         if not export_data:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        
+        verify_owner(export_data["user_id"], current_user)
+
         if format.lower() == "txt":
             # Generate text format
             lines = [
@@ -495,10 +537,17 @@ async def export_session(
 async def update_session_title(
     session_id: str,
     payload: UpdateTitleRequest,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Update the title of a chat session"""
     try:
+        existing_result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        existing_session = existing_result.scalar_one_or_none()
+        if not existing_session:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        verify_owner(existing_session.user_id, current_user)
+
         chat_session = await ChatService.update_session_title(
             db=db,
             session_id=session_id,
@@ -523,13 +572,20 @@ async def update_session_title(
 @router.delete("/session/{session_id}/messages")
 async def clear_session_messages(
     session_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Clear all messages from a session (keeps the session).
     Useful for starting fresh while maintaining session metadata.
     """
     try:
+        existing_result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        existing_session = existing_result.scalar_one_or_none()
+        if not existing_session:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        verify_owner(existing_session.user_id, current_user)
+
         count = await ChatService.clear_session_messages(db, session_id)
 
         if count == -1:
@@ -550,13 +606,31 @@ async def clear_session_messages(
 @router.delete("/session/{session_id}")
 async def delete_session(
     session_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Permanently delete a chat session and all its messages.
     This action cannot be undone.
     """
     try:
+        # Mirrors ChatService.delete_session's own lookup: a ChatSession may
+        # not exist yet if no message was ever sent, in which case the
+        # legacy portfolio Session row is the one holding ownership.
+        from app.database.models import Session as PortfolioSession
+        existing_result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        existing_session = existing_result.scalar_one_or_none()
+        if existing_session:
+            verify_owner(existing_session.user_id, current_user)
+        else:
+            portfolio_session_result = await db.execute(
+                select(PortfolioSession).where(PortfolioSession.id == session_id)
+            )
+            portfolio_session = portfolio_session_result.scalar_one_or_none()
+            if not portfolio_session:
+                raise HTTPException(status_code=404, detail="Chat session not found")
+            verify_owner(portfolio_session.user_id, current_user)
+
         success = await ChatService.delete_session(db, session_id)
         
         if not success:
@@ -576,13 +650,20 @@ async def delete_session(
 @router.post("/session/{session_id}/deactivate")
 async def deactivate_session(
     session_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Mark a session as inactive (soft delete).
     Session is hidden but can be recovered.
     """
     try:
+        existing_result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        existing_session = existing_result.scalar_one_or_none()
+        if not existing_session:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        verify_owner(existing_session.user_id, current_user)
+
         success = await ChatService.deactivate_session(db, session_id)
         
         if not success:
@@ -602,10 +683,17 @@ async def deactivate_session(
 @router.get("/session/{session_id}/stats")
 async def get_session_stats(
     session_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Get statistics for a chat session"""
     try:
+        existing_result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+        existing_session = existing_result.scalar_one_or_none()
+        if not existing_session:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        verify_owner(existing_session.user_id, current_user)
+
         stats = await ChatService.get_session_stats(db, session_id)
         
         if not stats:
@@ -622,9 +710,11 @@ async def get_session_stats(
 @router.get("/user/{user_id}/stats", response_model=ChatStatsResponse)
 async def get_user_stats(
     user_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Get statistics for all user's chat sessions"""
+    verify_user_id_matches(user_id, current_user)
     try:
         stats = await ChatService.get_user_stats(db, user_id)
         return ChatStatsResponse(**stats)
@@ -637,7 +727,8 @@ async def get_user_stats(
 async def get_portfolio_chat_sessions(
     portfolio_id: int,
     agent_type: Optional[str] = None,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get all chat sessions for a portfolio.
@@ -645,6 +736,12 @@ async def get_portfolio_chat_sessions(
     Query Parameters:
     - agent_type: Filter by agent type (rag or quant)
     """
+    portfolio_result = await db.execute(select(Portfolio).where(Portfolio.id == portfolio_id))
+    portfolio = portfolio_result.scalar_one_or_none()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    verify_owner(portfolio.user_id, current_user)
+
     try:
         # Parse agent type if provided
         agent_filter = None

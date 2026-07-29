@@ -6,6 +6,9 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 import tempfile
 import os
+import logging
+
+logger = logging.getLogger("connectors.base")
 
 
 class RemoteFile:
@@ -109,7 +112,7 @@ class BaseConnector(ABC):
                 local_path = self.download_file(file_path)
                 results.append((file_path, local_path))
             except Exception as e:
-                print(f"Failed to download {file_path}: {e}")
+                logger.error("Failed to download %s: %s", file_path, e)
                 results.append((file_path, None))
         return results
     

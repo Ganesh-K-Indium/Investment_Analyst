@@ -1,6 +1,7 @@
 """
 Portfolio management endpoints
 """
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Any
@@ -10,9 +11,11 @@ from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
 from app.services.chat import ChatService
 from app.services.vectordb_manager import get_vectordb_manager
-from app.database.models import AgentType
+from app.database.models import AgentType, User
+from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from datetime import datetime
 
+logger = logging.getLogger("api.portfolios")
 router = APIRouter(prefix="/portfolios", tags=["Portfolios"])
 
 
@@ -88,9 +91,11 @@ class SessionResponse(BaseModel):
 @router.post("", response_model=PortfolioResponse)
 async def create_portfolio(
     payload: PortfolioCreate,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Create a new portfolio with specified tickers and initialize Vector DB"""
+    verify_user_id_matches(payload.user_id, current_user)
     try:
         portfolio = await PortfolioService.create_portfolio(
             db=db,
@@ -100,21 +105,10 @@ async def create_portfolio(
             description=payload.description
         )
         
-        # CRITICAL: Initialize Vector DB ONCE at portfolio creation
-        # All future sessions will reuse this same DB instance
-        vectordb_mgr = get_vectordb_manager()
-        try:
-            vectordb_mgr.initialize_for_portfolio(
-                portfolio_id=portfolio.id,
-                company_names=portfolio.company_names # Stored as tickers now
-            )
-            print(f"Portfolio created with Vector DB initialized")
-            print(f"   Portfolio ID: {portfolio.id}")
-            print(f"   Tickers: {portfolio.company_names}")
-        except Exception as e:
-            print(f"Warning: Failed to initialize Vector DB: {e}")
-            print("   Portfolio created but RAG queries may fail")
-        
+        # Note: there is no per-portfolio vector DB to initialize — retrieval is
+        # fully lazy, per-ticker (see VectorDBManager.get_instance()). Nothing
+        # to do here at portfolio-creation time.
+
         # Manually map for response because of field rename
         return PortfolioResponse(
             id=portfolio.id,
@@ -132,13 +126,15 @@ async def create_portfolio(
 @router.get("/{portfolio_id}", response_model=PortfolioResponse)
 async def get_portfolio(
     portfolio_id: int,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Get portfolio by ID"""
     portfolio = await PortfolioService.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    
+    verify_owner(portfolio.user_id, current_user)
+
     return PortfolioResponse(
         id=portfolio.id,
         user_id=portfolio.user_id,
@@ -153,9 +149,11 @@ async def get_portfolio(
 @router.get("/user/{user_id}", response_model=List[PortfolioResponse])
 async def get_user_portfolios(
     user_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Get all portfolios for a user"""
+    verify_user_id_matches(user_id, current_user)
     portfolios = await PortfolioService.get_user_portfolios(db, user_id)
     return [
         PortfolioResponse(
@@ -174,9 +172,15 @@ async def get_user_portfolios(
 async def update_portfolio(
     portfolio_id: int,
     payload: PortfolioUpdate,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
-    """Update an existing portfolio and re-initialize Vector DB if tickers changed"""
+    """Update an existing portfolio"""
+    existing = await PortfolioService.get_portfolio(db, portfolio_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    verify_owner(existing.user_id, current_user)
+
     portfolio = await PortfolioService.update_portfolio(
         db=db,
         portfolio_id=portfolio_id,
@@ -186,34 +190,23 @@ async def update_portfolio(
     )
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    
-    # If tickers were updated, re-initialize the Vector DB
+
+    # Retrieval is lazy per-ticker (VectorDBManager.get_instance()) — there is
+    # no per-portfolio vector DB to re-initialize when tickers change. The one
+    # real piece of state to refresh is the in-memory thread_id -> portfolio_id
+    # map used by get_portfolio_id_for_session(), for this portfolio's sessions.
     if payload.tickers is not None:
         vectordb_mgr = get_vectordb_manager()
-        try:
-            # Clean up old instance and create new one
-            vectordb_mgr.cleanup_portfolio(portfolio_id)
-            vectordb_mgr.initialize_for_portfolio(
-                portfolio_id=portfolio.id,
-                company_names=portfolio.company_names
-            )
-            
-            # Re-register all existing sessions for this portfolio
-            from app.database.models import Session as SessionModel
-            sessions_result = await db.execute(
-                select(SessionModel).where(SessionModel.portfolio_id == portfolio_id)
-            )
-            sessions = sessions_result.scalars().all()
-            
-            for session in sessions:
-                vectordb_mgr.register_session(session.id, portfolio_id)
-            
-            print(f"Portfolio {portfolio_id} updated and Vector DB re-initialized")
-            print(f"   New Tickers: {portfolio.company_names}")
-            print(f"   Re-registered {len(sessions)} existing sessions")
-        except Exception as e:
-            print(f"Warning: Failed to re-initialize Vector DB: {e}")
-    
+        from app.database.models import Session as SessionModel
+        sessions_result = await db.execute(
+            select(SessionModel).where(SessionModel.portfolio_id == portfolio_id)
+        )
+        sessions = sessions_result.scalars().all()
+        for session in sessions:
+            vectordb_mgr.register_session(session.id, portfolio_id)
+        logger.info("Portfolio %s updated (tickers: %s); re-registered %d session(s)",
+                    portfolio_id, portfolio.company_names, len(sessions))
+
     return PortfolioResponse(
         id=portfolio.id,
         user_id=portfolio.user_id,
@@ -228,34 +221,41 @@ async def update_portfolio(
 @router.delete("/{portfolio_id}")
 async def delete_portfolio(
     portfolio_id: int,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
-    """Delete a portfolio and cleanup its Vector DB instance"""
+    """Delete a portfolio"""
+    existing = await PortfolioService.get_portfolio(db, portfolio_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    verify_owner(existing.user_id, current_user)
+
     success = await PortfolioService.delete_portfolio(db, portfolio_id)
     if not success:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    
-    # Cleanup the Vector DB instance for this portfolio
-    vectordb_mgr = get_vectordb_manager()
-    vectordb_mgr.cleanup_portfolio(portfolio_id)
-    print(f"Portfolio {portfolio_id} deleted and Vector DB cleaned up")
-    
+
+    logger.info("Portfolio %s deleted", portfolio_id)
+
     return {"message": "Portfolio deleted successfully"}
 
 
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(
     payload: SessionCreateRequest,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new session for a portfolio.
     Simply registers the session to the existing portfolio Vector DB.
     """
-    # Verify portfolio exists
+    verify_user_id_matches(payload.user_id, current_user)
+
+    # Verify portfolio exists and belongs to this user
     portfolio = await PortfolioService.get_portfolio(db, payload.portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
+    verify_owner(portfolio.user_id, current_user)
 
     # Create session
     session = await PortfolioService.create_session(
@@ -291,15 +291,10 @@ async def create_session(
         portfolio_id=portfolio.id
     )
 
-    # Lazy initialization logic is handled by VectorDBManager on retrieval
-    # No need to explicitly initialize or check for portfolio DB instance here
-    print(f"Session registered with VectorDBManager")
+    logger.info("Session %s created for portfolio %s (tickers: %s)",
+                session.id, portfolio.id, portfolio.company_names)
 
-    print(f"Session created and registered to portfolio Vector DB")
-    print(f"   Session ID: {session.id}")
-    print(f"   Portfolio ID: {portfolio.id}")
-    print(f"   Tickers: {portfolio.company_names}")
-    
+
     return SessionResponse(
         thread_id=session.id,
         portfolio_id=session.portfolio_id,
@@ -314,13 +309,15 @@ async def create_session(
 @router.get("/sessions/{thread_id}", response_model=SessionResponse)
 async def get_session(
     thread_id: str,
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Get session and associated portfolio information"""
     session = await PortfolioService.get_session(db, thread_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+    verify_owner(session.user_id, current_user)
+
     portfolio = session.portfolio
     
     return SessionResponse(

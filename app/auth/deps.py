@@ -45,3 +45,38 @@ def require_role(*roles: str):
             )
         return current_user
     return _check
+
+
+def verify_user_id_matches(user_id, current_user: User) -> None:
+    """
+    Raise 403 if a client-supplied user_id (path/query/body field) doesn't
+    match the authenticated token's user. Every route that accepts a user_id
+    must call this right after resolving `current_user` via get_current_user —
+    it's what actually closes the "anyone can pass any user_id" hole; requiring
+    a valid token alone isn't sufficient if the token's owner and the acted-on
+    user_id are never cross-checked.
+
+    Kept as a plain string comparison (not an int cast) since user_id is
+    stored as a loose string column everywhere outside `users.id` itself.
+    """
+    if str(current_user.id) != str(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="user_id does not match the authenticated user",
+        )
+
+
+def verify_owner(owner_user_id, current_user: User) -> None:
+    """
+    Raise 403 if a fetched resource's stored owner (e.g. portfolio.user_id,
+    chat_session.user_id) doesn't belong to the authenticated user. Use this
+    for resource-id-only routes (GET/PUT/DELETE /thing/{id}) that don't carry
+    an explicit user_id in the request — check ownership AFTER fetching the
+    resource, treating a mismatch as 404 (not 403) so existence of another
+    user's resource isn't leaked.
+    """
+    if str(current_user.id) != str(owner_user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found",
+        )

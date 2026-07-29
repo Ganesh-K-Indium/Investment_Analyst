@@ -404,14 +404,20 @@ async def get_session_history(session_id: str):
 
 
 if __name__ == "__main__":
+    # Port 8569 — deliberately distinct from the 4 MCP servers this API talks
+    # to (8565-8568) and the main FastAPI app (8000). This file is a
+    # standalone/alternate entry point for the stock-analysis supervisor, not
+    # the one wired into app/main.py (that's app.services.stock_agent) — but
+    # it previously bound 8568, colliding with the Options Intelligence MCP
+    # server if both were ever run at once.
     print(" Starting Stock Analysis Supervisor API Server...")
-    print(" API will be available at: http://localhost:8567")
-    print(" API documentation at: http://localhost:8567/docs")
+    print(" API will be available at: http://localhost:8569")
+    print(" API documentation at: http://localhost:8569/docs")
 
     uvicorn.run(
         "api_server:app",
         host="0.0.0.0",
-        port=8568,
+        port=8569,
         reload=False,
         log_level="info"
     )

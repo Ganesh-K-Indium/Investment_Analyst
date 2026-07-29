@@ -8,7 +8,10 @@ import tempfile
 import os
 from urllib.parse import urljoin
 import requests
+import logging
 from .base import BaseConnector, RemoteFile
+
+logger = logging.getLogger("connectors.confluence")
 
 
 class ConfluenceConnector(BaseConnector):
@@ -48,7 +51,7 @@ class ConfluenceConnector(BaseConnector):
             raise Exception("Session not initialized")
 
         url = urljoin(self.confluence_url, endpoint)
-        print(f"[Confluence] {method} {url}")
+        logger.info("[Confluence] %s %s", method, url)
 
         try:
             response = self.session.request(method, url, **kwargs)
@@ -59,11 +62,11 @@ class ConfluenceConnector(BaseConnector):
                     error_msg = error_body.get('message', response.text)
                 except:
                     error_msg = response.text
-                print(f"[Confluence] API Error: {response.status_code} - {error_msg}")
+                logger.error("[Confluence] API Error: %s - %s", response.status_code, error_msg)
 
             return response
         except Exception as e:
-            print(f"[Confluence] Request failed: {e}")
+            logger.error("[Confluence] Request failed: %s", e)
             raise
 
     def test_connection(self) -> Tuple[bool, str]:
@@ -87,8 +90,8 @@ class ConfluenceConnector(BaseConnector):
     ) -> List[RemoteFile]:
         """List spaces and their attachments from Confluence"""
         try:
-            print(f"\n[Confluence] Starting file listing...")
-            print(f"[Confluence] Path: {path}, Search: {search_query}")
+            logger.info("[Confluence] Starting file listing...")
+            logger.info("[Confluence] Path: %s, Search: %s", path, search_query)
 
             if not path or path == "/" or not path.strip():
                 # List spaces
@@ -99,8 +102,8 @@ class ConfluenceConnector(BaseConnector):
 
         except Exception as e:
             import traceback
-            print(f"[Confluence] Exception: {e}")
-            print(traceback.format_exc())
+            logger.error("[Confluence] Exception: %s", e)
+            logger.error(traceback.format_exc())
             raise Exception(f"Failed to list Confluence files: {str(e)}")
 
     def _list_spaces(self, search_query: Optional[str] = None) -> List[RemoteFile]:
@@ -110,14 +113,14 @@ class ConfluenceConnector(BaseConnector):
             if search_query:
                 params['spaceKey'] = search_query
 
-            print(f"[Confluence] Listing spaces...")
+            logger.info("[Confluence] Listing spaces...")
 
             response = self._make_request('GET', 'rest/api/space', params=params)
             response.raise_for_status()
 
             spaces_data = response.json()
             spaces = spaces_data.get('results', [])
-            print(f"[Confluence] Found {len(spaces)} space(s)")
+            logger.info("[Confluence] Found %d space(s)", len(spaces))
 
             remote_files = []
             for space in spaces:
@@ -137,7 +140,7 @@ class ConfluenceConnector(BaseConnector):
             return remote_files
 
         except Exception as e:
-            print(f"[Confluence] Error listing spaces: {e}")
+            logger.error("[Confluence] Error listing spaces: %s", e)
             raise
 
     def _get_page_attachments_recursive(self, page_id: str, page_title: str, space_key: str) -> Tuple[List[RemoteFile], int]:
@@ -155,7 +158,7 @@ class ConfluenceConnector(BaseConnector):
             att_response.raise_for_status()
             child_attachments = att_response.json().get('results', [])
 
-            print(f"[Confluence] Page '{page_title}' has {len(child_attachments)} attachment(s)")
+            logger.info("[Confluence] Page '%s' has %d attachment(s)", page_title, len(child_attachments))
 
             for attachment in child_attachments:
                 att_title = attachment.get('title', 'unknown')
@@ -177,7 +180,7 @@ class ConfluenceConnector(BaseConnector):
                 )
                 remote_files.append(remote_file)
                 total_attachments += 1
-                print(f"[Confluence] Added attachment: {display_name}")
+                logger.info("[Confluence] Added attachment: %s", display_name)
 
             # Fetch child pages
             try:
@@ -189,12 +192,12 @@ class ConfluenceConnector(BaseConnector):
                 child_response.raise_for_status()
                 child_pages = child_response.json().get('results', [])
 
-                print(f"[Confluence] Page '{page_title}' has {len(child_pages)} child page(s)")
+                logger.info("[Confluence] Page '%s' has %d child page(s)", page_title, len(child_pages))
 
                 for child_page in child_pages:
                     child_id = child_page.get('id')
                     child_title = child_page.get('title', 'Unknown')
-                    print(f"[Confluence] Processing child page: {child_title} (ID: {child_id})")
+                    logger.info("[Confluence] Processing child page: %s (ID: %s)", child_title, child_id)
 
                     # Recursively process child pages
                     child_files, child_count = self._get_page_attachments_recursive(child_id, child_title, space_key)
@@ -202,19 +205,19 @@ class ConfluenceConnector(BaseConnector):
                     total_attachments += child_count
 
             except Exception as e:
-                print(f"[Confluence] Error fetching child pages for '{page_title}': {e}")
+                logger.error("[Confluence] Error fetching child pages for '%s': %s", page_title, e)
 
         except Exception as e:
-            print(f"[Confluence] Error getting attachments for page '{page_title}' ({page_id}): {e}")
+            logger.error("[Confluence] Error getting attachments for page '%s' (%s): %s", page_title, page_id, e)
             import traceback
-            print(traceback.format_exc())
+            logger.error(traceback.format_exc())
 
         return remote_files, total_attachments
 
     def _list_space_attachments(self, space_key: str, search_query: Optional[str] = None) -> List[RemoteFile]:
         """List all attachments in a space and its pages (including child pages)"""
         try:
-            print(f"[Confluence] Listing attachments in space: {space_key}")
+            logger.info("[Confluence] Listing attachments in space: %s", space_key)
 
             # List all pages in the space
             cql = f'space = "{space_key}" and type = "page"'
@@ -222,7 +225,7 @@ class ConfluenceConnector(BaseConnector):
                 cql += f' and (title ~ "{search_query}" or attachment ~ "{search_query}")'
             cql += ' ORDER BY created DESC'
 
-            print(f"[Confluence] Using CQL query: {cql}")
+            logger.info("[Confluence] Using CQL query: %s", cql)
 
             params = {
                 'cql': cql,
@@ -235,7 +238,7 @@ class ConfluenceConnector(BaseConnector):
 
             search_data = response.json()
             pages = search_data.get('results', [])
-            print(f"[Confluence] Found {len(pages)} total page(s) in space")
+            logger.info("[Confluence] Found %d total page(s) in space", len(pages))
 
             remote_files = []
             total_attachments = 0
@@ -243,23 +246,23 @@ class ConfluenceConnector(BaseConnector):
             for page in pages:
                 page_id = page.get('id')
                 page_title = page.get('title', 'Unknown')
-                print(f"[Confluence] Processing page: {page_title} (ID: {page_id})")
+                logger.info("[Confluence] Processing page: %s (ID: %s)", page_title, page_id)
 
                 # Recursively fetch attachments from this page and its child pages
                 page_files, page_count = self._get_page_attachments_recursive(page_id, page_title, space_key)
                 remote_files.extend(page_files)
                 total_attachments += page_count
 
-            print(f"[Confluence] Total attachments found: {total_attachments}")
+            logger.info("[Confluence] Total attachments found: %d", total_attachments)
             if total_attachments == 0:
-                print(f"[Confluence] WARNING: No attachments found in space '{space_key}'")
+                logger.warning("[Confluence] WARNING: No attachments found in space '%s'", space_key)
 
             return remote_files
 
         except Exception as e:
-            print(f"[Confluence] Error listing space attachments: {e}")
+            logger.error("[Confluence] Error listing space attachments: %s", e)
             import traceback
-            print(traceback.format_exc())
+            logger.error(traceback.format_exc())
             raise
 
     def _parse_datetime(self, date_str: Optional[str]) -> Optional[datetime]:
@@ -278,7 +281,7 @@ class ConfluenceConnector(BaseConnector):
         file_path format: "space_key/page_id/attachment_id"
         """
         try:
-            print(f"[Confluence] Downloading file: {file_path}")
+            logger.info("[Confluence] Downloading file: %s", file_path)
 
             parts = file_path.split('/')
             if len(parts) != 3:
@@ -301,7 +304,7 @@ class ConfluenceConnector(BaseConnector):
             if not download_url.startswith('http'):
                 download_url = urljoin(self.confluence_url, download_url.lstrip('/'))
 
-            print(f"[Confluence] Downloading: {download_url}")
+            logger.info("[Confluence] Downloading: %s", download_url)
 
             # Download the file
             file_response = requests.get(download_url, auth=(self.username, self.api_token))
@@ -314,7 +317,7 @@ class ConfluenceConnector(BaseConnector):
             with open(local_path, 'wb') as f:
                 f.write(file_response.content)
 
-            print(f"[Confluence] Downloaded to: {local_path}")
+            logger.info("[Confluence] Downloaded to: %s", local_path)
             return local_path
 
         except Exception as e:

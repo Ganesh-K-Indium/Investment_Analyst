@@ -153,10 +153,18 @@ def _is_direct_vectordb_mode(state) -> bool:
     Check if the current query should skip grading and web search,
     going directly from retrieve → generate → show_result.
 
-    Applies to: comparison mode, segment queries, geographic queries.
-    These query types use predefined sub-queries and the 10-K is the
-    authoritative source — web search only adds noise.
+    Applies to: comparison mode, segment queries, geographic queries — but
+    ONLY when the resolved filing_type is None (unresolved) or "10-K". The
+    "10-K is the authoritative source, web search only adds noise" rationale
+    does not hold for 10-Q/8-K data: those are thinner, less comprehensive
+    per-document, so bypassing the grading/web-fallback safety net for them
+    risks silently generating from weak retrieval with nothing to catch it.
+    When filing_type resolves to 10-Q or 8-K, these query types fall through
+    to the normal grade_documents → web-fallback path instead.
     """
+    filing_type = state.get("filing_type")
+    if filing_type not in (None, "10-K"):
+        return False
     if state.get("is_comparison_mode", False):
         return True
     query_type = state.get("sub_query_analysis", {}).get("query_type", "")

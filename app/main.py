@@ -2,7 +2,6 @@
 Investment Analyst API - Production-grade FastAPI backend
 Unified platform for portfolio management, document analysis, and stock market analysis
 """
-import os
 import time
 import logging
 from dotenv import load_dotenv
@@ -10,7 +9,7 @@ load_dotenv(override=True)
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 # ── Logging setup ────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -38,7 +37,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 from rag.graph.builder import BuildingGraph
-from app.database.connection import init_db
+from app.database.connection import init_db, DATABASE_URL, _to_sync_url
 from app.api.portfolios import router as portfolio_router
 from app.api.rag import router as rag_router
 from app.api.integrations import router as integrations_router
@@ -102,10 +101,14 @@ async def startup_event():
     logger.info("Initializing database...")
     init_db()
 
-    logger.info("Initializing RAG checkpointer...")
-    rag_db_path = os.getenv("RAG_SQLITE_DB_PATH", "checkpoints.sqlite")
-    checkpointer_context = AsyncSqliteSaver.from_conn_string(rag_db_path)
+    logger.info("Initializing shared Postgres LangGraph checkpointer...")
+    # Single checkpointer, backed by the same Postgres database as everything
+    # else, shared between the RAG graph and the Quant supervisor — replaces
+    # two previously-separate SQLite checkpointer files.
+    pg_conn_string = _to_sync_url(DATABASE_URL)
+    checkpointer_context = AsyncPostgresSaver.from_conn_string(pg_conn_string)
     checkpointer = await checkpointer_context.__aenter__()
+    await checkpointer.setup()
 
     logger.info("Building RAG graph...")
     graph_obj = BuildingGraph()
@@ -114,7 +117,7 @@ async def startup_event():
 
     logger.info("Initializing Stock Analysis System...")
     try:
-        stock_supervisor, agents_ready = await initialize_stock_agents(checkpointer=None)
+        stock_supervisor, agents_ready = await initialize_stock_agents(checkpointer=checkpointer)
         quant_router_module.set_stock_supervisor(stock_supervisor)
         quant_router_module.set_agents_status(agents_ready)
         if agents_ready and stock_supervisor:

@@ -6,7 +6,10 @@ from datetime import datetime
 import tempfile
 import os
 import json
+import logging
 from .base import BaseConnector, RemoteFile
+
+logger = logging.getLogger("connectors.google_drive")
 
 
 class GoogleDriveConnector(BaseConnector):
@@ -152,28 +155,28 @@ class GoogleDriveConnector(BaseConnector):
                         fields='id,name,mimeType,shortcutDetails,driveId',
                         supportsAllDrives=True,
                     ).execute()
-                    print(f"[GoogleDrive] Target metadata: name='{meta.get('name')}' "
-                          f"mimeType={meta.get('mimeType')} driveId={meta.get('driveId')}")
+                    logger.info("[GoogleDrive] Target metadata: name='%s' mimeType=%s driveId=%s",
+                                meta.get('name'), meta.get('mimeType'), meta.get('driveId'))
 
                     # Follow shortcuts to their actual target folder
                     if meta.get('mimeType') == 'application/vnd.google-apps.shortcut':
                         target_id = (meta.get('shortcutDetails') or {}).get('targetId')
                         if target_id:
-                            print(f"[GoogleDrive] Shortcut detected — following to target {target_id}")
+                            logger.info("[GoogleDrive] Shortcut detected — following to target %s", target_id)
                             folder_id = target_id
                             meta = service.files().get(
                                 fileId=folder_id,
                                 fields='id,name,mimeType,driveId',
                                 supportsAllDrives=True,
                             ).execute()
-                            print(f"[GoogleDrive] Target after shortcut: name='{meta.get('name')}' "
-                                  f"mimeType={meta.get('mimeType')} driveId={meta.get('driveId')}")
+                            logger.info("[GoogleDrive] Target after shortcut: name='%s' mimeType=%s driveId=%s",
+                                        meta.get('name'), meta.get('mimeType'), meta.get('driveId'))
 
                     # driveId is populated only when the item lives in a Shared Drive
                     target_drive_id = meta.get('driveId') or None
 
                 except Exception as e:
-                    print(f"[GoogleDrive] Could not fetch folder metadata: {e}")
+                    logger.error("[GoogleDrive] Could not fetch folder metadata: %s", e)
 
             # ------------------------------------------------------------------
             # Step 2: List children using the right corpora/driveId.
@@ -196,11 +199,11 @@ class GoogleDriveConnector(BaseConnector):
                     service,
                     q=f"sharedWithMe=true and trashed=false{mime_filter}{name_filter}",
                 )
-                print(f"[GoogleDrive] Root (sharedWithMe folders): {len(files)} items")
+                logger.info("[GoogleDrive] Root (sharedWithMe folders): %d items", len(files))
 
             elif target_drive_id:
                 # Folder is inside a Shared Drive
-                print(f"[GoogleDrive] Listing inside Shared Drive {target_drive_id}")
+                logger.info("[GoogleDrive] Listing inside Shared Drive %s", target_drive_id)
                 files = self._build_files_list(
                     service,
                     q=f"'{folder_id}' in parents and trashed=false{name_filter}",
@@ -223,23 +226,23 @@ class GoogleDriveConnector(BaseConnector):
             # explicitly shared with the service account individually.
             # ------------------------------------------------------------------
             if not files and folder_id != 'root':
-                print(f"[GoogleDrive] in-parents returned 0 — trying broad search with client-side parent filter")
+                logger.info("[GoogleDrive] in-parents returned 0 — trying broad search with client-side parent filter")
                 broad = self._build_files_list(
                     service,
                     q=f"trashed=false{name_filter}",
                     extra_fields="parents",
                 )
                 files = [f for f in broad if folder_id in (f.get("parents") or [])]
-                print(f"[GoogleDrive] Broad search: {len(broad)} total accessible, "
-                      f"{len(files)} with parent={folder_id}")
+                logger.info("[GoogleDrive] Broad search: %d total accessible, %d with parent=%s",
+                            len(broad), len(files), folder_id)
 
             # ------------------------------------------------------------------
             # Step 4: Shared Drive root fallback (drives().get() probe).
             # ------------------------------------------------------------------
             if not files and folder_id != 'root' and not target_drive_id:
-                print(f"[GoogleDrive] Probing {folder_id} as Shared Drive root")
+                logger.info("[GoogleDrive] Probing %s as Shared Drive root", folder_id)
                 if self._is_shared_drive(service, folder_id):
-                    print(f"[GoogleDrive] Confirmed Shared Drive root")
+                    logger.info("[GoogleDrive] Confirmed Shared Drive root")
                     files = self._build_files_list(
                         service,
                         q=f"trashed=false{name_filter}",
@@ -247,7 +250,7 @@ class GoogleDriveConnector(BaseConnector):
                         drive_id=folder_id,
                     )
 
-            print(f"[GoogleDrive] Total files found: {len(files)}")
+            logger.info("[GoogleDrive] Total files found: %d", len(files))
 
             # Convert to RemoteFile objects
             remote_files = []
@@ -323,7 +326,7 @@ class GoogleDriveConnector(BaseConnector):
                 while not done:
                     status, done = downloader.next_chunk()
                     if status:
-                        print(f"Download progress: {int(status.progress() * 100)}%")
+                        logger.info("Download progress: %d%%", int(status.progress() * 100))
             
             return local_path
         

@@ -12,7 +12,8 @@ from datetime import datetime
 import io
 
 from app.database.connection import get_db_session
-from app.database.models import AnalystReport
+from app.database.models import AnalystReport, User
+from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.services import report as report_svc
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -86,12 +87,17 @@ class DraftItemResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.post("/draft/items", response_model=DraftItemResponse, status_code=201)
-async def add_draft_item(payload: DraftItemCreate, db: AsyncSession = Depends(get_db_session)):
+async def add_draft_item(
+    payload: DraftItemCreate,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """
     Add a generated text block, chart image, or summary to the user's clipboard.
     Call this whenever the RAG or Quant agent produces output the analyst wants
     to include in a report.
     """
+    verify_user_id_matches(payload.user_id, current_user)
     if payload.item_type not in _VALID_ITEM_TYPES:
         raise HTTPException(status_code=400, detail=f"item_type must be one of {_VALID_ITEM_TYPES}")
 
@@ -125,11 +131,13 @@ async def get_draft_items(
     user_id: str,
     portfolio_id: Optional[int] = Query(None, description="Filter clips by portfolio"),
     db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Retrieve clipboard items for the given user, scoped to a portfolio when portfolio_id is provided.
     Sorted by sort_order then created_at.
     """
+    verify_user_id_matches(user_id, current_user)
     items = await report_svc.get_draft_items(db, user_id, portfolio_id=portfolio_id)
     return [DraftItemResponse.from_orm(i) for i in items]
 
@@ -140,11 +148,13 @@ async def update_draft_item(
     payload: DraftItemUpdate,
     user_id: str,
     db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Edit a clipboard item's label, text content, or sort position.
     Pass user_id as a query parameter.
     """
+    verify_user_id_matches(user_id, current_user)
     item = await report_svc.update_draft_item(
         db=db,
         item_id=item_id,
@@ -165,21 +175,29 @@ async def reorder_draft_items(
     user_id: str,
     portfolio_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Reorder clipboard items by supplying all item IDs in the desired display order.
     Pass user_id (and optionally portfolio_id) as query parameters.
     """
+    verify_user_id_matches(user_id, current_user)
     items = await report_svc.reorder_draft_items(db, user_id, payload.ordered_ids, portfolio_id=portfolio_id)
     return [DraftItemResponse.from_orm(i) for i in items]
 
 
 @router.delete("/draft/items/{item_id}", status_code=200)
-async def delete_draft_item(item_id: int, user_id: str, db: AsyncSession = Depends(get_db_session)):
+async def delete_draft_item(
+    item_id: int,
+    user_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """
     Remove a single clipboard item.
     Pass user_id as a query parameter.
     """
+    verify_user_id_matches(user_id, current_user)
     success = await report_svc.delete_draft_item(db, item_id, user_id)
     if not success:
         raise HTTPException(status_code=404, detail="Draft item not found")
@@ -191,10 +209,12 @@ async def clear_draft_items(
     user_id: str,
     portfolio_id: Optional[int] = Query(None, description="Clear only clips for this portfolio"),
     db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Clear clipboard items for a user. When portfolio_id is supplied, only clips for that portfolio are removed.
     """
+    verify_user_id_matches(user_id, current_user)
     count = await report_svc.clear_draft_items(db, user_id, portfolio_id=portfolio_id)
     return {"message": f"Cleared {count} item(s)", "user_id": user_id, "deleted": count}
 
@@ -282,11 +302,13 @@ async def create_report_from_draft(
     user_id: str,
     payload: ReportFromDraftRequest,
     db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
     One-shot endpoint for the creation tab. Reads all staged clipboard items,
     assembles them into a report, and optionally clears the clipboard.
     """
+    verify_user_id_matches(user_id, current_user)
     try:
         report = await report_svc.create_report_from_draft(
             db=db,
@@ -304,8 +326,13 @@ async def create_report_from_draft(
 
 
 @router.post("", response_model=ReportResponse, status_code=201)
-async def create_report(payload: ReportCreate, db: AsyncSession = Depends(get_db_session)):
+async def create_report(
+    payload: ReportCreate,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """Save an assembled analyst report. Status starts as 'draft'."""
+    verify_user_id_matches(payload.user_id, current_user)
     report = await report_svc.create_report(
         db=db,
         user_id=payload.user_id,
@@ -321,7 +348,10 @@ async def create_report(payload: ReportCreate, db: AsyncSession = Depends(get_db
 
 
 @router.get("/repository/stats")
-async def get_repository_stats(db: AsyncSession = Depends(get_db_session)):
+async def get_repository_stats(
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """
     Fund Manager dashboard stats — published reports only.
 
@@ -347,8 +377,10 @@ async def list_user_reports(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """List an analyst's own reports with optional filters."""
+    verify_user_id_matches(user_id, current_user)
     result = await report_svc.list_reports(
         db=db, user_id=user_id, status=status,
         company=company, ticker=ticker,
@@ -372,6 +404,7 @@ async def list_published_reports(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Fund Manager view — all published reports with optional filters."""
     result = await report_svc.list_reports(
@@ -398,6 +431,7 @@ async def search_reports(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Full-text search across report company and body. Powered by Postgres tsvector."""
     result = await report_svc.search_reports(
@@ -413,11 +447,17 @@ async def search_reports(
 
 
 @router.get("/{report_id}", response_model=ReportResponse)
-async def get_report(report_id: int, db: AsyncSession = Depends(get_db_session)):
+async def get_report(
+    report_id: int,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """Get a single report by ID."""
     report = await report_svc.get_report(db, report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
+    if (report.status.value if report.status else "draft") == "draft":
+        verify_owner(report.user_id, current_user)
     return await ReportResponse.from_orm_async(report, db)
 
 
@@ -427,8 +467,15 @@ async def update_report(
     payload: ReportUpdate,
     user_id: str,
     db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Update a report's content or metadata. Only the author can edit."""
+    verify_user_id_matches(user_id, current_user)
+    existing = await report_svc.get_report(db, report_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Report not found")
+    verify_owner(existing.user_id, current_user)
+
     report = await report_svc.update_report(
         db=db, report_id=report_id, user_id=user_id,
         patch=payload.model_dump(exclude_none=True),
@@ -439,8 +486,14 @@ async def update_report(
 
 
 @router.post("/{report_id}/publish", response_model=ReportResponse)
-async def publish_report(report_id: int, user_id: str, db: AsyncSession = Depends(get_db_session)):
+async def publish_report(
+    report_id: int,
+    user_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """Publish a draft report so Fund Managers can see it in the repository."""
+    verify_user_id_matches(user_id, current_user)
     report = await report_svc.publish_report(db, report_id, user_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found or not owned by user")
@@ -448,8 +501,14 @@ async def publish_report(report_id: int, user_id: str, db: AsyncSession = Depend
 
 
 @router.post("/{report_id}/unpublish", response_model=ReportResponse)
-async def unpublish_report(report_id: int, user_id: str, db: AsyncSession = Depends(get_db_session)):
+async def unpublish_report(
+    report_id: int,
+    user_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """Revert a published report back to draft."""
+    verify_user_id_matches(user_id, current_user)
     report = await report_svc.unpublish_report(db, report_id, user_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found or not owned by user")
@@ -457,8 +516,14 @@ async def unpublish_report(report_id: int, user_id: str, db: AsyncSession = Depe
 
 
 @router.delete("/{report_id}", status_code=200)
-async def delete_report(report_id: int, user_id: str, db: AsyncSession = Depends(get_db_session)):
+async def delete_report(
+    report_id: int,
+    user_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """Permanently delete a report. Only the author can delete."""
+    verify_user_id_matches(user_id, current_user)
     success = await report_svc.delete_report(db, report_id, user_id)
     if not success:
         raise HTTPException(status_code=404, detail="Report not found or not owned by user")
@@ -470,7 +535,12 @@ async def delete_report(report_id: int, user_id: str, db: AsyncSession = Depends
 # ---------------------------------------------------------------------------
 
 @router.get("/{report_id}/export/pdf")
-async def export_report_pdf(report_id: int, inline: bool = False, db: AsyncSession = Depends(get_db_session)):
+async def export_report_pdf(
+    report_id: int,
+    inline: bool = False,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
     """
     Export a report as a downloadable PDF.
     Renders metadata header + markdown body + embedded chart images.
@@ -488,6 +558,8 @@ async def export_report_pdf(report_id: int, inline: bool = False, db: AsyncSessi
     report = await report_svc.get_report(db, report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
+    if (report.status.value if report.status else "draft") == "draft":
+        verify_owner(report.user_id, current_user)
 
     def _safe(text: str) -> str:
         """Sanitize text to latin-1 range for Helvetica; replace common Unicode."""

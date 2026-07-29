@@ -5,7 +5,10 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 import tempfile
 import os
+import logging
 from .base import BaseConnector, RemoteFile
+
+logger = logging.getLogger("connectors.sharepoint")
 
 
 class SharePointConnector(BaseConnector):
@@ -100,52 +103,52 @@ class SharePointConnector(BaseConnector):
         try:
             import requests
             
-            print(f"\n[SharePoint] Starting file listing...")
-            print(f"[SharePoint] Path: {path}, Search: {search_query}")
-            
+            logger.info("[SharePoint] Starting file listing...")
+            logger.info("[SharePoint] Path: %s, Search: %s", path, search_query)
+
             # Get authentication token
             try:
                 token = self._get_access_token()
-                print(f"[SharePoint] Access token obtained")
+                logger.info("[SharePoint] Access token obtained")
             except Exception as e:
-                print(f"[SharePoint] Failed to get access token: {e}")
+                logger.error("[SharePoint] Failed to get access token: %s", e)
                 raise Exception(f"Authentication failed: {str(e)}")
-            
+
             # Get site ID
             try:
                 site_id = self._get_site_id()
-                print(f"[SharePoint] Site ID: {site_id}")
+                logger.info("[SharePoint] Site ID: %s", site_id)
             except Exception as e:
-                print(f"[SharePoint] Failed to get site ID: {e}")
+                logger.error("[SharePoint] Failed to get site ID: %s", e)
                 raise Exception(f"Failed to access SharePoint site: {str(e)}")
-            
+
             headers = {'Authorization': f'Bearer {token}'}
-            
+
             # Get drive (document library)
             drive_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives"
-            print(f"[SharePoint] Getting drives from: {drive_url}")
-            
+            logger.info("[SharePoint] Getting drives from: %s", drive_url)
+
             try:
                 drives_response = requests.get(drive_url, headers=headers)
                 drives_response.raise_for_status()
                 drives = drives_response.json().get('value', [])
-                print(f"[SharePoint] Found {len(drives)} drive(s)")
+                logger.info("[SharePoint] Found %d drive(s)", len(drives))
             except Exception as e:
-                print(f"[SharePoint] Failed to get drives: {e}")
+                logger.error("[SharePoint] Failed to get drives: %s", e)
                 raise Exception(f"Failed to access document libraries: {str(e)}")
-            
+
             if not drives:
-                print(f"[SharePoint] No drives found, returning empty list")
+                logger.info("[SharePoint] No drives found, returning empty list")
                 return []
-            
+
             # Use first drive or find by name
             drive_id = drives[0]['id']
             drive_name = drives[0].get('name', 'Unknown')
-            print(f"[SharePoint] Using drive: {drive_name} (ID: {drive_id})")
-            
+            logger.info("[SharePoint] Using drive: %s (ID: %s)", drive_name, drive_id)
+
             # List files in the specified folder
             folder_path = path or self.folder_path
-            print(f"[SharePoint] Folder path: {folder_path}")
+            logger.info("[SharePoint] Folder path: %s", folder_path)
             
             # If folder_path is empty, '/', or matches the drive name, use root
             # This is because the drive itself might be named "Documents"
@@ -159,25 +162,25 @@ class SharePointConnector(BaseConnector):
             if should_use_root:
                 # Get root items
                 items_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/root/children"
-                print(f"[SharePoint] Using root of drive (folder_path was '{folder_path}')")
+                logger.info("[SharePoint] Using root of drive (folder_path was '%s')", folder_path)
             else:
                 # Get specific folder
                 items_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/root:/{folder_path}:/children"
-            
-            print(f"[SharePoint] Listing items from: {items_url}")
-            
+
+            logger.info("[SharePoint] Listing items from: %s", items_url)
+
             try:
                 response = requests.get(items_url, headers=headers)
                 response.raise_for_status()
                 items = response.json().get('value', [])
-                print(f"[SharePoint] Found {len(items)} item(s)")
+                logger.info("[SharePoint] Found %d item(s)", len(items))
             except requests.exceptions.HTTPError as e:
                 error_detail = ""
                 try:
                     error_detail = response.json()
                 except:
                     error_detail = response.text
-                print(f"[SharePoint] HTTP Error: {e}, Response: {error_detail}")
+                logger.error("[SharePoint] HTTP Error: %s, Response: %s", e, error_detail)
                 raise Exception(f"Failed to list files: {str(e)}")
             
             # Convert to RemoteFile objects
@@ -223,18 +226,18 @@ class SharePointConnector(BaseConnector):
                         remote_files.append(remote_file)
                     
                 except Exception as e:
-                    print(f"[SharePoint] Error processing item {item.get('name', 'unknown')}: {e}")
+                    logger.error("[SharePoint] Error processing item %s: %s", item.get('name', 'unknown'), e)
                     continue
-            
-            print(f"[SharePoint] Returning {len(remote_files)} file(s)")
+
+            logger.info("[SharePoint] Returning %d file(s)", len(remote_files))
             return remote_files
-        
+
         except ImportError as e:
             raise Exception(f"Missing dependencies: {str(e)}")
         except Exception as e:
             import traceback
-            print(f"[SharePoint] Exception: {e}")
-            print(traceback.format_exc())
+            logger.error("[SharePoint] Exception: %s", e)
+            logger.error(traceback.format_exc())
             raise Exception(f"Failed to list SharePoint files: {str(e)}")
     
     def download_file(self, file_path: str) -> str:

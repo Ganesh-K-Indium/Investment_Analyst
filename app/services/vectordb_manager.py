@@ -71,11 +71,12 @@ class VectorDBManager:
 
     def initialize_for_portfolio(self, portfolio_id: int, company_names: list):
         """
-        No-op for ticker-based system, but kept for compatibility.
-        We lazy-load based on query ticker now.
+        Deliberate no-op. Retrieval is fully lazy per-ticker via get_instance(ticker)
+        — there is no per-portfolio vector DB to eagerly initialize. Kept only so
+        existing call sites (app/api/portfolios.py) don't need a signature change;
+        those call sites' comments should NOT describe this as doing real work.
         """
-        print(f"Portfolio {portfolio_id} initialized (using dynamic ticker loading)")
-    
+
     def register_session(self, thread_id: str, portfolio_id: int):
         """
         Register a session to portfolio mapping.
@@ -89,17 +90,18 @@ class VectorDBManager:
         
     def get_for_session(self, thread_id: str) -> Optional[tuple]:
         """
-        Legacy support: Returns (legacy_instance, []) to prevent crashes.
-        The retrieve node should now use get_instance(ticker).
+        Legacy shim, not part of the active retrieval path. `retrieve()` in
+        rag/graph/nodes.py calls get_instance(ticker) directly per company —
+        this exists only so old call sites don't crash if still referenced.
         """
         return (self._get_legacy_instance(), [])
-    
+
     def create_temporary(self, thread_id: str, company_names: list) -> tuple:
         """
-        Legacy support for comparison. Return dummy values.
-        Comparisons should also use get_instance(ticker) for each company.
+        Legacy shim, not part of the active retrieval path. Comparison queries
+        call get_instance(ticker) directly for each company — this exists only
+        so old call sites don't crash if still referenced.
         """
-        print(f"Temporary DB request for {company_names} - using dynamic retrieval instead")
         return (self._get_legacy_instance(), company_names)
 
     def cleanup_session(self, thread_id: str) -> bool:
@@ -110,10 +112,11 @@ class VectorDBManager:
         return False
     
     def cleanup_portfolio(self, portfolio_id: int) -> bool:
-        """Cleanup portfolio related resources."""
-        # For ticker-based instances, we might want to keep frequent tickers cached?
-        # Or we could iterate and clear unused ones?
-        # For now, keep it simple.
+        """
+        Deliberate no-op. Cached per-ticker instances are shared across all
+        portfolios that reference the same ticker, so there is nothing
+        portfolio-specific to evict here. Kept only for call-site compatibility.
+        """
         return True
     
     def get_stats(self) -> dict:
