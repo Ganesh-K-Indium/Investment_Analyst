@@ -173,7 +173,19 @@ async def ask_agent(
             "company_filter": company_tickers,  # Pass valid tickers for this portfolio
             "ticker": None,  # Explicitly None, relying on company_filter
             "sub_query_analysis": {},
-            "sub_query_results": {}
+            "sub_query_results": {},
+            # Explicitly reset comparison-mode fields: the checkpointer merges
+            # each turn's inputs on top of the LAST checkpointed state for this
+            # thread_id, so if this thread was ever used for a /compare call
+            # (which sets these), they'd otherwise persist forever and silently
+            # route every future /ask question through the annual-only 10-K
+            # comparison templates instead of the real analyzer.
+            "is_comparison_mode": False,
+            "comparison_company1": None,
+            "comparison_company2": None,
+            "comparison_company3": None,
+            "year_start": None,
+            "year_end": None
         }
         result = await agent.ainvoke(inputs, config)
     
@@ -390,6 +402,7 @@ Compare {comparison_str} {year_str}:
             "summary_strategy": "single_source",
             #"vectordb_instance": db_instance,  # REMOVED: Retrieved dynamically in nodes
             "company_filter": tickers,  # Pass TICKERS here
+            "ticker": None,  # Reset any ticker left over from a prior /ask turn on this thread_id
             "sub_query_analysis": {},
             "sub_query_results": {},
             "is_comparison_mode": True,

@@ -1638,35 +1638,43 @@ def integrate_web_search(state):
     financial_grading = state.get("financial_grading", {})
     missing_summary = financial_grading.get("missing_data_summary", "")
 
-    query_parts = []
-    # Avoid duplicate terms (like repeating company name multiple times)
-    if company and company.lower() not in [q.lower() for q in query_parts]:
-        query_parts.append(company)
-    
-    if ticker and ticker.lower() not in [q.lower() for q in query_parts] and ticker.lower() != company.lower():
-        query_parts.append(ticker)
-
     missing_summary_str = ""
     if missing_summary:
         missing_summary_str = str(missing_summary).strip()
-        
+
     logger.warning(f"  [DEBUG] grading missing_summary: {repr(missing_summary)}")
-    
+
     # Is there a valid missing data summary? (Not None, not empty, and not specifically 'no chunks found in vector database')
     has_valid_missing_target = (
-        bool(missing_summary_str) and 
-        missing_summary_str.lower() != "none" and 
+        bool(missing_summary_str) and
+        missing_summary_str.lower() != "none" and
         "no chunks found" not in missing_summary_str.lower()
     )
 
     if has_valid_missing_target:
-        # Missing data summary is the target - use it directly
+        # Missing data summary is the target - use it directly. It's an
+        # LLM-written sentence that already names the company (e.g. "Google
+        # Q2 2026 net income..."), so append "earnings report" to bias the
+        # search toward an actual reporting article instead of a generic
+        # "what is net income" explainer.
         logger.warning("  [DEBUG] Using missing data summary for web search target.")
-        query_parts.append(missing_summary_str)
+        target_str = f"{missing_summary_str} earnings report"
     else:
         # Fallback to the original question only if there is no explicit missing data summary
         logger.info("  [DEBUG] Using original question for web search fallback.")
-        query_parts.append(question)
+        target_str = question
+
+    # Only prepend company/ticker if not already named in the target text —
+    # both the missing-data summary and the raw question almost always
+    # already mention the company, so prepending unconditionally produced
+    # queries like "Google Google Q2 2026 net income...".
+    query_parts = []
+    target_lower = target_str.lower()
+    if company and company.lower() not in target_lower:
+        query_parts.append(company)
+    if ticker and ticker.lower() not in target_lower and ticker.lower() != company.lower():
+        query_parts.append(ticker)
+    query_parts.append(target_str)
 
     search_query = " ".join(query_parts)
     logger.info(f"  Search query: {search_query}")
@@ -1674,7 +1682,13 @@ def integrate_web_search(state):
     web_search_tool = TavilySearch(
         max_results=5,
         include_raw_content=True,
-        include_domains=TRUSTED_FINANCIAL_DOMAINS
+        # Exclude Investopedia here specifically: this fallback is filling in
+        # a concrete missing NUMBER from a specific filing, and Investopedia's
+        # content is predominantly "what is net income" style definitional
+        # explainers rather than a company's actual reported figures — a risk
+        # the other TRUSTED_FINANCIAL_DOMAINS uses (e.g. general ALPHA/macro
+        # research) don't share, so it stays in the list everywhere else.
+        include_domains=[d for d in TRUSTED_FINANCIAL_DOMAINS if d != "investopedia.com"]
     )
 
     web_documents = []
@@ -2018,8 +2032,7 @@ def generate_comparison_chart(state):
     
     try:
         import plotly.graph_objects as go
-        import datetime
-        
+
         # Get the generated answer
         answer = state.get("Intermediate_message", "")
         company1 = state.get("comparison_company1", "")
