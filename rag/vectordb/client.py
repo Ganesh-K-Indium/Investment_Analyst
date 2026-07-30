@@ -52,16 +52,12 @@ class load_vector_database():
         if use_hybrid_search and SPARSE_EMBEDDING_AVAILABLE:
             try:
                 self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
-                # print("BM25 sparse embeddings initialized") # Reduced log noise
             except Exception as e:
                 logger.warning(f"Warning: Failed to initialize sparse embeddings: {e}")
-        
+
         # Try cloud Qdrant first, fallback to local
         try:
-            # print(f"Attempting to connect to Qdrant at: {self.qdrant_url}") # Reduced log noise
             self.qdrant_client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=60)
-            # self.qdrant_client.get_collections() # Avoid extra call if not needed
-            # print(f"Successfully connected to Qdrant at {self.qdrant_url}")
         except Exception as e:
             logger.error(f"Failed to connect to cloud Qdrant: {e}")
             logger.warning("Falling back to local Qdrant at http://localhost:6333")
@@ -69,7 +65,6 @@ class load_vector_database():
             self.qdrant_api_key = ''
             try:
                 self.qdrant_client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=60)
-                # self.qdrant_client.get_collections()
                 logger.info(f"Successfully connected to local Qdrant")
             except Exception as local_error:
                 logger.error(f"Failed to connect to local Qdrant: {local_error}")
@@ -423,73 +418,5 @@ class load_vector_database():
 
         logger.info(f"Generated embeddings: {len(result['dense'])} dense, {len([s for s in result['sparse'] if s is not None])} sparse")
         return result
-    def get_collection_files(self):
-        """Get all unique source files in the unified collection."""
-        doc_list = set()
-
-        points, _ = self.qdrant_client.scroll(
-            collection_name=self.collection_name,
-            with_payload=True,
-            limit=1000
-        )
-
-        for point in points:
-            payload = point.payload
-            metadata = payload.get("metadata", {})
-            doc_list.add(metadata.get("source_file", "Unknown"))
-
-        return ', '.join(sorted(doc_list))
-
-    def get_collection_companies(self):
-        """Get all unique companies in the unified collection."""
-        company_list = set()
-
-        points, _ = self.qdrant_client.scroll(
-            collection_name=self.collection_name,
-            with_payload=True,
-            limit=1000
-        )
-
-        for point in points:
-            payload = point.payload
-            metadata = payload.get("metadata", {})
-            company_list.add(metadata.get("company", "Unknown"))
-
-        return ', '.join(sorted(company_list))
-    
-    def get_collection_stats(self):
-        """Get statistics about the unified collection."""
-        text_count = 0
-        image_count = 0
-        companies = set()
-        sources = set()
-
-        points, _ = self.qdrant_client.scroll(
-            collection_name=self.collection_name,
-            with_payload=True,
-            limit=1000
-        )
-
-        for point in points:
-            payload = point.payload
-            metadata = payload.get("metadata", {})
-            
-            content_type = metadata.get("content_type", "text")
-            if content_type == "image":
-                image_count += 1
-            else:
-                text_count += 1
-            
-            companies.add(metadata.get("company", "Unknown"))
-            sources.add(metadata.get("source_file", "Unknown"))
-
-        return {
-            "total": text_count + image_count,
-            "text": text_count,
-            "images": image_count,
-            "companies": sorted(companies),
-            "sources": sorted(sources)
-        }
-
 
 

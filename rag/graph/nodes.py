@@ -60,73 +60,7 @@ GOVT_SOURCE_DOMAINS = [
 ]
 
 
-def extract_financial_metrics_from_documents(documents, metrics_list):
-    """
-    Extract specific financial metrics from documents using intelligent parsing.
-    Looks for patterns like "Current Assets: $X", "Total Liabilities $Y", etc.
-    
-    Args:
-        documents: List of Document objects to search
-        metrics_list: List of metric names to search for (e.g., ['current assets', 'current liabilities'])
-    
-    Returns:
-        dict: Mapping of metric names to extracted values with their sources
-    """
-    import re
-    
-    extracted_data = {}
-    
-    # Common financial metric patterns
-    metric_patterns = {
-        'current assets': [r'current assets[:\s]+\$?([\d,]+(?:\.\d+)?)', r'total current assets[:\s]+\$?([\d,]+(?:\.\d+)?)'],
-        'current liabilities': [r'current liabilities[:\s]+\$?([\d,]+(?:\.\d+)?)', r'total current liabilities[:\s]+\$?([\d,]+(?:\.\d+)?)'],
-        'total assets': [r'total assets[:\s]+\$?([\d,]+(?:\.\d+)?)'],
-        'total liabilities': [r'total liabilities[:\s]+\$?([\d,]+(?:\.\d+)?)'],
-        'inventory': [r'inventory[:\s]+\$?([\d,]+(?:\.\d+)?)', r'inventories[:\s]+\$?([\d,]+(?:\.\d+)?)'],
-        'shareholders equity': [r'shareholders[\']? equity[:\s]+\$?([\d,]+(?:\.\d+)?)', r'total equity[:\s]+\$?([\d,]+(?:\.\d+)?)'],
-        'net income': [r'net income[:\s]+\$?([\d,]+(?:\.\d+)?)'],
-        'revenue': [r'total revenue[:\s]+\$?([\d,]+(?:\.\d+)?)', r'revenue[:\s]+\$?([\d,]+(?:\.\d+)?)']
-    }
-    
-    for doc in documents:
-        content = doc.page_content.lower() if hasattr(doc, 'page_content') else str(doc).lower()
-        
-        for metric in metrics_list:
-            metric_lower = metric.lower()
-            
-            # Find matching patterns for this metric
-            patterns = []
-            for key, pattern_list in metric_patterns.items():
-                if key in metric_lower or metric_lower in key:
-                    patterns.extend(pattern_list)
-            
-            # Try each pattern
-            for pattern in patterns:
-                matches = re.findall(pattern, content, re.IGNORECASE)
-                if matches:
-                    # Clean the value (remove commas)
-                    value = matches[0].replace(',', '')
-                    try:
-                        numeric_value = float(value)
-                        if metric_lower not in extracted_data:
-                            extracted_data[metric_lower] = {
-                                'value': numeric_value,
-                                'raw': matches[0],
-                                'source': doc.metadata.get('title', 'Unknown') if hasattr(doc, 'metadata') else 'Unknown'
-                            }
-                            logger.info(f"   ✓ Found {metric_lower}: ${value} (from {extracted_data[metric_lower]['source']})")
-                            break
-                    except ValueError:
-                        continue
-    
-    return extracted_data
-
-
-
-
 def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
-    if year is None:
-        year = str(datetime.now().year)
     """
     Generate optimized sub-queries for company comparison WITHOUT LLM.
 
@@ -135,11 +69,21 @@ def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
 
     Args:
         companies: List of company names to compare
-        year: Year for comparison (default: 2024)
+        year: Year for comparison. Defaults to the most recent fiscal year
+            likely to actually have a filed 10-K (per the first company's
+            fiscal calendar) rather than the current calendar year, which
+            for most filers won't have one until Feb/Mar of next year.
 
     Returns:
         dict: Sub-query analysis with pre-generated queries
     """
+    if year is None:
+        from app.utils.company_mapping import get_ticker as _get_ticker_for_year, get_most_recent_filed_fiscal_year
+        _first_ticker = _get_ticker_for_year(companies[0]) if companies else None
+        if not _first_ticker and companies and 2 <= len(companies[0]) <= 5:
+            _first_ticker = companies[0]
+        year = str(get_most_recent_filed_fiscal_year(_first_ticker))
+
     sub_queries = []
 
     # Template structure optimized for 10-K reports
@@ -518,9 +462,14 @@ def preprocess_and_analyze_query(state):
 
         logger.info(f" Companies: {', '.join(comparison_companies)}")
 
-        # Generate fixed sub-queries using the year from state (fallback to current year)
-        comparison_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
-        logger.info(f" Comparison year: {comparison_year}")
+        # Generate fixed sub-queries using the year from state if given; leave
+        # None otherwise so generate_comparison_subqueries applies its own
+        # fiscal-year-aware fallback (most recent year likely to have a filed
+        # 10-K) instead of blindly defaulting to the current calendar year.
+        comparison_year = str(state["year_start"]) if state.get("year_start") else (
+            str(state["year_end"]) if state.get("year_end") else None
+        )
+        logger.info(f" Comparison year: {comparison_year or '(unspecified — will resolve to most recent filed fiscal year)'}")
         sub_query_analysis = generate_comparison_subqueries(comparison_companies, year=comparison_year)
 
         return {
@@ -644,7 +593,6 @@ def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
 
         # Strategy 1: Exact ticker match (as standalone word)
         # Check if ticker appears as a word boundary
-        import re
         if re.search(r'\b' + re.escape(ticker_lower) + r'\b', query_lower):
             matched_tickers.add(ticker)
             continue
@@ -687,6 +635,27 @@ async def _hybrid_search_with_quarter_fallback(db_instance, fiscal_quarter: Opti
             return results
         logger.info(f"    No results with fiscal_quarter={fiscal_quarter} filter (likely un-tagged older data) — retrying without it")
     return await db_instance.hybrid_search(**kwargs)
+
+
+def _classify_qdrant_error(e: Exception, ticker: str) -> Optional[dict]:
+    """
+    Classify a Qdrant lookup exception raised while querying one ticker's
+    collection during retrieve(). Returns None for a "collection not found"
+    error (ticker just hasn't been ingested yet — log and let the caller
+    continue to the next ticker/sub-query), or a ready-to-return error
+    result dict for a genuine connectivity/availability problem.
+    """
+    err_str = str(e).lower()
+    if any(k in err_str for k in ("not found", "404", "doesn't exist", "does not exist")):
+        logger.error("       Collection not found for %s (not yet ingested) — skipping", ticker)
+        return None
+    logger.error("       Qdrant connection error for %s: %s", ticker, e)
+    return {
+        "documents": [],
+        "vectorstore_searched": True,
+        "sub_query_results": {},
+        "qdrant_error": "Vector database is currently unavailable. Please try again shortly."
+    }
 
 
 async def retrieve(state, config):
@@ -939,17 +908,9 @@ async def retrieve(state, config):
                         logger.info(f"        No chunks found")
 
                 except Exception as e:
-                    err_str = str(e).lower()
-                    if any(k in err_str for k in ("not found", "404", "doesn't exist", "does not exist")):
-                        logger.error(f"       Collection not found for {t_ticker} (not yet ingested) — skipping")
-                    else:
-                        logger.error(f"       Qdrant connection error for {t_ticker}: {e}")
-                        return {
-                            "documents": [],
-                            "vectorstore_searched": True,
-                            "sub_query_results": {},
-                            "qdrant_error": f"Vector database is currently unavailable. Please try again shortly."
-                        }
+                    err_result = _classify_qdrant_error(e, t_ticker)
+                    if err_result is not None:
+                        return err_result
 
             # Deduplicate and Collect results for this sub-query
             companies_found = set()
@@ -1034,17 +995,9 @@ async def retrieve(state, config):
                     logger.info(f"       Found {current_collection_docs} unique chunks across requested years")
                     
                 except Exception as e:
-                    err_str = str(e).lower()
-                    if any(k in err_str for k in ("not found", "404", "doesn't exist", "does not exist")):
-                        logger.error(f"      Collection not found for {target_ticker} (not yet ingested) — skipping")
-                    else:
-                        logger.error(f"      Qdrant connection error for {target_ticker}: {e}")
-                        return {
-                            "documents": [],
-                            "vectorstore_searched": True,
-                            "sub_query_results": {},
-                            "qdrant_error": f"Vector database is currently unavailable. Please try again shortly."
-                        }
+                    err_result = _classify_qdrant_error(e, target_ticker)
+                    if err_result is not None:
+                        return err_result
             
             # Final stats
             content_types = {'text': 0, 'image': 0}
@@ -1358,7 +1311,6 @@ def web_search(state):
 
     if is_sec_filing_query and target_company:
         logger.info(f"---SEC FILING QUERY DETECTED FOR {target_company.upper()}---")
-        import re
         years = re.findall(r'\b(20\d{2})\b', question)
 
         # Vary the SEC filing type in the search query by what's actually
@@ -1842,6 +1794,50 @@ def prepare_chart_data(metrics_data, company1_name, company2_name, company3_name
     return chart_data
 
 
+def _save_and_upload_chart(fig, filename_prefix: str, width: int = 800, height: int = 500, label: str = "Chart") -> dict:
+    """
+    Save a plotly figure locally under generated_charts/ and, if Cloudinary
+    is configured, upload it too. Shared by every chart-generation node
+    (comparison chart, dynamic macro chart, yield curve chart) — this exact
+    ~15-line save+upload sequence was previously duplicated 3 times.
+
+    Returns {"chart_url": str|None, "chart_filename": str}.
+    """
+    import os
+    import datetime
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{filename_prefix}_{timestamp}.png"
+    output_dir = "generated_charts"
+    os.makedirs(output_dir, exist_ok=True)
+    local_path = os.path.join(output_dir, filename)
+
+    try:
+        fig.write_image(local_path, width=width, height=height)
+        logger.info(f"✓ {label} saved locally: {local_path}")
+    except Exception as e:
+        logger.error(f"Failed to save {label.lower()} locally: {str(e)}")
+        return {"chart_url": None, "chart_filename": filename}
+
+    chart_url = None
+    if os.getenv("CLOUDINARY_CLOUD_NAME"):
+        try:
+            from app.cloudinary import upload_to_cloudinary
+            logger.info(f"Uploading {label.lower()} to Cloudinary...")
+            result = upload_to_cloudinary(local_path)
+            if result.get("success"):
+                chart_url = result.get("url")
+                logger.info(f"✓ {label} uploaded: {chart_url}")
+            else:
+                logger.error(f"Cloudinary upload failed: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Cloudinary upload skipped: {str(e)}")
+    else:
+        logger.info(f"Cloudinary not configured - {label.lower()} saved locally only")
+
+    return {"chart_url": chart_url, "chart_filename": filename}
+
+
 def generate_comparison_chart(state):
     """
     SYNCHRONOUS chart generation node for company comparison.
@@ -1966,49 +1962,16 @@ def generate_comparison_chart(state):
         )
         
         logger.info("✓ Chart created successfully")
-        
-        # Step 4: Save locally first
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        if company3:
-            filename = f"comparison_{company1}_{company2}_{company3}_{timestamp}.png"
-        else:
-            filename = f"comparison_{company1}_{company2}_{timestamp}.png"
-        output_dir = "generated_charts"
-        
-        import os
-        os.makedirs(output_dir, exist_ok=True)
-        local_path = os.path.join(output_dir, filename)
-        
-        try:
-            fig.write_image(local_path, width=1000 if not company3 else 1200, height=600)
-            logger.info(f"✓ Chart saved locally: {local_path}")
-        except Exception as e:
-            logger.error(f"Failed to save locally: {str(e)}")
-        
-        # Step 5: Try to upload to Cloudinary (non-blocking)
-        chart_url = None
-        try:
-            import os
-            from app.cloudinary import upload_to_cloudinary
-            
-            if os.getenv("CLOUDINARY_CLOUD_NAME"):
-                logger.info("Uploading chart to Cloudinary...")
-                result = upload_to_cloudinary(local_path)
-                
-                if result.get("success"):
-                    chart_url = result.get("url")
-                    logger.info(f"✓ Chart uploaded: {chart_url}")
-                else:
-                    logger.error(f"Cloudinary upload failed: {result.get('error')}")
-            else:
-                logger.info("Cloudinary not configured - chart saved locally only")
-        except Exception as e:
-            logger.error(f"Cloudinary upload skipped: {str(e)}")
-        
-        return {
-            "chart_url": chart_url,
-            "chart_filename": filename
-        }
+
+        filename_prefix = (
+            f"comparison_{company1}_{company2}_{company3}" if company3
+            else f"comparison_{company1}_{company2}"
+        )
+        return _save_and_upload_chart(
+            fig, filename_prefix,
+            width=1200 if company3 else 1000, height=600,
+            label="Chart",
+        )
     
     except ImportError as e:
         logger.error(f"Missing required package: {e}")
@@ -2219,17 +2182,12 @@ async def alpha_dimension_retrieve(state):
 
                     cur_price = detail.get("Current_Price")
                     price_str = f"${cur_price:,.2f}" if isinstance(cur_price, float) else "N/A"
-                    p_total   = detail.get("P_Total", 0.0)
-                    s_total   = detail.get("S_Total", 0.0)
-                    f_total   = detail.get("F_Total", 0.0)
-                    net_signal = p_total - s_total
 
                     # ── Build the final response directly ──────────────────
                     acq_count  = int(detail.get("Acquired_Txn_Count", 0))
                     disp_count = int(detail.get("Disposed_Txn_Count", 0))
                     acq_shares = int(detail.get("Total_Acquired_Shares", 0))
                     disp_shares = int(detail.get("Total_Disposed_Shares", 0))
-                    recommendation = detail.get("Recommendation", "N/A")
 
                     section = []
                     section.append(f"## Insider Trading Analysis — {issuer_name} ({ticker})")
@@ -2243,7 +2201,6 @@ async def alpha_dimension_retrieve(state):
                     section.append("### Summary")
                     section.append(detail.get("Reason", "No analysis available"))
                     section.append("")
-                    #section.append(f"**Recommendation: {recommendation}**")
 
                     sections.append("\n".join(section))
 
@@ -2316,12 +2273,6 @@ async def alpha_dimension_retrieve(state):
                 for issuer_name, detail in form4_report.items():
                     if issuer_name in ("error", "status", "message", "ticker"):
                         continue
-                    #lines.append(f"Issuer: {issuer_name}")
-                    #lines.append(f"Recommendation: {detail.get('Recommendation', 'N/A')}")
-                    #lines.append(f"Net Insider Flow: ${detail.get('Net_Inside_Flow', 0):,.2f}")
-                    #lines.append(f"Total Bought: ${detail.get('Total_Bought', 0):,.2f} ({int(detail.get('Total_Bought_Shares', 0)):,} shares)")
-                    #lines.append(f"Total Sold:   ${detail.get('Total_Sold', 0):,.2f} ({int(detail.get('Total_Sold_Shares', 0)):,} shares)")
-                    #lines.append(f"Transaction Count: {detail.get('Transaction_Count', 0)}")
                     lines.append(f"\nAnalyst Insight:\n{detail.get('Reason', 'No analysis available')}\n")
 
                 from langchain_core.documents import Document
@@ -3577,7 +3528,6 @@ def macro_format_answer(state):
     logger.info(f"   Generated response: {len(final_answer)} chars")
     
     # Dynamic Chart Generation via Tag Parsing
-    import re
     chart_info = {"chart_url": None, "chart_filename": None}
     
     # Find any [CHART: ...] tag in the final answer
@@ -3762,32 +3712,7 @@ def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period
             hovermode="x unified"
         )
         
-        # Save locally
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{c_type}_{timestamp}.png"
-        output_dir = "generated_charts"
-        os.makedirs(output_dir, exist_ok=True)
-        local_path = os.path.join(output_dir, filename)
-        
-        fig.write_image(local_path, width=800, height=500)
-        logger.info(f"✓ Dynamic chart saved locally: {local_path}")
-        
-        # Upload to Cloudinary
-        chart_url = None
-        if os.getenv("CLOUDINARY_CLOUD_NAME"):
-            from app.cloudinary import upload_to_cloudinary
-            logger.info(f"Uploading {c_type} chart to Cloudinary...")
-            result = upload_to_cloudinary(local_path)
-            if result.get("success"):
-                chart_url = result.get("url")
-                logger.info(f"✓ Dynamic chart uploaded: {chart_url}")
-            else:
-                logger.error(f"Cloudinary upload failed: {result.get('error')}")
-                
-        return {
-            "chart_url": chart_url,
-            "chart_filename": filename
-        }
+        return _save_and_upload_chart(fig, c_type, width=800, height=500, label="Dynamic chart")
         
     except Exception as e:
         logger.error(f"Dynamic chart generation error: {str(e)}")
@@ -3891,32 +3816,7 @@ def generate_yield_curve_chart(period1: Optional[str] = None, period2: Optional[
             hovermode="x unified"
         )
         
-        # Save locally
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"yield_curve_{timestamp}.png"
-        output_dir = "generated_charts"
-        os.makedirs(output_dir, exist_ok=True)
-        local_path = os.path.join(output_dir, filename)
-        
-        fig.write_image(local_path, width=800, height=500)
-        logger.info(f"✓ Yield curve chart saved locally: {local_path}")
-        
-        # Upload to Cloudinary
-        chart_url = None
-        if os.getenv("CLOUDINARY_CLOUD_NAME"):
-            from app.cloudinary import upload_to_cloudinary
-            logger.info("Uploading yield curve chart to Cloudinary...")
-            result = upload_to_cloudinary(local_path)
-            if result.get("success"):
-                chart_url = result.get("url")
-                logger.info(f"✓ Yield curve chart uploaded: {chart_url}")
-            else:
-                logger.error(f"Cloudinary upload failed: {result.get('error')}")
-                
-        return {
-            "chart_url": chart_url,
-            "chart_filename": filename
-        }
+        return _save_and_upload_chart(fig, "yield_curve", width=800, height=500, label="Yield curve chart")
         
     except Exception as e:
         logger.error(f"Yield curve chart generation error: {str(e)}")

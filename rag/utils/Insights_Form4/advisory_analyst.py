@@ -334,19 +334,3 @@ Be concise. No bullet lists. No headers. No tables. Maximum 200 words.
         }
         
     return report
-
-# if __name__ == "__main__":
-#     # Mock data for testing
-#     mock_data = [
-#         {
-#             "issuer_name": "Test Corp",
-#             "reporting_person_name": "CEO",
-#             "relationship": ["Officer"],
-#             "transactions": [
-#                 {"date": "2026-01-01", "code": "P", "amount": "1000", "price": "100", "acquired_disposed": "A"},
-#                 {"date": "2026-01-02", "code": "S", "amount": "500", "price": "110", "acquired_disposed": "D"}
-#             ]
-#         }
-#     ]
-#     import json
-#     print(json.dumps(analyze_transactions(mock_data), indent=2))

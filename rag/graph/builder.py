@@ -50,9 +50,6 @@ class BuildingGraph:
         
         workflow = StateGraph(GraphState)
 
-        # ... (rest of the node/edge definitions remain valid) ...
-        # [Truncated only for this replace call, but effectively we want to update the end of function]
-
         # Add preprocessing node FIRST - analyzes query for sub-queries
         workflow.add_node("preprocess", time_node("preprocess")(preprocess_and_analyze_query))
         
@@ -144,9 +141,6 @@ class BuildingGraph:
         )
 
         workflow.add_edge("web_search", "generate")
-        
-        # Memory-only queries go directly to show_result (instant response!)
-        # workflow.add_edge("memory_only", "show_result")  <-- REMOVED: Node does not exist
 
         workflow.add_conditional_edges(
             "grade_documents",

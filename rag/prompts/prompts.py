@@ -6,8 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 def _current_year() -> int:
     return datetime.now().year
-from schemas.models import (GradeHallucinations, GradeAnswer,
-                                        UniversalSubQueryAnalysis, SimpleDocumentGrade,
+from schemas.models import (UniversalSubQueryAnalysis, SimpleDocumentGrade,
                                         StructuredFinancialData)
 
 
@@ -101,6 +100,27 @@ For 3-company comparisons, add a third company column.
 3. **CALCULATE** step-by-step with 2 decimal precision
 4. **INTERPRET** the result: is this ratio healthy, concerning, or improving vs. prior year?
 5. **COMPARE** to industry norms when context allows"""
+
+    elif query_type == "temporal_comparison":
+        dynamic_rules = """
+**TEMPORAL COMPARISON (SAME COMPANY, DIFFERENT PERIODS — MANDATORY TABULAR FORMAT):**
+For comparing the same company across two or more fiscal years/quarters:
+| Metric | [Period A] | [Period B] | Change | Investment Insight |
+|--------|-----------|-----------|--------|---------------------|
+| Revenue | $X B | $Y B | +Z% YoY | [What's driving the change] |
+| Operating Income | $X B | $Y B | +Z% YoY | [Margin trend] |
+| Net Income | $X B | $Y B | +Z% YoY | [Bottom-line trend] |
+| Operating Margin | X% | Y% | +/-Z pts | [Efficiency trend] |
+| EPS | $X | $Y | +Z% YoY | [Per-share trend] |
+
+Add further rows only for metrics actually present in the documents for BOTH periods — do not fabricate a row with data for only one period.
+
+**TEMPORAL COMPARISON RULES:**
+- Clearly label each period (fiscal year or quarter, e.g. "FY2024" / "Q2 2025") — never just "Period A"/"Period B" in the actual output
+- Compute % or point change explicitly — do not just state both numbers and leave the reader to subtract
+- If the two periods come from different filing types (e.g. a 10-K vs a 10-Q), say so explicitly — a full fiscal year is not directly comparable to a single quarter
+- Add a brief narrative below the table: what changed and why, grounded in the documents (MD&A commentary, not speculation)
+- Do NOT hallucinate any data — only include figures found in the documents for each respective period"""
 
     else:
         # Default single company or general rules
@@ -265,141 +285,6 @@ Provide a comprehensive, professional answer. Reference sources naturally withou
     
     rag_chain = RAG_Prompt | llm_generate | StrOutputParser()
     return rag_chain
-
-def get_hallucination_chain(llm_grade_hallucination):
-    llm_hallucination_grader = llm_grade_hallucination.with_structured_output(GradeHallucinations)
-
-    SYSTEM_PROMPT_GRADE_HALLUCINATION = """You are a senior financial analyst grading whether an AI-generated investment analysis is grounded in the provided source documents.
-
-**Core Principle:**
-- Answer 'yes' if the generation's key financial claims and investment insights are supported by the retrieved documents
-- Answer 'no' ONLY if the generation invents financial data, misquotes figures, or makes major claims that directly contradict the documents
-
-**Accept (answer 'yes') when:**
-- Financial figures cited in the generation appear in or can be reasonably derived from the documents
-- Analytical conclusions and investment insights are drawn from factual data in the documents
-- The generation synthesizes facts from multiple documents accurately
-- Professional financial framing (e.g., "strong balance sheet", "margin compression") is used around facts found in documents
-- Calculated ratios are correctly derived from component data in the documents
-
-**Reject (answer 'no') when:**
-- Specific dollar figures, percentages, or ratios appear that are NOT found in any document
-- Financial claims directly contradict numbers in the documents (e.g., says revenue grew when documents show decline)
-- Company-specific data is attributed to the wrong company
-- Completely fabricated financial metrics with no document basis
-
-**Important:**
-- The generation does NOT need to quote documents verbatim — analytical interpretation is expected and desirable
-- Focus on whether CORE FINANCIAL FACTS are supported, not stylistic choices
-- Investment analysis language around verified facts = acceptable
-- A minor rounding difference (e.g., $45.2B vs $45.23B) is NOT hallucination
-
-Give a binary score 'yes' or 'no'. 'Yes' means the financial analysis is grounded in the documents."""
-
-    hallucination_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT_GRADE_HALLUCINATION),
-            ("human", """Set of facts (retrieved documents): 
-{documents}
-
-LLM generation to grade: 
-{generation}
-
-Is this generation grounded in the documents?"""),
-        ]
-    )
-
-    hallucination_grader = hallucination_prompt | llm_hallucination_grader
-    
-    return hallucination_grader
-
-def get_multi_company_extractor_chain(llm):
-    """Extract multiple companies from a question for cross-referencing."""
-    from schemas.models import MultiCompanyExtraction  # Assuming this Pydantic model exists; adjust if needed
-    structured_llm = llm.with_structured_output(MultiCompanyExtraction)
-
-    SYSTEM_PROMPT = """Extract all companies mentioned in the question from this list:
-    - amazon
-    - berkshire
-    - google
-    - johnson and johnson
-    - jp morgan
-    - meta
-    - microsoft
-    - nvidia
-    - tesla
-    - visa
-    - walmart
-    - pfizer
-    - boeing
-    - apple
-    - samsung
-
-    Instructions:
-    - Return a list of matching companies using the exact spellings from the list above.
-    - Handle abbreviations and tickers: jpmc/jpm/chase → jp morgan, jnj → johnson and johnson, fb → meta, msft → microsoft, nvda → nvidia, tsla → tesla, amzn → amazon, brk → berkshire, googl/goog/alphabet → google, aapl → apple.
-    - If no companies are mentioned, return an empty list.
-    - For comparisons or multi-company queries, include ALL relevant companies.
-    """
-
-    multi_company_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", "Question: {question}\n\nExtracted companies:")
-    ])
-
-    return multi_company_prompt | structured_llm
-
-def get_answer_quality_chain(llm_answer_grade):
-    llm_answer_grader = llm_answer_grade.with_structured_output(GradeAnswer)
-
-    SYSTEM_ANSWER_GRADER = """
-You are a LENIENT evaluator. Decide if the assistant's answer addresses the user's question.
-Output ONLY "yes" or "no".
-
-**Critical Rule**: If the answer provides ANY relevant information related to the question, answer "yes".
-
-Grading Rules:
-- "yes" → The answer provides relevant information that addresses the question, even if:
-  - Not all details are covered
-  - The answer is partial or incomplete
-  - The format differs from what was asked
-  - Some aspects of the question are not addressed
-  - The answer is grounded in retrieved documents and attempts to help
-
-- "no" → ONLY if the answer is:
-  - Completely irrelevant to the question
-  - Explicitly says "I don't know" or "No information available"
-  - Discusses an entirely different topic
-
-**Examples:**
-Q: Show the financial performance of a Company in the last 5 years.
-A: Company's revenue has grown steadily. 2019: $280B, 2020: $386B, 2021: $470B, 2022: $514B, 2023: $575B.
-Grade: yes
-
-Q: Show the financial performance of Company in the last 5 years.
-A: Company showed revenue growth from 2021 to 2023, with 2023 revenue at $575B.
-Grade: yes (partial information is still useful)
-
-Q: Compare Amazon and Meta's revenue.
-A: Amazon's revenue in 2023 was $575B with consistent growth. The company has strong performance across segments.
-Grade: yes (even if Meta is not fully covered, Amazon info addresses part of the question)
-
-Q: Show the financial performance of Company in the last 5 years.
-A: Company is a tech company that sells books and cloud services.
-Grade: no (completely irrelevant)
-
-**Default to "yes" when in doubt** - if the answer contains any financial data or relevant company information related to the question.
-"""
-
-    answer_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_ANSWER_GRADER),
-            ("human", "User question: \n\n {question} \n\n LLM generation: {generation}"),
-        ]
-    )
-
-    answer_grader = answer_prompt | llm_answer_grader
-    return answer_grader
 
 def get_question_rewriter_chain(llm):
     cur_year = _current_year()

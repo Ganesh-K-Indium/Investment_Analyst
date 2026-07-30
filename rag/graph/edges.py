@@ -146,11 +146,6 @@ def decide_to_generate(state):
     return "generate" if doc_count >= 2 else "integrate_web_search"
 
 
-
-# REMOVED: decide_after_web_integration — integrate_web_search now goes directly to generate.
-# REMOVED: decide_after_gap_analysis — gap_analysis node removed; routing goes straight to integrate_web_search.
-
-
 def _is_direct_vectordb_mode(state) -> bool:
     """
     Check if the current query should skip grading and web search,

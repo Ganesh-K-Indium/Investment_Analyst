@@ -44,19 +44,6 @@ from datetime import date, timedelta
 # Configure logging to be minimal/appropriate for a library function
 logger = logging.getLogger(__name__)
 
-def build_relationship_list(record: Form4Transaction) -> list:
-    """Convert boolean DB flags to a list of role strings for the analyst."""
-    roles = []
-    if record.is_officer:
-        roles.append("Officer")
-    if record.is_director:
-        roles.append("Director")
-    if record.is_ten_percent_owner:
-        roles.append("10% Owner")
-    if not roles:
-        roles.append("Other")
-    return roles
-
 def _normalize_name(name: str) -> str:
     """Normalise insider names so 'HENNESSY JOHN L' and 'Hennessy John L.' merge."""
     if not name:
@@ -208,53 +195,3 @@ async def get_advisory_report(ticker: str, start_date: date = None, end_date: da
     except Exception as e:
         logger.error(f"Analysis failed for {ticker}: {e}")
         return {"error": f"Analysis failed: {str(e)}"}
-def print_report(ticker: str, report: dict):
-    """Prints the advisory report in the exact required format."""
-    logger.info("\n--- Running Advisory Analysis --- \n")
-
-    if "error" in report:
-        logger.error(f"ERROR: {report['error']}")
-        return
-
-    if report.get("status") == "no_data":
-        logger.warning(f"NOTICE: {report['message']}")
-        logger.warning("To ingest data, please run the separate ingestion pipeline: python ingest.py")
-        return
-
-    logger.info("=== Analyst Report === \n")
-    
-    for issuer, detail in report.items():
-        if issuer in ["error", "status", "message"]: continue
-        
-        # print(f"Issuer: {issuer} [ {ticker} ] \n")
-        # print(f"Recommendation: {detail.get('Recommendation', 'N/A')} \n")
-        # print(f"Net Insider Flow (Shares): {detail.get('Net_Inside_Flow', 0):,.0f} \n")
-        # print(f"Net Insider Flow (Dollars): ${detail.get('Net_Cash_Flow', 0):,.2f} \n")
-        # print(f"Transaction Count: {detail.get('Transaction_Count', 0)} \n")
-        
-        # print("  --- Acquired Metrics --- \n")
-        # print(f"Total Acquired (Shares): {detail.get('Total_Acquired_Shares', 0):,.0f} \n")
-        # print(f"Total Acquired (Dollars): ${detail.get('Total_Bought', 0):,.2f} \n")
-        # print(f"Transactions (Acquired): {detail.get('Acquired_Txn_Count', 0)} \n")
-        # print(f"Average Acquired Price: ${detail.get('Avg_Acquired_Price', 0):,.2f} \n")
-        
-        # print("  --- Disposed Metrics --- \n")
-        # print(f"Total Disposed (Shares): {detail.get('Total_Disposed_Shares', 0):,.0f} \n")
-        # print(f"Total Disposed (Dollars): ${detail.get('Total_Sold', 0):,.2f} \n")
-        # print(f"Transactions (Disposed): {detail.get('Disposed_Txn_Count', 0)} \n")
-        # print(f"Average Disposed Price: ${detail.get('Avg_Disposed_Price', 0):,.2f} \n")
-        logger.info("  --- AI Analysis --- \n")
-        reason = detail.get('Reason', 'No analysis available')
-        logger.info(f"{reason}\n")
-
-if __name__ == "__main__":
-    import asyncio
-    import sys
-
-    ticker = "GOOGL"
-    if not ticker:
-        logger.warning("No ticker provided.")
-        sys.exit(1)
-
-    result = asyncio.run(get_advisory_report(ticker))
-    print_report(ticker, result)
