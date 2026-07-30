@@ -60,7 +60,20 @@ def init_vector_stores(collection_name: str = None, use_hybrid_search: bool = No
     
     return db_init, vectorstore
 
-async def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids):
+def _banner(tag: str, message: str):
+    """
+    Clearly-marked stage banner. The ingestion pipeline mixes tqdm progress
+    bars (text extraction, sparse embeddings) with plain single-line logs
+    (dense embeddings, Qdrant upload) — without a visual break, a real
+    multi-second network wait (e.g. the OpenAI embeddings call) reads as a
+    silent gap between two unrelated-looking progress bars. This makes every
+    major stage transition visually obvious in the terminal.
+    """
+    logger.info("-" * 70)
+    logger.info("[%s] %s", tag, message)
+
+
+async def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids, label: str = "documents"):
     """
     Ingest documents with hybrid vectors (dense + sparse).
 
@@ -68,13 +81,16 @@ async def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids):
         db_loader: The load_vector_database instance
         documents: List of LangChain Document objects
         doc_ids: List of document IDs (UUIDs)
+        label: Human-facing noun for the stage banners/embedding logs (e.g.
+            "text chunk(s)" or "image caption(s)") — this function is shared
+            by both the text and image ingestion paths.
     """
     # Extract text content from documents
     texts = [doc.page_content for doc in documents]
 
     # Generate all embeddings (dense + sparse)
-    embeddings_dict = await db_loader.generate_embeddings_for_ingestion(texts)
-    
+    embeddings_dict = await db_loader.generate_embeddings_for_ingestion(texts, label=label)
+
     # Build points for Qdrant
     points = []
     for i, doc in enumerate(documents):
@@ -97,6 +113,7 @@ async def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids):
         points.append(point)
     
     # Upload to Qdrant using the async client directly
+    logger.info("Uploading %d %s to collection '%s'...", len(points), label, db_loader.collection_name)
     await db_loader.async_qdrant_client.upsert(
         collection_name=db_loader.collection_name,
         points=points
@@ -285,7 +302,7 @@ def _extract_text_documents(pdf_document, source_file_name, company_name, ticker
     however long a large filing takes to parse.
     """
     documents = []
-    logger.info("\n Extracting text from %d pages...", len(pdf_document))
+    _banner("TEXT 1/3", f"Extracting text from {len(pdf_document)} pages...")
     for page_num, page in enumerate(tqdm(pdf_document, desc="Extracting text", unit="page")):
         text = page.get_text("text")
 
@@ -716,7 +733,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
 
             if documents:
                 yield f"Extracted {len(documents)} text segments from PDF."
-                logger.info("\n  Splitting text into chunks...")
+                _banner("TEXT 2/3", "Splitting extracted text into chunks...")
                 text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
                     chunk_size=1024, chunk_overlap=300
                 )
@@ -726,10 +743,12 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
 
                 # Generate deterministic UUIDs using the common function
                 ids = [generate_doc_id(doc.metadata, i, "text") for i, doc in enumerate(text_chunks)]
-                
+
                 # Ingest with hybrid vectors
-                num_ingested = await ingest_documents_with_hybrid_vectors(db_loader, text_chunks, ids)
-                
+                _banner("TEXT 3/3", f"Generating embeddings & uploading {len(text_chunks)} chunk(s)...")
+                num_ingested = await ingest_documents_with_hybrid_vectors(
+                    db_loader, text_chunks, ids, label="text chunk(s)")
+
                 yield f"Added {num_ingested} text chunks to collection '{collection_name}'."
             else:
                 yield "No text extracted from PDF."
@@ -737,6 +756,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
         # --- Image ingestion ---
         image_already_exists = False
 
+        _banner("IMAGE 1/3", f"Extracting & hashing images from {source_file_name}...")
         yield f"Extracting and hashing images from {source_file_name}..."
         img_processor = ImageDescription(uploaded_pdf_path, filing_type=filing_type)
 
@@ -768,6 +788,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
 
         if not image_already_exists:
             if image_info:
+                _banner("IMAGE 2/3", f"Analyzing {len(image_info)} image(s) with GPT-4o...")
                 yield f" Analyzing {len(image_info)} images with GPT-4o..."
                 image_descriptions = await img_processor.get_image_description(image_info)
                 
@@ -798,7 +819,9 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                 if image_documents:
                     img_ids = [generate_doc_id(doc.metadata, i, "image") for i, doc in enumerate(image_documents)]
 
-                    num_img_ingested = await ingest_documents_with_hybrid_vectors(db_loader, image_documents, img_ids)
+                    _banner("IMAGE 3/3", f"Generating embeddings & uploading {len(image_documents)} image caption(s)...")
+                    num_img_ingested = await ingest_documents_with_hybrid_vectors(
+                        db_loader, image_documents, img_ids, label="image caption(s)")
 
                     yield f"Added {num_img_ingested} image captions to collection '{collection_name}'."
                 else:

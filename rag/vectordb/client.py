@@ -365,12 +365,16 @@ class load_vector_database():
             logger.error(f"Error in fallback search: {e}")
             return []
     
-    async def generate_embeddings_for_ingestion(self, texts: list[str]) -> dict:
+    async def generate_embeddings_for_ingestion(self, texts: list[str], label: str = "documents") -> dict:
         """
         Generate all required embeddings (dense, sparse) for document ingestion.
 
         Args:
             texts: List of text strings to embed
+            label: Human-facing noun for what's being embedded (e.g. "text
+                chunk(s)" or "image caption(s)") — this function is shared by
+                both the text-chunk and image-caption ingestion paths, so the
+                stage banners it logs need to say which one is running.
 
         Returns:
             dict with 'dense' and 'sparse' embedding lists
@@ -384,14 +388,17 @@ class load_vector_database():
         # all batches concurrently rather than one at a time.
         BATCH_SIZE = 100
         batches = [texts[i:i + BATCH_SIZE] for i in range(0, len(texts), BATCH_SIZE)]
-        logger.info(f"\nGenerating dense embeddings for {len(texts)} documents ({len(batches)} batch(es) of {BATCH_SIZE}, concurrent)...")
+        logger.info(
+            "Generating dense embeddings for %d %s (%d batch(es) of %d, concurrent)...",
+            len(texts), label, len(batches), BATCH_SIZE,
+        )
         batch_results = await asyncio.gather(*(self.embeddings.aembed_documents(batch) for batch in batches))
         for batch_embeddings in batch_results:
             result['dense'].extend(batch_embeddings)
-        
+
         # Generate sparse embeddings (BM25)
         if self.sparse_model:
-            logger.info(f"\nGenerating sparse embeddings for {len(texts)} documents...")
+            logger.info("Generating sparse (BM25) embeddings for %d %s...", len(texts), label)
             try:
                 # Use tqdm with the generator
                 sparse_embeddings = []
