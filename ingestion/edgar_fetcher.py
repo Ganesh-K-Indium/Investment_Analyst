@@ -174,49 +174,79 @@ class SecEdgarFetcher:
 
         url = f"https://data.sec.gov/submissions/CIK{cik}.json"
         data = (await self._rate_limited_request(url)).json()
-        filings = data["filings"]["recent"]
 
         ticker_dir = os.path.join(output_dir, ticker.upper())
 
-        available = []
-        for i in range(len(filings["form"])):
-            form = filings["form"][i]
-            if form not in form_types:
+        def _parse_block(filings: dict) -> list:
+            block = []
+            for i in range(len(filings["form"])):
+                form = filings["form"][i]
+                if form not in form_types:
+                    continue
+
+                filing_date_str = filings["filingDate"][i]
+                filing_date = datetime.strptime(filing_date_str, "%Y-%m-%d").date()
+                if start_date and filing_date < start_date:
+                    continue
+                if filing_date > end_date:
+                    continue
+
+                accession_raw = filings["accessionNumber"][i]
+                accession = accession_raw.replace("-", "")
+                primary_doc = filings["primaryDocument"][i]
+
+                # EDGAR's `reportDate` is the actual period this filing covers (fiscal
+                # year end for a 10-K, fiscal quarter end for a 10-Q, event date for an
+                # 8-K) — distinct from `filingDate` (when it was submitted, typically
+                # weeks later). This is SEC ground truth, so it's passed to ingest_pdf()
+                # as an explicit override — it always wins over cover-page/filename
+                # detection rather than being re-derived.
+                report_date_str = filings.get("reportDate", [None] * len(filings["form"]))[i] or None
+
+                filing_url = (
+                    f"https://www.sec.gov/Archives/edgar/data/"
+                    f"{int(cik)}/{accession}/{primary_doc}"
+                )
+                pdf_path = os.path.join(ticker_dir, f"{ticker.upper()}_{form.replace('/', '-')}_{filing_date_str}_{accession}.pdf")
+
+                block.append({
+                    "form": form,
+                    "filing_date": filing_date_str,
+                    "period_end_date": report_date_str,
+                    "accession": accession,
+                    "url": filing_url,
+                    "pdf_path": pdf_path
+                })
+            return block
+
+        available = _parse_block(data["filings"]["recent"])
+
+        # The "recent" block above is capped at ~1000 entries total across
+        # EVERY form type (10-K/10-Q/8-K plus Form 4/144/13F/etc.) — for a
+        # ticker with heavy insider-transaction filing volume (e.g. a
+        # megacap with frequent Form 4/144s), that cap can be exhausted by
+        # non-10-K/10-Q/8-K noise within just the last 1-2 years, silently
+        # pushing OLDER 10-Ks/10-Qs/8-Ks out of view even though they still
+        # exist on EDGAR. Older history lives in separate paginated files
+        # listed under filings.files — fetch whichever of those overlap the
+        # requested date range (all of them, when start_date is None, since
+        # that means "no lower bound" i.e. full history).
+        for file_meta in data["filings"].get("files", []):
+            page_from = datetime.strptime(file_meta["filingFrom"], "%Y-%m-%d").date()
+            page_to = datetime.strptime(file_meta["filingTo"], "%Y-%m-%d").date()
+            if start_date and page_to < start_date:
+                continue
+            if page_from > end_date:
                 continue
 
-            filing_date_str = filings["filingDate"][i]
-            filing_date = datetime.strptime(filing_date_str, "%Y-%m-%d").date()
-            if start_date and filing_date < start_date:
-                continue
-            if filing_date > end_date:
-                continue
+            page_url = f"https://data.sec.gov/submissions/{file_meta['name']}"
+            page_data = (await self._rate_limited_request(page_url)).json()
+            available.extend(_parse_block(page_data))
 
-            accession_raw = filings["accessionNumber"][i]
-            accession = accession_raw.replace("-", "")
-            primary_doc = filings["primaryDocument"][i]
-
-            # EDGAR's `reportDate` is the actual period this filing covers (fiscal
-            # year end for a 10-K, fiscal quarter end for a 10-Q, event date for an
-            # 8-K) — distinct from `filingDate` (when it was submitted, typically
-            # weeks later). This is SEC ground truth, so it's passed to ingest_pdf()
-            # as an explicit override — it always wins over cover-page/filename
-            # detection rather than being re-derived.
-            report_date_str = filings.get("reportDate", [None] * len(filings["form"]))[i] or None
-
-            filing_url = (
-                f"https://www.sec.gov/Archives/edgar/data/"
-                f"{int(cik)}/{accession}/{primary_doc}"
-            )
-            pdf_path = os.path.join(ticker_dir, f"{ticker.upper()}_{form.replace('/', '-')}_{filing_date_str}_{accession}.pdf")
-
-            available.append({
-                "form": form,
-                "filing_date": filing_date_str,
-                "period_end_date": report_date_str,
-                "accession": accession,
-                "url": filing_url,
-                "pdf_path": pdf_path
-            })
+        # Pages arrive oldest-chunk-last but each chunk is itself already in
+        # EDGAR's native (most-recent-first) order — re-sort the merged list
+        # so callers always get a single consistent most-recent-first view.
+        available.sort(key=lambda f: f["filing_date"], reverse=True)
 
         return available
 
