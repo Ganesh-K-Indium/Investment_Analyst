@@ -937,13 +937,23 @@ async def retrieve(state, config):
                     # Get instance for this ticker (DO NOT CREATE if missing)
                     db_instance = vectordb_mgr.get_instance(t_ticker, create_if_missing=False)
 
+                    # Scope quarter passes to what THIS sub-query itself asks
+                    # for (mirrors detect_tickers_in_query's per-sub-query
+                    # scoping above) — when multiple quarters are requested,
+                    # the analyzer generates one sub-query per quarter (e.g.
+                    # "...Q1 2026..." / "...Q2 2026..."), and applying every
+                    # requested quarter to every sub-query would dilute a
+                    # quarter-specific sub-query with the OTHER quarter's
+                    # chunks, drowning out the one actually being asked about.
+                    sq_quarters = extract_fiscal_quarters_from_question(sq) or requested_fiscal_quarters
+
                     # Perform search per requested year × filing_type × quarter
                     # combination to ensure representation of every explicitly
                     # requested dimension (degenerates to one pass per year in
                     # the common single-type, no-quarter case).
                     docs_from_ticker = 0
                     for year_filter in requested_years:
-                        for ft, q in _build_type_quarter_passes(filing_types, requested_fiscal_quarters):
+                        for ft, q in _build_type_quarter_passes(filing_types, sq_quarters):
                             search_results = await _hybrid_search_with_quarter_fallback(
                                 db_instance,
                                 fiscal_quarter=q,
