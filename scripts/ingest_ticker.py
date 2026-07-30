@@ -10,6 +10,16 @@ Usage:
     python scripts/ingest_ticker.py AAPL --form-types 10-K 10-Q
     python scripts/ingest_ticker.py AAPL --all       # ingest everything listed, no prompt
 
+When run interactively without --form-types, you first choose what to view:
+    1) All filing types together
+    2) 10-K only
+    3) 10-Q only
+    4) 8-K only
+    b) Back / q) Quit
+Picking a single type re-shows the table filtered to just that type. At the
+selection prompt below it, 'b' (or 'back') returns to this menu instead of
+quitting outright, so you can switch filing types without restarting.
+
 At the selection prompt, mix and match any of:
     1,3,5           by row number
     1-4             by row range
@@ -19,9 +29,10 @@ At the selection prompt, mix and match any of:
                     Q1 covers Oct-Dec — see the "Available fiscal quarters"
                     line printed before the prompt)
     all             everything listed
+    b               back to the filing-type menu
     q               quit without ingesting anything
 """
-
+ 
 import argparse
 import asyncio
 import os
@@ -101,6 +112,36 @@ def _parse_selection(raw: str, filings: list, labels: list) -> list:
     return sorted(i for i in indices if 1 <= i <= len(filings))
 
 
+def _prompt_filing_type_menu() -> list | str | None:
+    """
+    Show the "what do you want to view" menu.
+    Returns a list of form types to filter to, None to view everything
+    together, "b" to go back and pick a different ticker, or "q" to quit
+    entirely.
+    """
+    print("\nWhat would you like to view?")
+    print("  1) All filing types together")
+    print("  2) 10-K only")
+    print("  3) 10-Q only")
+    print("  4) 8-K only")
+    print("  b) Back (choose a different ticker)")
+    print("  q) Quit")
+
+    choice = input("Choice: ").strip().lower()
+    if choice in ("q", "quit"):
+        return "q"
+    if choice in ("b", "back"):
+        return "b"
+    if choice in ("2", "10-k", "10k"):
+        return ["10-K"]
+    if choice in ("3", "10-q", "10q"):
+        return ["10-Q"]
+    if choice in ("4", "8-k", "8k"):
+        return ["8-K"]
+    # "1", "all", empty input, or anything unrecognized -> show everything
+    return None
+
+
 def _print_filing_table(filings: list, labels: list):
     print(f"\n{'#':>3}  {'Form':<6} {'Period':<8} {'Filed':<12} {'Period End':<12} {'Accession'}")
     print("-" * 70)
@@ -123,8 +164,8 @@ def _print_filing_table(filings: list, labels: list):
 async def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("ticker", nargs="?", help="Ticker symbol (prompted if omitted)")
-    parser.add_argument("--form-types", nargs="+", default=list(VALID_FORM_TYPES), choices=VALID_FORM_TYPES,
-                         help="Which filing types to list (default: all three)")
+    parser.add_argument("--form-types", nargs="+", default=None, choices=VALID_FORM_TYPES,
+                         help="Which filing types to list (default: prompt interactively for all three)")
     parser.add_argument("--limit", type=int, default=25,
                          help="Max filings to list, most recent first (default: 25)")
     parser.add_argument("--all", action="store_true",
@@ -133,72 +174,159 @@ async def main():
                          help="Only download/render PDFs, skip vector ingestion")
     args = parser.parse_args()
 
-    ticker = args.ticker or input("Ticker to ingest (e.g. AAPL): ").strip().upper()
-    if not ticker:
-        print("No ticker provided, exiting.")
-        return
+    # Only show the filing-type menu when the caller didn't already pin down
+    # form types on the command line — --form-types stays fully scriptable.
+    explicit_form_types = args.form_types is not None
+    fetch_types = args.form_types if explicit_form_types else list(VALID_FORM_TYPES)
 
-    print(f"\nFetching available filings for {ticker} from SEC EDGAR...")
+    # args.ticker only seeds the very first loop iteration — after that
+    # (or if omitted entirely) the user is prompted fresh each time, so
+    # choosing "back" at the filing-type menu can land on a different ticker
+    # without restarting the script.
+    pending_ticker = args.ticker
 
     async with SecEdgarFetcher() as fetcher:
-        try:
-            available = await fetcher.list_filings(ticker, form_types=args.form_types)
-        except ValueError as e:
-            print(f"CIK not found: {e}")
-            return
+        while True:
+            if pending_ticker:
+                ticker = pending_ticker.strip().upper()
+                pending_ticker = None
+            else:
+                ticker = input("\nTicker to ingest (e.g. AAPL, or 'q' to quit): ").strip().upper()
 
-        if not available:
-            print(f"No {'/'.join(args.form_types)} filings found for {ticker}.")
-            return
-
-        # Most recent first (EDGAR's own order), capped to --limit
-        available = available[: args.limit]
-        labels = [_label_filing(f, ticker) for f in available]
-
-        _print_filing_table(available, labels)
-        print(f"Showing {len(available)} most recent filing(s) (use --limit to see more).")
-
-        if args.all:
-            selected_indices = list(range(1, len(available) + 1))
-        else:
-            raw = input(
-                "Select filings to ingest (row numbers, 'FY2024', '2025Q1', 'all', or 'q' to quit): "
-            ).strip()
-            if raw.lower() == "q":
-                print("Cancelled.")
-                return
-            selected_indices = _parse_selection(raw, available, labels)
-            if not selected_indices:
-                print("No valid selection made, exiting.")
+            if not ticker or ticker.lower() in ("q", "quit"):
+                print("Cancelled." if ticker else "No ticker provided, exiting.")
                 return
 
-        selected = [available[i - 1] for i in selected_indices]
-        accession_filter = {f["accession"] for f in selected}
+            print(f"\nFetching available filings for {ticker} from SEC EDGAR...")
+            try:
+                available_all = await fetcher.list_filings(ticker, form_types=fetch_types)
+            except ValueError as e:
+                print(f"CIK not found: {e}")
+                continue  # back to ticker prompt
 
-        print(f"\nIngesting {len(selected)} filing(s) for {ticker}:")
-        for f, i in zip(selected, selected_indices):
-            label = labels[i - 1]
-            label_str = f" [{label}]" if label else ""
-            print(f"  - {f['form']}{label_str} (period end: {f.get('period_end_date') or 'unknown'}, filed {f['filing_date']})")
+            if not available_all:
+                print(f"No {'/'.join(fetch_types)} filings found for {ticker}.")
+                continue  # back to ticker prompt
 
-        summary = await fetcher.fetch_filings(
-            ticker=ticker,
-            form_types=args.form_types,
-            accession_filter=accession_filter,
-            ingest=not args.no_ingest,
-        )
+            # available_all is every fetched filing across all requested form
+            # types, most recent first — NOT yet capped to --limit. Capping
+            # here (before the interactive menu filters down to one type)
+            # would let frequent 8-K/10-Q filings crowd out 10-Ks from the
+            # window entirely, so --limit is applied per form-type selection
+            # below instead, after filtering.
 
-        print("\n" + "=" * 60)
-        print("INGESTION SUMMARY")
-        print("=" * 60)
-        print(f"Ticker:    {summary['ticker']}")
-        print(f"Ingested:  {summary['ingested']}")
-        print(f"Failed:    {summary['failed']}")
-        if not args.no_ingest:
-            for f in summary["filings"]:
-                status_marker = "OK" if f["status"] == "ingested" else "FAIL"
-                print(f"  [{status_marker}] {f['form']} ({f.get('period_end_date') or 'unknown'}) — "
-                      f"{f.get('chunks_added', 0)} chunks" + (f" — {f['error']}" if f.get("error") else ""))
+            filtered = None
+            selected_indices = None
+            labels = None
+            change_ticker = False
+
+            if explicit_form_types or args.all:
+                # Non-interactive / scripted path — form_types was already
+                # pinned by the caller, so capping here is equivalent to
+                # capping post-filter.
+                filtered = available_all[: args.limit]
+                labels = [_label_filing(f, ticker) for f in filtered]
+                _print_filing_table(filtered, labels)
+                print(f"Showing {len(filtered)} most recent filing(s) (use --limit to see more).")
+
+                if args.all:
+                    selected_indices = list(range(1, len(filtered) + 1))
+                else:
+                    raw = input(
+                        "Select filings to ingest (row numbers, 'FY2024', '2025Q1', 'all', or 'q' to quit): "
+                    ).strip()
+                    if raw.lower() == "q":
+                        print("Cancelled.")
+                        return
+                    selected_indices = _parse_selection(raw, filtered, labels)
+                    if not selected_indices:
+                        print("No valid selection made, exiting.")
+                        return
+            else:
+                # Interactive path — filing-type menu, with 'back'/'change ticker' support.
+                while True:
+                    menu_choice = _prompt_filing_type_menu()
+                    if menu_choice == "q":
+                        print("Cancelled.")
+                        return
+                    if menu_choice == "b":
+                        change_ticker = True
+                        break
+
+                    chosen_types = menu_choice or fetch_types
+                    filtered = [f for f in available_all if f["form"] in chosen_types]
+                    if not filtered:
+                        print(f"No {'/'.join(chosen_types)} filings found for {ticker}.")
+                        continue
+
+                    # Cap AFTER narrowing to the chosen type(s), so picking
+                    # "10-K only" shows the most recent `limit` 10-Ks — not
+                    # whatever 10-Ks happened to survive an earlier cap
+                    # applied across all form types combined.
+                    filtered = filtered[: args.limit]
+
+                    labels = [_label_filing(f, ticker) for f in filtered]
+                    _print_filing_table(filtered, labels)
+                    print(f"Showing {len(filtered)} filing(s) (use --limit to see more).")
+
+                    raw = input(
+                        "Select filings to ingest (row numbers, 'FY2024', '2025Q1', 'all', "
+                        "'b' for filing-type menu, 't' to change ticker, or 'q' to quit): "
+                    ).strip()
+                    if raw.lower() == "q":
+                        print("Cancelled.")
+                        return
+                    if raw.lower() in ("b", "back"):
+                        continue
+                    if raw.lower() in ("t", "ticker"):
+                        change_ticker = True
+                        break
+
+                    selected_indices = _parse_selection(raw, filtered, labels)
+                    if not selected_indices:
+                        print("No valid selection made — back to the filing-type menu.")
+                        continue
+
+                    break
+
+            if change_ticker:
+                continue  # back to the ticker prompt
+
+            selected = [filtered[i - 1] for i in selected_indices]
+            accession_filter = {f["accession"] for f in selected}
+
+            print(f"\nIngesting {len(selected)} filing(s) for {ticker}:")
+            for f, i in zip(selected, selected_indices):
+                label = labels[i - 1]
+                label_str = f" [{label}]" if label else ""
+                print(f"  - {f['form']}{label_str} (period end: {f.get('period_end_date') or 'unknown'}, filed {f['filing_date']})")
+
+            summary = await fetcher.fetch_filings(
+                ticker=ticker,
+                form_types=list({f["form"] for f in selected}),
+                accession_filter=accession_filter,
+                ingest=not args.no_ingest,
+            )
+
+            print("\n" + "=" * 60)
+            print("INGESTION SUMMARY")
+            print("=" * 60)
+            print(f"Ticker:    {summary['ticker']}")
+            print(f"Ingested:  {summary['ingested']}")
+            print(f"Failed:    {summary['failed']}")
+            if not args.no_ingest:
+                for f in summary["filings"]:
+                    status_marker = "OK" if f["status"] == "ingested" else "FAIL"
+                    print(f"  [{status_marker}] {f['form']} ({f.get('period_end_date') or 'unknown'}) — "
+                          f"{f.get('chunks_added', 0)} chunks" + (f" — {f['error']}" if f.get("error") else ""))
+
+            if explicit_form_types or args.all:
+                # Scripted invocation — single-shot, exit after one ingestion.
+                return
+
+            again = input("\nIngest another ticker? (y/N): ").strip().lower()
+            if again not in ("y", "yes"):
+                return
 
 
 if __name__ == "__main__":
