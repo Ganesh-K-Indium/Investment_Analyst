@@ -272,6 +272,54 @@ def extract_year_from_filename(file_name: str) -> int:
     return current_year if current_year > 2000 else 2024
 
 
+def _extract_text_documents(pdf_document, source_file_name, company_name, ticker, content_hash,
+                             resolved_year, filing_type, period_end_date, fiscal_quarter) -> list:
+    """
+    Synchronous, CPU-bound page-by-page text + native-table extraction.
+
+    Called via asyncio.to_thread() from process_pdf_and_stream() — this is
+    the single heaviest step in ingestion (full-document PyMuPDF text
+    extraction plus per-page table detection), and running it directly on
+    the event loop would freeze every other in-flight request (chat, RAG
+    queries, other concurrent ingestions) on this same server process for
+    however long a large filing takes to parse.
+    """
+    documents = []
+    logger.info("\n Extracting text from %d pages...", len(pdf_document))
+    for page_num, page in enumerate(tqdm(pdf_document, desc="Extracting text", unit="page")):
+        text = page.get_text("text")
+
+        # Native PDF tables (not image-embedded) lose column alignment
+        # when flattened to plain text — critical for financial tables
+        # where the columns ARE the data (e.g. "2024 | 2023 | 2022").
+        # Append a structured markdown rendering when a table is
+        # actually detected on this page; a no-op for the common case
+        # of pure narrative-text pages.
+        try:
+            tables_md = extract_tables_markdown_for_page(page, page_num + 1)
+            if tables_md:
+                text = text + "\n\n[TABLES]\n" + tables_md
+        except Exception as e:
+            logger.warning("Table extraction failed on page %d: %s", page_num + 1, e)
+
+        if text.strip():
+            metadata = {
+                "source_file": source_file_name,
+                "page_num": page_num + 1,
+                "company": company_name,
+                "ticker": ticker if ticker else "unknown",
+                "content_type": "text",
+                "content_hash": content_hash,
+                "year": resolved_year,
+                "filing_type": filing_type,
+                "period_end_date": period_end_date,
+                "fiscal_quarter": fiscal_quarter,
+                "ingestion_timestamp": str(datetime.now()),
+            }
+            documents.append(Document(page_content=text, metadata=metadata))
+    return documents
+
+
 def calculate_content_hash(pdf_path: str) -> str:
     """Calculate a deterministic hash of the PDF content."""
     try:
@@ -548,7 +596,11 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
 
     try:
         yield f"Processing document: {uploaded_pdf_path}"
-        pdf_document = fitz.open(uploaded_pdf_path)
+        # fitz.open() and cover-page text extraction are blocking C-extension
+        # calls — offload to a worker thread so they don't stall the event
+        # loop (and every other in-flight request on this process) while a
+        # large filing is being parsed.
+        pdf_document = await asyncio.to_thread(fitz.open, uploaded_pdf_path)
         source_file_name = os.path.basename(uploaded_pdf_path)
         company_name = extract_company_name(source_file_name)
 
@@ -556,7 +608,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
         # priority order: explicit caller value > document cover-page text
         # (reliable regardless of filename) > filename token (weakest signal,
         # fails for arbitrary user-chosen filenames).
-        cover_info = extract_cover_page_info(pdf_document)
+        cover_info = await asyncio.to_thread(extract_cover_page_info, pdf_document)
 
         if filing_type:
             if filing_type not in VALID_FILING_TYPES:
@@ -638,10 +690,14 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
             yield f"Using fallback collection: {collection_name}"
 
         # Initialize vector store with specific collection
-        db_loader, _ = init_vector_stores(collection_name=collection_name)
+        # init_vector_stores() constructs a sync QdrantClient whose __init__
+        # makes live blocking network calls (get_collections/create_collection/
+        # create_payload_index) — offload so it doesn't stall the event loop.
+        db_loader, _ = await asyncio.to_thread(init_vector_stores, collection_name=collection_name)
         
-        # Calculate content hash for duplicate detection
-        content_hash = calculate_content_hash(uploaded_pdf_path)
+        # Calculate content hash for duplicate detection (re-reads + hashes
+        # every page's text — blocking, offload to a thread)
+        content_hash = await asyncio.to_thread(calculate_content_hash, uploaded_pdf_path)
         logger.info("\nDebug: Content hash for %s: %s", source_file_name, content_hash)
         
         # --- Text ingestion ---
@@ -653,39 +709,10 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
             yield f"{source_file_name} already ingested (text) with {len(existing_points)} chunks. Skipping text ingestion."
 
         if not text_already_exists:
-            documents = []
-            logger.info("\n Extracting text from %d pages...", len(pdf_document))
-            for page_num, page in enumerate(tqdm(pdf_document, desc="Extracting text", unit="page")):
-                text = page.get_text("text")
-
-                # Native PDF tables (not image-embedded) lose column alignment
-                # when flattened to plain text — critical for financial tables
-                # where the columns ARE the data (e.g. "2024 | 2023 | 2022").
-                # Append a structured markdown rendering when a table is
-                # actually detected on this page; a no-op for the common case
-                # of pure narrative-text pages.
-                try:
-                    tables_md = extract_tables_markdown_for_page(page, page_num + 1)
-                    if tables_md:
-                        text = text + "\n\n[TABLES]\n" + tables_md
-                except Exception as e:
-                    logger.warning("Table extraction failed on page %d: %s", page_num + 1, e)
-
-                if text.strip():
-                    metadata = {
-                        "source_file": source_file_name,
-                        "page_num": page_num + 1,
-                        "company": company_name,
-                        "ticker": ticker if ticker else "unknown",
-                        "content_type": "text",
-                        "content_hash": content_hash,
-                        "year": resolved_year,
-                        "filing_type": filing_type,
-                        "period_end_date": period_end_date,
-                        "fiscal_quarter": fiscal_quarter,
-                        "ingestion_timestamp": str(datetime.now()),
-                    }
-                    documents.append(Document(page_content=text, metadata=metadata))
+            documents = await asyncio.to_thread(
+                _extract_text_documents, pdf_document, source_file_name, company_name, ticker,
+                content_hash, resolved_year, filing_type, period_end_date, fiscal_quarter,
+            )
 
             if documents:
                 yield f"Extracted {len(documents)} text segments from PDF."
@@ -693,7 +720,8 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                 text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
                     chunk_size=1024, chunk_overlap=300
                 )
-                text_chunks = text_splitter.split_documents(documents)
+                # tiktoken encoding of the full document is CPU-bound — offload.
+                text_chunks = await asyncio.to_thread(text_splitter.split_documents, documents)
                 logger.info("Created %d text chunks", len(text_chunks))
 
                 # Generate deterministic UUIDs using the common function
@@ -712,7 +740,8 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
         yield f"Extracting and hashing images from {source_file_name}..."
         img_processor = ImageDescription(uploaded_pdf_path, filing_type=filing_type)
 
-        image_info, image_hashes = img_processor.get_image_information()
+        # Blocking PyMuPDF image extraction + hashing over every page — offload.
+        image_info, image_hashes = await asyncio.to_thread(img_processor.get_image_information)
 
         if image_hashes:
             yield f"Found {len(image_hashes)} images; checking which are already ingested..."
@@ -749,8 +778,8 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                     json.dump(metadata_to_save, f, indent=2)
                 yield f"Saved detailed image analysis to {metadata_path}"
 
-                image_documents = img_processor.getRetriever(
-                    metadata_path, company_name, image_hashes)
+                image_documents = await asyncio.to_thread(
+                    img_processor.getRetriever, metadata_path, company_name, image_hashes)
 
                 for i, doc in enumerate(image_documents):
                     doc.metadata.update({

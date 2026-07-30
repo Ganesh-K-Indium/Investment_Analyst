@@ -6,8 +6,9 @@ correct filing_type tag.
 Async throughout: HTTP fetches use httpx.AsyncClient, PDF rendering uses
 Playwright's async API, and ingestion itself (pdf_processor1.py) is async —
 embeddings via OpenAI's async client, upserts via Qdrant's AsyncQdrantClient.
-Filings ingest concurrently (bounded by a semaphore) without blocking the
-event loop or needing a thread-offload.
+Filings ingest concurrently (bounded by a semaphore); PDF text/OCR extraction
+is offloaded to a worker thread (see pdf_processor1.py) so it doesn't block
+the event loop while other requests are in flight.
 
 Each filing's exact period_end_date is taken from EDGAR's own `reportDate`
 field (SEC ground truth, not re-derived from the document) and passed to
@@ -32,9 +33,39 @@ load_dotenv()
 logger = logging.getLogger("ingestion.edgar_fetcher")
 
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "Indium Capital contact@indium.com")
-SEC_REQUEST_RATE_LIMIT = 10  # max 10 requests/sec (SEC guideline)
+SEC_REQUEST_RATE_LIMIT = 10  # max 10 requests/sec (SEC guideline) — enforced per-IP, not per-instance
 
 VALID_FORM_TYPES = ("10-K", "10-Q", "8-K")
+
+
+class _SharedRateLimiter:
+    """
+    Process-wide rate limiter shared across every SecEdgarFetcher instance.
+
+    SEC's 10 req/sec guideline is per source IP, not per process/instance.
+    Tracking `_last_request_time` on `self` (the old approach) gave each
+    concurrent SecEdgarFetcher() — e.g. two /edgar/ingest requests for
+    different tickers in flight at once — its own independent budget, so N
+    concurrent ingestions could collectively exceed the real limit and risk
+    SEC throttling/blocking the whole server's IP. A module-level lock +
+    timestamp, awaited by every instance, keeps the true combined request
+    rate under the limit regardless of how many fetchers are active.
+    """
+
+    def __init__(self, rate_limit: float):
+        self._delay = 1.0 / rate_limit
+        self._last_request_time = 0.0
+        self._lock = asyncio.Lock()
+
+    async def wait(self):
+        async with self._lock:
+            elapsed = time.monotonic() - self._last_request_time
+            if elapsed < self._delay:
+                await asyncio.sleep(self._delay - elapsed)
+            self._last_request_time = time.monotonic()
+
+
+_edgar_rate_limiter = _SharedRateLimiter(SEC_REQUEST_RATE_LIMIT)
 
 
 class SecEdgarFetcher:
@@ -47,8 +78,6 @@ class SecEdgarFetcher:
             "Accept": "application/json",
             "Connection": "keep-alive",
         }
-        self._last_request_time = 0.0
-        self._rate_limit_delay = 1.0 / SEC_REQUEST_RATE_LIMIT
         self._client: Optional[httpx.AsyncClient] = None
 
     async def __aenter__(self):
@@ -60,14 +89,10 @@ class SecEdgarFetcher:
             await self._client.aclose()
 
     async def _rate_limited_request(self, url: str) -> httpx.Response:
-        """Ensure SEC rate limits are respected."""
-        elapsed = time.monotonic() - self._last_request_time
-        if elapsed < self._rate_limit_delay:
-            await asyncio.sleep(self._rate_limit_delay - elapsed)
+        """Ensure SEC rate limits are respected, across ALL concurrent fetchers."""
+        await _edgar_rate_limiter.wait()
 
         response = await self._client.get(url, headers=self.headers)
-        self._last_request_time = time.monotonic()
-
         response.raise_for_status()
         return response
 
