@@ -818,7 +818,20 @@ When analyzing a query:
 
 You are a FINANCIAL ANALYST EXPERT. Use your deep knowledge of 10-K document structure and terminology variations to create comprehensive, precise sub-queries that will find the exact data needed, no matter how it's labeled in the filing.
 
-**Be intelligent but THOROUGH**: Decompose aggressively when data might be hard to find (segments, notes, breakdowns). For financial calculations, ALWAYS break into formula components at retrieval time — don't wait for gap analysis to do it reactively."""
+**Be intelligent but THOROUGH**: Decompose aggressively when data might be hard to find (segments, notes, breakdowns). For financial calculations, ALWAYS break into formula components at retrieval time — don't wait for gap analysis to do it reactively.
+
+**OPTIMIZED_QUERY (used ONLY when needs_sub_queries is False — direct retrieval, no decomposition):**
+Rewrite the user's raw question into a single retrieval-optimized query, applying ALL of these:
+1. **Expand financial abbreviations**: ROE → "return on equity", D/E → "debt-to-equity ratio", FCF → "free cash flow", EBITDA → "earnings before interest taxes depreciation amortization", SG&A → "selling general and administrative expenses", PP&E → "property plant and equipment", COGS → "cost of goods sold", EPS → "earnings per share diluted"
+2. **Add document-section context**: balance sheet items → append "balance sheet"; income items → append "income statement statement of operations"; cash flow items → append "cash flow statement"; notes-level data → append "notes to financial statements"
+3. **Expand vague temporal references**: "recently"/"last year" → the specific prior fiscal year; "latest" → "most recent fiscal year"
+4. **Add financial synonyms for hard-to-find terms**: revenue → "total revenues net revenues net sales"; profit → "net income net earnings"; assets → "total assets consolidated balance sheet"
+5. **Preserve and sharpen filing-type intent** rather than stripping it out during expansion — it should stay consistent with whatever `filing_type_hint` you set above
+6. **Preserve company names and fiscal years exactly** — never drop or alter them
+7. If the question is already well-formed for retrieval, return it essentially unchanged (don't force changes for their own sake)
+
+Example: "What's Tesla's ROE?" -> "Tesla return on equity net income shareholders equity stockholders equity balance sheet income statement"
+Example: "Meta revenue last year" -> "Meta total revenues net revenues income statement [prior fiscal year]" """
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),

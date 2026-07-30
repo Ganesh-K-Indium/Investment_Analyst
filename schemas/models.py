@@ -137,6 +137,17 @@ class UniversalSubQueryAnalysis(BaseModel):
     sub_queries: list[str] = Field(
         description="List of focused sub-queries to retrieve specific data points. Each should be a standalone search query."
     )
+    optimized_query: str = Field(
+        description=(
+            "The user's question rewritten to maximize retrieval accuracy — used only when needs_sub_queries "
+            "is False (direct retrieval). Expand financial abbreviations (ROE, EBITDA, D/E, FCF, SG&A, PP&E, "
+            "COGS, EPS) into their full terms; add document-section context (balance sheet / income statement "
+            "/ cash flow statement / notes to financial statements) where relevant; expand vague temporal "
+            "references ('recently', 'last year', 'latest') into an explicit year; preserve and sharpen any "
+            "filing-type signal already implied by the question. Preserve company names and fiscal years "
+            "exactly. If the question is already well-formed for retrieval, return it unchanged."
+        )
+    )
     reasoning: str = Field(
         description="Brief explanation of why these sub-queries are needed and how they help answer the main question"
     )

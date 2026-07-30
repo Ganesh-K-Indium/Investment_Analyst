@@ -538,6 +538,12 @@ def preprocess_and_analyze_query(state):
         "query_type": analysis.query_type,
         "companies_detected": analysis.companies_detected,
         "sub_queries": analysis.sub_queries,
+        # Retrieval-optimized rewrite of the raw question — only consumed by
+        # retrieve()'s direct-mode path (needs_sub_queries == False), where
+        # the raw question would otherwise be embedded unmodified with no
+        # abbreviation expansion or section-context hints. Same LLM call as
+        # everything else above, so this costs zero extra latency.
+        "optimized_query": getattr(analysis, "optimized_query", None),
         "requested_years": analysis.requested_years,
         "reasoning": analysis.reasoning
     }
@@ -704,10 +710,24 @@ async def retrieve(state, config):
     needs_sub_queries = sub_query_analysis.get("needs_sub_queries", False)
     sub_queries = sub_query_analysis.get("sub_queries", [])
     query_type = sub_query_analysis.get("query_type", "single_company")
+
+    # Direct-mode retrieval (needs_sub_queries == False) uses a single query
+    # for the whole search — prefer the LLM's retrieval-optimized rewrite
+    # (abbreviation expansion, section-context hints) over the raw question
+    # when available; falls back to the raw question for comparison/segment/
+    # geographic modes, which never populate optimized_query.
+    direct_mode_query = sub_query_analysis.get("optimized_query") or question
     
     # Extract requested years from state (set by preprocess_and_analyze_query for all paths)
-    # Fall back to sub_query_analysis for backward compatibility
-    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or [2025]
+    # Fall back to sub_query_analysis for backward compatibility. Final
+    # fallback resolves to the most recent fiscal year likely to actually
+    # have a filed 10-K (per the resolved ticker's fiscal calendar) rather
+    # than a hardcoded literal year, which goes stale the moment it's wrong.
+    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years")
+    if not requested_years:
+        from app.utils.company_mapping import get_most_recent_filed_fiscal_year
+        _year_ticker = primary_ticker or (company_filter[0] if company_filter else None)
+        requested_years = [get_most_recent_filed_fiscal_year(_year_ticker)]
 
     # filing_type: resolved by preprocess_and_analyze_query via keyword heuristic
     # (+ free LLM structured-output field). None means "unresolved — search all
@@ -952,7 +972,9 @@ async def retrieve(state, config):
              all_documents = []
         else:
             logger.info(f" Searching collections for tickers: {', '.join(target_tickers)}")
-            
+            if direct_mode_query != question:
+                logger.info(f" Using retrieval-optimized query: '{direct_mode_query}'")
+
             # Iterate through all identified tickers and merge results
             for target_ticker in target_tickers:
                 try:
@@ -965,7 +987,7 @@ async def retrieve(state, config):
                         search_results = await _hybrid_search_with_quarter_fallback(
                             db_instance,
                             fiscal_quarter=fiscal_quarter_filter,
-                            query=question,
+                            query=direct_mode_query,
                             content_type=None,
                             years=[year_filter],
                             filing_type=filing_type,
