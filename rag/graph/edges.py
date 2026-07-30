@@ -152,16 +152,17 @@ def _is_direct_vectordb_mode(state) -> bool:
     going directly from retrieve → generate → show_result.
 
     Applies to: comparison mode, segment queries, geographic queries — but
-    ONLY when the resolved filing_type is None (unresolved) or "10-K". The
-    "10-K is the authoritative source, web search only adds noise" rationale
-    does not hold for 10-Q/8-K data: those are thinner, less comprehensive
-    per-document, so bypassing the grading/web-fallback safety net for them
-    risks silently generating from weak retrieval with nothing to catch it.
-    When filing_type resolves to 10-Q or 8-K, these query types fall through
-    to the normal grade_documents → web-fallback path instead.
+    ONLY when the resolved filing_types is empty (unresolved), or contains
+    only "10-K". The "10-K is the authoritative source, web search only adds
+    noise" rationale does not hold for 10-Q/8-K data: those are thinner, less
+    comprehensive per-document, so bypassing the grading/web-fallback safety
+    net for them risks silently generating from weak retrieval with nothing
+    to catch it. When filing_types includes 10-Q or 8-K (alone or combined
+    with 10-K), these query types fall through to the normal
+    grade_documents → web-fallback path instead.
     """
-    filing_type = state.get("filing_type")
-    if filing_type not in (None, "10-K"):
+    filing_types = state.get("filing_types") or []
+    if any(ft != "10-K" for ft in filing_types):
         return False
     if state.get("is_comparison_mode", False):
         return True

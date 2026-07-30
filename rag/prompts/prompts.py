@@ -390,7 +390,7 @@ def get_universal_sub_query_analyzer(llm):
 - **10-K** = audited annual filing, full 3-year comparative financial statements, complete segment/geographic/risk disclosure. The structure and terminology guidance below is written primarily around 10-Ks since they're the most complete document.
 - **10-Q** = unaudited quarterly filing, single-quarter or year-to-date figures, condensed footnotes (segment/geographic notes are typically abbreviated versions of the 10-K's, not absent, but far less detailed). No 3-year comparative table exists in a 10-Q.
 - **8-K** = event-driven disclosure (M&A, executive change, guidance update, restructuring) — NOT a financial-statement source. Do not generate sub-queries expecting balance sheet/income statement/segment detail from an 8-K; its content is about a specific event.
-- **Set `filing_type_hint`** based on what the question implies: "latest quarter"/"Q1-Q4"/"quarterly" → "10-Q"; a specific event ("announced", "departure", "acquisition of", "guidance update") → "8-K"; "annual"/"full-year"/multi-year comparative language, or no clear signal either way → "10-K" is the safest default only when the query is clearly annual/comparative in nature; otherwise leave it null so retrieval searches all filing types for that company/year.
+- **Set `filing_type_hints`** based on what the question implies: "latest quarter"/"Q1-Q4"/"quarterly" → `["10-Q"]`; a specific event ("announced", "departure", "acquisition of", "guidance update") → `["8-K"]`; "annual"/"full-year"/multi-year comparative language, or no clear signal either way → `["10-K"]` is the safest default only when the query is clearly annual/comparative in nature; otherwise leave it an empty list so retrieval searches all filing types for that company/year. Only include MORE THAN ONE type (e.g. `["10-K", "10-Q"]`) when the question explicitly asks to combine or compare across filing types ("combine the 10-K and 10-Q figures", "compare quarterly to annual") — do not add a second type just because a question happens to touch both annual and quarterly concepts in passing.
 
 **YOUR EXPERTISE:**
 - **SEC Filing Document Archaeology**: You know where EVERY type of financial data lives across 10-K, 10-Q, and 8-K filings
@@ -826,7 +826,7 @@ Rewrite the user's raw question into a single retrieval-optimized query, applyin
 2. **Add document-section context**: balance sheet items → append "balance sheet"; income items → append "income statement statement of operations"; cash flow items → append "cash flow statement"; notes-level data → append "notes to financial statements"
 3. **Expand vague temporal references**: "recently"/"last year" → the specific prior fiscal year; "latest" → "most recent fiscal year"
 4. **Add financial synonyms for hard-to-find terms**: revenue → "total revenues net revenues net sales"; profit → "net income net earnings"; assets → "total assets consolidated balance sheet"
-5. **Preserve and sharpen filing-type intent** rather than stripping it out during expansion — it should stay consistent with whatever `filing_type_hint` you set above
+5. **Preserve and sharpen filing-type intent** rather than stripping it out during expansion — it should stay consistent with whatever `filing_type_hints` you set above
 6. **Preserve company names and fiscal years exactly** — never drop or alter them
 7. If the question is already well-formed for retrieval, return it essentially unchanged (don't force changes for their own sake)
 

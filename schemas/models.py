@@ -125,13 +125,16 @@ class UniversalSubQueryAnalysis(BaseModel):
     requested_years: list[int] = Field(
         description="Specific years mentioned in the query (e.g. 2023, 2024). Empty list if no years are specified."
     )
-    filing_type_hint: Literal["10-K", "10-Q", "8-K", None] = Field(
-        default=None,
+    filing_type_hints: list[Literal["10-K", "10-Q", "8-K"]] = Field(
+        default_factory=list,
         description=(
-            "SEC filing type the query implies, if any: '10-K' for annual/full-year/comparative "
+            "SEC filing type(s) the query implies: '10-K' for annual/full-year/comparative "
             "requests, '10-Q' for quarterly/latest-quarter requests, '8-K' for a specific "
             "material event (executive change, M&A, guidance update, press release). "
-            "None if the query doesn't imply a specific filing type — search all filing types."
+            "Return MORE THAN ONE value ONLY when the question explicitly asks to combine or "
+            "compare across filing types (e.g. 'compare the quarterly numbers to the annual "
+            "filing', '10-K and 10-Q both') — otherwise return the single clearly-implied type. "
+            "Empty list if the query doesn't imply a specific filing type — search all filing types."
         )
     )
     sub_queries: list[str] = Field(
