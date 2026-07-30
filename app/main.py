@@ -2,6 +2,7 @@
 Investment Analyst API - Production-grade FastAPI backend
 Unified platform for portfolio management, document analysis, and stock market analysis
 """
+import os
 import time
 import logging
 from dotenv import load_dotenv
@@ -71,10 +72,18 @@ app = FastAPI(
     redirect_slashes=False,
 )
 
-# CORS configuration
+# CORS configuration — locked to explicit origins, required for
+# allow_credentials=True to work at all (browsers reject "*" + credentials
+# together, and refresh-token auth now relies on a credentialed cookie).
+# Set CORS_ALLOWED_ORIGINS as a comma-separated list in production, e.g.
+# "https://app.example.com,https://staging.example.com".
+_default_origins = "http://localhost:5173,http://127.0.0.1:5173"
+_cors_origins = [
+    o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure based on your frontend domain
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

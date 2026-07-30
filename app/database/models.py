@@ -22,6 +22,10 @@ class User(Base):
     role            = Column(String, default="analyst", nullable=False)  # analyst | fund_manager | admin
     hashed_password = Column(String, nullable=False)
     is_active       = Column(Boolean, default=True)
+    # Bumped on logout / password change to invalidate every access+refresh
+    # token issued before that point — JWTs are otherwise stateless and would
+    # stay valid until natural expiry even after "logout".
+    token_version   = Column(Integer, default=0, nullable=False)
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
