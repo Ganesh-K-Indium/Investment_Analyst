@@ -6,7 +6,6 @@ TICKER_TO_COMPANY = {
     # Tech companies
     'aapl': 'apple',
     'msft': 'microsoft',
-    'googl': 'alphabet',
     'googl': 'google',
     'amzn': 'amazon',
     'nvda': 'nvidia',
@@ -104,11 +103,35 @@ TICKER_TO_COMPANY = {
 # Reverse mapping for looking up ticker by company name
 COMPANY_TO_TICKER = {v: k for k, v in TICKER_TO_COMPANY.items()}
 
+# Manual aliases for companies commonly referred to by more than one name,
+# where TICKER_TO_COMPANY only stores a single canonical name per ticker
+# (e.g. GOOGL's legal/parent name "Alphabet" vs. the product name "Google").
+# A prior duplicate 'googl' key here silently dropped the 'alphabet' mapping
+# entirely (Python keeps only the last literal key), so "Alphabet" as a
+# company name resolved to no ticker at all.
+COMPANY_TO_TICKER['alphabet'] = 'googl'
+
 def get_company_name(ticker: str) -> str:
     """Get company name from ticker symbol."""
     if not ticker:
         return ""
     return TICKER_TO_COMPANY.get(ticker.lower(), ticker.lower())
+
+
+def get_company_aliases(ticker: str) -> list:
+    """
+    All known company-name aliases that resolve to this ticker (e.g.
+    'googl' -> ['google', 'alphabet']). get_company_name() only returns the
+    single canonical TICKER_TO_COMPANY name — callers matching free-text
+    against a company name (e.g. detecting which company a sub-query
+    mentions) need every alias, not just the canonical one, or a mention of
+    "Alphabet" won't match ticker 'googl' even though get_ticker("Alphabet")
+    resolves it correctly.
+    """
+    if not ticker:
+        return []
+    ticker_lower = ticker.lower().split('_')[0]
+    return [name for name, t in COMPANY_TO_TICKER.items() if t == ticker_lower]
 
 # Fiscal-year-end month (1-12), explicitly enumerated for the top ~100 US
 # companies by market cap rather than left to silently fall through to the

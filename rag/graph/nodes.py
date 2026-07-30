@@ -15,7 +15,7 @@ from rag.prompts.prompts import (get_rag_chain,
                                                           MACRO_SYNTHESIS_PROMPT,
                                                           MACRO_FEW_SHOT)
 from rag.vectordb.client import load_vector_database
-from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company
+from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company, get_company_aliases
 
 logger = logging.getLogger("rag.graph.nodes")
 
@@ -604,13 +604,19 @@ def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
             continue
 
         # Strategy 2: Company name match
-        # Get the company name for this ticker
-        company_name = map_ticker_to_company(ticker_lower)
-        if company_name and company_name != ticker_lower:
+        # Check every known alias for this ticker, not just the single
+        # canonical TICKER_TO_COMPANY name — e.g. 'googl' has both "google"
+        # and "alphabet" as valid names a sub-query might use.
+        aliases = get_company_aliases(ticker_lower) or [map_ticker_to_company(ticker_lower)]
+        matched = False
+        for company_name in aliases:
+            if not company_name or company_name == ticker_lower:
+                continue
             # Check if company name appears in query
             if company_name in query_lower:
                 matched_tickers.add(ticker)
-                continue
+                matched = True
+                break
 
             # Strategy 3: Partial company name match
             # For multi-word company names, check if any significant word matches
@@ -620,7 +626,10 @@ def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
                 if len(word) > 3 and word not in ['corporation', 'company', 'group', 'inc']:
                     if re.search(r'\b' + re.escape(word) + r'\b', query_lower):
                         matched_tickers.add(ticker)
+                        matched = True
                         break
+            if matched:
+                break
 
     return matched_tickers
 
