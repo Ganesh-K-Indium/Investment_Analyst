@@ -270,10 +270,27 @@ def detect_segment_or_geographic_query(question: str) -> str:
     return "none"
 
 
-def _extract_years_from_question(question: str) -> list:
-    """Extract explicitly mentioned 4-digit years (2000-2029) from the user question."""
+def _extract_years_from_question(question: str, ticker: Optional[str] = None) -> list:
+    """
+    Extract explicitly mentioned 4-digit years (2000-2029) from the user question.
+
+    Falls back to the most recent fiscal year likely to actually have a filed
+    10-K, NOT the current calendar year — a 10-K for the current calendar
+    year almost never exists yet (companies get ~60-90 days after fiscal
+    year end to file), so an undated query like "break down Google's
+    segments" would otherwise silently target an unfiled fiscal year and
+    retrieve nothing useful.
+    """
     years = sorted(set(int(y) for y in re.findall(r'\b(20[0-2][0-9])\b', question)))
-    return years if years else [datetime.now().year]
+    if years:
+        return years
+    if ticker:
+        from app.utils.company_mapping import get_most_recent_filed_fiscal_year
+        return [get_most_recent_filed_fiscal_year(ticker)]
+    # No ticker resolved yet either — a company-agnostic calendar-year
+    # assumption is still safer than "this year", which is correct for the
+    # overwhelming majority (calendar-year) filers.
+    return [datetime.now().year - 1]
 
 
 # Pure keyword heuristic for filing-type inference — zero LLM/embedding cost.
@@ -367,7 +384,7 @@ def generate_segment_subqueries(companies: list, question: str = "") -> dict:
     Generate predefined sub-queries for segment reporting queries WITHOUT LLM.
     Optimized for 10-K segment disclosures (ASC 280).
     """
-    requested_years = _extract_years_from_question(question)
+    requested_years = _extract_years_from_question(question, ticker=companies[0] if companies else None)
     year_suffix = "for years " + ", ".join(str(y) for y in requested_years)
     sub_queries = []
 
@@ -417,7 +434,7 @@ def generate_geographic_subqueries(companies: list, question: str = "") -> dict:
     Generate predefined sub-queries for geographic/regional queries WITHOUT LLM.
     Optimized for 10-K geographic disclosures.
     """
-    requested_years = _extract_years_from_question(question)
+    requested_years = _extract_years_from_question(question, ticker=companies[0] if companies else None)
     year_suffix = "for years " + ", ".join(str(y) for y in requested_years)
     sub_queries = []
 
@@ -2008,6 +2025,48 @@ def generate_comparison_chart(state):
 # ALPHA FRAMEWORK NODES - Stock Buy Timing Analysis
 # ============================================================================
 
+def _extract_ticker_from_free_text(question: str) -> Optional[str]:
+    """
+    Best-effort ticker extraction from a raw free-text question, for the fast
+    keyword-detector nodes (ALPHA/scenario) that run BEFORE the full LLM-based
+    company-extraction node, so `companies_detected` isn't populated yet.
+
+    A naive "first all-caps word <=5 chars" scan (the old approach) matches
+    ordinary sentence-initial words just as readily as a real ticker — e.g.
+    "Give me a bull/bear/base case for MSFT" would match "GIVE" before ever
+    reaching "MSFT", silently producing a report for the wrong company. This
+    checks candidates against the real ticker/company-name table FIRST, and
+    only falls back to the old weak heuristic as a last resort.
+    """
+    if not question:
+        return None
+
+    words = [w.strip(",.?!\"'") for w in question.split()]
+
+    # 1. Any word that's already a KNOWN ticker (e.g. "MSFT", "AAPL").
+    for word in words:
+        if word.lower() in TICKER_TO_COMPANY:
+            return word.upper()
+
+    # 2. Any known company name appearing as a whole word/phrase in the
+    #    question (e.g. "microsoft" in "...case for Microsoft stock").
+    #    Word-boundary match, not a plain substring check — otherwise a short
+    #    company name like "meta" would false-match inside "metadata".
+    question_lower = question.lower()
+    for ticker, company in TICKER_TO_COMPANY.items():
+        if re.search(r'\b' + re.escape(company) + r'\b', question_lower):
+            return ticker.upper()
+
+    # 3. Last resort: the old weak heuristic (first short all-caps-able word).
+    #    Kept only as a fallback for tickers not in our mapping table.
+    for word in words:
+        cleaned = word.upper()
+        if 2 <= len(cleaned) <= 5 and cleaned.isalpha():
+            return cleaned
+
+    return None
+
+
 def detect_alpha_query(state):
     """
     Detect if the query is asking about stock buy timing (ALPHA Framework trigger).
@@ -2094,14 +2153,11 @@ def detect_alpha_query(state):
         elif company_filter and len(company_filter) > 0:
             target_ticker = company_filter[0]
         else:
-            # Fallback: Try to extract from question
-            words = question.split()
-            target_ticker = None
-            for word in words:
-                cleaned = word.strip(',.?!').upper()
-                if len(cleaned) <= 5 and cleaned.isalpha():
-                    target_ticker = cleaned
-                    break
+            # Fallback: extract from the raw question text (checks known
+            # tickers/company names before falling back to a weak guess —
+            # see _extract_ticker_from_free_text for why the naive "first
+            # short all-caps word" approach is unreliable on its own).
+            target_ticker = _extract_ticker_from_free_text(question)
 
         if not target_ticker:
             logger.warning(" WARNING: Could not extract ticker/company")
@@ -2818,13 +2874,11 @@ def detect_scenario_query(state):
             ticker = company_filter[0].upper()
 
         if not ticker:
-            # Fallback: look for an all-caps word ≤5 chars in the question
-            words = question.upper().split()
-            for word in words:
-                cleaned = word.strip(",.?!\"'")
-                if 2 <= len(cleaned) <= 5 and cleaned.isalpha():
-                    ticker = cleaned
-                    break
+            # Fallback: extract from the raw question text (checks known
+            # tickers/company names before falling back to a weak guess —
+            # see _extract_ticker_from_free_text for why the naive "first
+            # short all-caps word" approach is unreliable on its own).
+            ticker = _extract_ticker_from_free_text(question)
 
         if not ticker:
             ticker = "UNKNOWN"
@@ -3124,6 +3178,61 @@ def scenario_generate_report(state):
             return default
         return getattr(result, field, default) or default
 
+    # ── Cross-case sanity checks ──────────────────────────────────────────────
+    # Bull/Bear/Base run as three INDEPENDENT LLM calls with no visibility into
+    # each other's output, so nothing enforces bull >= base >= bear price
+    # targets or that the three probabilities sum to ~100% — both have been
+    # observed to drift (e.g. probabilities summing to 105%). Rather than
+    # silently trusting three uncoordinated numbers, check them here: rescale
+    # probabilities proportionally when they don't sum close to 100%, and flag
+    # (don't hide) an out-of-order price target set for the reader to verify.
+    def _parse_numeric(value):
+        if not value:
+            return None
+        cleaned = re.sub(r'[^0-9.]', '', str(value))
+        try:
+            return float(cleaned) if cleaned else None
+        except ValueError:
+            return None
+
+    scenario_warnings = []
+
+    bull_target_val = _parse_numeric(_safe(bull_result, "price_target"))
+    base_target_val = _parse_numeric(_safe(base_result, "price_target"))
+    bear_target_val = _parse_numeric(_safe(bear_result, "price_target"))
+
+    if None not in (bull_target_val, base_target_val, bear_target_val):
+        if not (bull_target_val >= base_target_val >= bear_target_val):
+            logger.warning(
+                "Scenario price targets out of expected order: bull=%s base=%s bear=%s",
+                bull_target_val, base_target_val, bear_target_val,
+            )
+            scenario_warnings.append(
+                f"**Note**: the generated price targets did not follow the expected "
+                f"bull ≥ base ≥ bear ordering (bull ${bull_target_val:g}, base ${base_target_val:g}, "
+                f"bear ${bear_target_val:g}) — cross-check against the underlying sources before relying on it."
+            )
+
+    bull_prob_str = _safe(bull_result, "probability")
+    base_prob_str = _safe(base_result, "probability")
+    bear_prob_str = _safe(bear_result, "probability")
+
+    bull_prob_val = _parse_numeric(bull_prob_str)
+    base_prob_val = _parse_numeric(base_prob_str)
+    bear_prob_val = _parse_numeric(bear_prob_str)
+
+    if None not in (bull_prob_val, base_prob_val, bear_prob_val):
+        total_prob = bull_prob_val + base_prob_val + bear_prob_val
+        if total_prob > 0 and abs(total_prob - 100) > 1:
+            scale = 100 / total_prob
+            bull_prob_str = f"{bull_prob_val * scale:.0f}%"
+            base_prob_str = f"{base_prob_val * scale:.0f}%"
+            bear_prob_str = f"{bear_prob_val * scale:.0f}%"
+            logger.warning(
+                "Scenario probabilities summed to %.0f%%, not 100%% — rescaled to bull %s, base %s, bear %s",
+                total_prob, bull_prob_str, base_prob_str, bear_prob_str,
+            )
+
     # ── Combine into final report ─────────────────────────────────────────────
     logger.info("\n Combining into final scenario report...")
     final_report = ""
@@ -3134,21 +3243,21 @@ def scenario_generate_report(state):
             # Bull
             "bull_target": _safe(bull_result, "price_target"),
             "bull_upside": _safe(bull_result, "upside_downside"),
-            "bull_probability": _safe(bull_result, "probability"),
+            "bull_probability": bull_prob_str,
             "bull_drivers": _fmt_list(_safe(bull_result, "key_drivers", [])),
             "bull_assumptions": _fmt_list(_safe(bull_result, "assumptions", [])),
             "bull_analysis": _safe(bull_result, "analysis"),
             # Base
             "base_target": _safe(base_result, "price_target"),
             "base_upside": _safe(base_result, "upside_downside"),
-            "base_probability": _safe(base_result, "probability"),
+            "base_probability": base_prob_str,
             "base_drivers": _fmt_list(_safe(base_result, "key_drivers", [])),
             "base_assumptions": _fmt_list(_safe(base_result, "assumptions", [])),
             "base_analysis": _safe(base_result, "analysis"),
             # Bear
             "bear_target": _safe(bear_result, "price_target"),
             "bear_upside": _safe(bear_result, "upside_downside"),
-            "bear_probability": _safe(bear_result, "probability"),
+            "bear_probability": bear_prob_str,
             "bear_drivers": _fmt_list(_safe(bear_result, "key_drivers", [])),
             "bear_assumptions": _fmt_list(_safe(bear_result, "assumptions", [])),
             "bear_analysis": _safe(bear_result, "analysis"),
@@ -3169,6 +3278,9 @@ def scenario_generate_report(state):
             f"**Bear Case**: Target {_safe(bear_result, 'price_target')} "
             f"({_safe(bear_result, 'upside_downside')} downside)\n"
         )
+
+    if scenario_warnings:
+        final_report += "\n\n---\n\n" + "\n\n".join(scenario_warnings)
 
     logger.info("\n" + "=" * 80)
     logger.info(" SCENARIO REPORT COMPLETE")

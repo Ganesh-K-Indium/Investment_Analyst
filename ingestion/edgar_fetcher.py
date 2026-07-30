@@ -37,6 +37,33 @@ SEC_REQUEST_RATE_LIMIT = 10  # max 10 requests/sec (SEC guideline) — enforced 
 
 VALID_FORM_TYPES = ("10-K", "10-Q", "8-K")
 
+# Minimum plausible page count per filing type — a sanity floor, not an exact
+# expectation. 10-K/10-Q are always substantial (audited/condensed financial
+# statements + footnotes + MD&A); 8-Ks are genuinely often just 1-3 pages, so
+# they get a much lower floor. Anything under this for its form type almost
+# certainly means a truncated/interrupted render, not a real short filing.
+_MIN_PLAUSIBLE_PAGES = {"10-K": 15, "10-Q": 10, "8-K": 1}
+
+
+def _is_valid_filing_pdf(pdf_path: str, form: Optional[str] = None) -> bool:
+    """
+    Sanity-check a rendered/downloaded filing PDF: does it open cleanly, and
+    does its page count clear a minimum plausible floor for its form type?
+    Used both right after rendering (fail fast) and before trusting an
+    already-on-disk file (catch a truncated file left by a prior interrupted
+    run, which `os.path.exists()` alone can't distinguish from a good one).
+    """
+    if not os.path.exists(pdf_path):
+        return False
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        page_count = len(doc)
+        doc.close()
+    except Exception:
+        return False
+    return page_count >= _MIN_PLAUSIBLE_PAGES.get(form, 1)
+
 
 class _SharedRateLimiter:
     """
@@ -107,7 +134,7 @@ class SecEdgarFetcher:
 
         raise ValueError(f"CIK not found for ticker {ticker}")
 
-    async def convert_url_to_pdf(self, url: str, output_path: str):
+    async def convert_url_to_pdf(self, url: str, output_path: str, form: Optional[str] = None):
         """Render a SEC HTML filing page to PDF.
 
         SEC.gov's WAF flags headless Chromium *navigating directly* to
@@ -137,6 +164,22 @@ class SecEdgarFetcher:
                 await page.pdf(path=output_path, format="A4", print_background=True)
             finally:
                 await browser.close()
+
+        # A render that got interrupted partway (killed process, network drop
+        # mid-fetch of html_content, etc.) can still leave a syntactically
+        # valid, non-empty PDF on disk — just a truncated one (e.g. an 8-page
+        # file for a filing that should be 100+ pages). Every later run then
+        # sees the file already exists and skips re-rendering forever,
+        # silently ingesting (or failing to ingest) garbage. Validate the
+        # output immediately and delete+raise rather than leaving a bad file
+        # behind for a future run to trip over.
+        if not _is_valid_filing_pdf(output_path, form):
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise RuntimeError(
+                f"Rendered PDF for {output_path} looks incomplete/corrupt "
+                f"(failed page-count sanity check for form type {form!r}) — deleted, not left on disk."
+            )
 
     async def list_filings(
         self,
@@ -295,8 +338,14 @@ class SecEdgarFetcher:
         async def _process_one(item: Dict) -> Dict:
             result = {**item, "status": "pending", "error": None, "chunks_added": None}
             try:
-                if not os.path.exists(item["pdf_path"]):
-                    await self.convert_url_to_pdf(item["url"], item["pdf_path"])
+                if not _is_valid_filing_pdf(item["pdf_path"], item["form"]):
+                    if os.path.exists(item["pdf_path"]):
+                        logger.warning(
+                            "Existing PDF at %s failed validity check (likely truncated from an "
+                            "earlier interrupted run) — deleting and re-rendering.", item["pdf_path"]
+                        )
+                        os.remove(item["pdf_path"])
+                    await self.convert_url_to_pdf(item["url"], item["pdf_path"], form=item["form"])
                     result["message"] = "Rendered PDF"
                 else:
                     result["message"] = "PDF already exists locally"

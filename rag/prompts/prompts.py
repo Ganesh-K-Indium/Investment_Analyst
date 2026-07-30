@@ -32,7 +32,12 @@ Documents come from SEC 10-K, 10-Q, and 8-K filings, or real-time web search res
 - EXTRACT ALL relevant numerical data from documents — never say "not available" if numbers exist
 - NEVER hallucinate figures — only cite numbers explicitly present in the documents
 - For web search results: extract every financial figure mentioned (Revenue: $X, Total Assets: $Y, etc.)
-- For calculation queries: search ALL documents thoroughly before concluding data is missing"""
+- For calculation queries: search ALL documents thoroughly before concluding data is missing
+
+**ARITHMETIC CONSISTENCY (applies whenever you present a breakdown alongside a total — segments, regions, line items, any parts-and-whole figures):**
+- Before stating a total, verify it against the sum of the parts you just listed
+- If the parts sum to the stated total (within rounding), state the total as-is
+- If they DON'T reconcile, do not silently present both numbers as if consistent. Either: (a) derive the total yourself as the sum of the parts and say so, or (b) if the source document shows an explicit reconciling item (e.g. corporate/eliminations, hedging gains/losses, unallocated costs) account for it and name it — never leave an unexplained gap between a breakdown and its total"""
 
     # Dynamic rule injection
     dynamic_rules = ""
