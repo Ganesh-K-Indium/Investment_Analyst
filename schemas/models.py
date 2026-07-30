@@ -151,6 +151,26 @@ class SimpleDocumentGrade(BaseModel):
         description="If is_sufficient is False, provide a concise, keyword-rich search query to find the missing data. Do NOT write a conversational summary. If True, leave empty or None."
     )
 
+class GroundingCheck(BaseModel):
+    """
+    Result of verifying the NUMERIC claims in a generated answer against its
+    source documents — a narrow, post-generation fact-check deliberately
+    scoped to figures only (not interpretive/analytical language), so it
+    stays fast and cheap enough to run on every answer that makes a numeric
+    claim.
+    """
+    is_grounded: bool = Field(
+        description="True if every numeric claim in the answer is supported by the provided documents (or is a valid calculation derived from supported figures)."
+    )
+    unsupported_claims: list[str] = Field(
+        default_factory=list,
+        description="Exact text of each numeric claim that is NOT supported by the documents. Empty list if is_grounded is True."
+    )
+    reasoning: str = Field(
+        description="Brief explanation of the verification result."
+    )
+
+
 class GapAnalysisResult(BaseModel):
     """Identifies specific data gaps and generates targeted queries to fill them."""
     

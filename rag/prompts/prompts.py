@@ -6,8 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 def _current_year() -> int:
     return datetime.now().year
-from schemas.models import (UniversalSubQueryAnalysis, SimpleDocumentGrade,
-                                        StructuredFinancialData)
+from schemas.models import UniversalSubQueryAnalysis, SimpleDocumentGrade
 
 
 def get_rag_chain(llm_generate, query_type: str = "general", alpha_pillar: str = None, comparison_span_note: str = None):
@@ -286,41 +285,96 @@ Provide a comprehensive, professional answer. Reference sources naturally withou
     rag_chain = RAG_Prompt | llm_generate | StrOutputParser()
     return rag_chain
 
-def get_question_rewriter_chain(llm):
-    cur_year = _current_year()
-    SYSTEM_QUESTION_REWRITER = f"""You are a financial research specialist that rewrites user questions into optimized queries for retrieving data from SEC 10-K, 10-Q, and 8-K filings stored in a vector database.
+def get_grounding_check_chain(llm):
+    """
+    Post-generation grounding check — verifies that every NUMERIC claim
+    (dollar figures, percentages, share counts, ratios) in a generated
+    answer is actually supported by the source documents it was generated
+    from. Deliberately narrow in scope (numeric claims only, not
+    stylistic/interpretive language) so it stays fast and cheap enough to
+    run on every answer that makes a numeric claim, unlike a full
+    answer-vs-documents hallucination grader.
+    """
+    from schemas.models import GroundingCheck
+    structured_llm = llm.with_structured_output(GroundingCheck)
 
-**Your Goal**: Rewrite the question to maximize retrieval accuracy from financial documents.
+    SYSTEM_PROMPT = """You are a meticulous fact-checker verifying an AI-generated financial answer against its source documents.
 
-**Rewriting Rules**:
-1. **Preserve company names and fiscal years exactly** — do not drop or change them
-2. **Expand financial abbreviations**: ROE → "return on equity", D/E → "debt-to-equity ratio", FCF → "free cash flow", EBITDA → "earnings before interest taxes depreciation amortization", SG&A → "selling general and administrative expenses", PP&E → "property plant and equipment", COGS → "cost of goods sold", EPS → "earnings per share diluted"
-3. **Add document section context**: for balance sheet items add "balance sheet", for income items add "income statement statement of operations", for cash flow add "cash flow statement", for notes data add "notes to financial statements"
-4. **Expand vague temporal references**: "recently" or "last year" → "{cur_year} or {cur_year - 1}", "latest" → "most recent fiscal year {cur_year}"
-5. **Add financial synonyms for hard-to-find terms**: revenue → "total revenues net revenues net sales", profit → "net income net earnings", assets → "total assets consolidated balance sheet"
-6. **For ratio/metric queries**: include the formula components (e.g., "current ratio current assets current liabilities balance sheet")
-7. **For segment queries**: add "segment information reportable segments operating segments notes to financial statements"
-8. **For geographic queries**: add "geographic information revenue by region domestic international"
-9. **Preserve and sharpen filing-type intent**: if the question implies a specific filing type, make that explicit in the rewrite rather than leaving it implicit — "latest quarter" / "this quarter" / "Q1/Q2/Q3/Q4" → keep "quarterly" in the rewrite (implies 10-Q); "recent announcement" / "departure" / "acquisition" / "executive change" → keep that event language (implies 8-K); "full-year" / "annual" / "fiscal year comparison" → keep "annual" (implies 10-K). Do not strip these signals out during expansion — they help route retrieval to the right filing type.
+Your ONLY job: check whether every NUMERIC claim in the answer (dollar figures, percentages, share counts, ratios, dates-as-numbers) is actually supported by the provided documents.
 
-**Examples**:
-- "What's Tesla's ROE?" → "Tesla return on equity net income shareholders equity stockholders equity balance sheet income statement"
-- "Show me Amazon's liquidity" → "Amazon current ratio quick ratio current assets current liabilities cash equivalents balance sheet liquidity"
-- "Meta revenue last year" → "Meta total revenues net revenues income statement {cur_year - 1}"
-- "Nvidia R&D spend" → "Nvidia research and development expenses R&D costs income statement operating expenses"
-- "Google's segments" → "Google Alphabet segment information reportable segments operating segments revenue by segment notes to financial statements"
+**MANDATORY procedure for every number in the answer, before you decide to flag it:**
+1. Convert the answer's number to raw units (e.g. "$402.8 billion" -> 402,800,000,000; "$37.8 billion" -> 37,800,000,000; "12%" stays 12%).
+2. Scan the ENTIRE documents for any figure that equals that raw value within ~0.5% (rounding tolerance) — regardless of whether the documents express it in millions, billions, or raw dollars, and regardless of thousands-separators or decimal precision.
+3. Only if NO matching value exists anywhere in the documents after this conversion check, AND the number isn't a simple calculation from two other cited figures (e.g. a % change derived from two dollar amounts also in the answer), do you flag it.
 
-Output only the improved question — no explanation."""
+This conversion step is not optional — the single most common false alarm is comparing "$37.8 billion" against a document that states "$37,791 million" and wrongly calling it unsupported. 37,791 million = $37.791 billion ≈ $37.8 billion. That is a MATCH, not a discrepancy. Do the arithmetic every time before flagging.
 
-    re_write_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_QUESTION_REWRITER),
-            ("human", "Original question: \n\n {{question}} \n\n Rewritten query:"),
-        ]
-    )
+Do NOT flag:
+- Interpretive/analytical language ("strong growth", "concerning trend", "healthy margin") — these are opinions, not facts to verify
+- A number that is clearly derived/calculated from other figures already cited in the answer
+- Rounding differences under ~0.5% once converted to the same unit
+- Unit conversions of the same figure (million vs. billion vs. raw-dollar phrasing) — these are NOT discrepancies
 
-    question_rewriter = re_write_prompt | llm | StrOutputParser()
-    return question_rewriter
+DO flag:
+- A specific dollar figure, percentage, or count that, after unit conversion, matches NO value anywhere in the documents and isn't a calculation from numbers that do
+- A figure attributed to the wrong period, company, or metric than what the documents actually show for that period/company/metric
+
+**When in doubt, do NOT flag** — a missed genuine error is far less damaging than incorrectly rewriting a correct figure, which is what happens downstream if you flag something that was actually right.
+
+Be precise: quote the EXACT claim text you're flagging (a short phrase containing the number), not a paraphrase or summary."""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Source documents:
+{documents}
+
+Generated answer to verify:
+{generation}
+
+Check every numeric claim in the answer against the documents above.""")
+    ])
+
+    return prompt | structured_llm
+
+
+def get_grounding_correction_chain(llm):
+    """
+    Rewrites a generated answer to fix specific unsupported numeric claims
+    flagged by get_grounding_check_chain, using ONLY the source documents.
+    A targeted correction, not a full regeneration — everything else in the
+    answer is left intact.
+    """
+    SYSTEM_PROMPT = """You are correcting specific factual errors in a financial answer. You must be extremely conservative — an incorrect "correction" that changes a number that was actually right is worse than leaving the original flagged claim untouched.
+
+You will be given the original answer, the source documents, and a list of specific claims that were flagged as unsupported by the documents.
+
+**For EACH flagged claim, follow this exact procedure:**
+1. Search the documents for a figure representing the same metric/period/company as the flagged claim, converting units as needed (e.g. a flagged "$37.8 billion" claim should be checked against document figures like "$37,791 million" — these are the same value).
+2. If you find a matching or equivalent figure in the documents: keep the answer's original number and phrasing EXACTLY as it was — the flag was a false alarm, this claim is fine, do not touch it.
+3. Only if you find NO matching figure anywhere in the documents after checking unit conversions: replace that specific claim with "not disclosed in the provided filing(s)" — do not guess, estimate, or substitute a different number of your own.
+
+**Absolute rules:**
+- NEVER invent, recompute, or substitute a number that does not appear verbatim (after unit conversion) in the source documents
+- Leave every unflagged part of the answer completely UNCHANGED — same structure, same wording, same formatting
+- Do not introduce any new numeric claim that wasn't already in the original answer or the documents
+- If you are not certain a flagged claim is genuinely wrong, leave it as-is rather than guessing"""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Source documents:
+{documents}
+
+Original answer:
+{generation}
+
+Claims flagged as unsupported:
+{unsupported_claims}
+
+Rewrite the answer, correcting only the flagged claims.""")
+    ])
+
+    return prompt | llm | StrOutputParser()
+
 
 def get_universal_sub_query_analyzer(llm):
     """
@@ -804,122 +858,6 @@ Does the document content contain sufficient information to answer the question?
     ])
     
     return grader_prompt | structured_llm
-
-def get_financial_data_extractor_chain(llm):
-    """
-    STRUCTURED FINANCIAL DATA EXTRACTION: Extract financial metrics into structured format.
-    This replaces lossy truncation with intelligent extraction.
-    """
-    structured_llm = llm.with_structured_output(StructuredFinancialData)
-    
-    SYSTEM_PROMPT = """You are a FINANCIAL DATA EXTRACTION SPECIALIST. Extract financial metrics from documents into structured format.
-
-**YOUR MISSION**: Parse financial documents and extract ALL numerical financial data into standardized fields.
-
-**EXTRACTION RULES**:
-
-1. **PRESERVE EXACT VALUES**: Do not round or change numbers
-   - Document: Revenue is $574,213 million
-   - Extract: $574,213 million (keep units!)
-
-2. **HANDLE DIFFERENT UNITS**: Keep the unit as stated
-   - $574B, $574 billion, $574,000 million - keep original format
-
-3. **NULL FOR MISSING**: If a metric isn't mentioned, set to None (not zero!)
-
-4. **OTHER_METRICS DICT**: For any financial data not in standard fields
-   - Example: R&D expenses: $42B, Operating margin: 28%, Debt-to-equity: 0.45
-
-5. **YEAR/PERIOD**: Extract fiscal year or period
-   - FY 2023, December 31 2023, 2023 - all become 2023
-
-**WHAT TO EXTRACT**:
-
- **Income Statement**:
-- revenue (also called: total revenue, net sales)
-- cost_of_revenue (also called: COGS, cost of sales)
-- gross_profit
-- operating_expenses (also called: SG&A, operating costs)
-- operating_income (also called: operating profit, EBIT)
-- net_income (also called: net profit, earnings)
-
- **Balance Sheet**:
-- total_assets
-- current_assets
-- total_liabilities
-- current_liabilities
-- shareholders_equity (also called: stockholders equity, total equity)
-
- **Cash Flow**:
-- operating_cash_flow (also called: cash from operations)
-- free_cash_flow
-
- **Key Metrics**:
-- earnings_per_share (also called: EPS, diluted EPS)
-
- **Other** (use other_metrics dict):
-- Any ratios, margins, growth rates, segment data, etc.
-
-**EXAMPLES**:
-
-Example 1 - Full Income Statement:
-Document: Amazon reported revenue of $574.8B for fiscal 2023, with cost of revenue of $373.5B, resulting in gross profit of $201.3B. Operating expenses were $142.1B, leading to operating income of $59.2B. Net income was $30.4B.
-
-Expected fields:
-- company: Amazon
-- year: 2023
-- revenue: $574.8B
-- cost_of_revenue: $373.5B
-- gross_profit: $201.3B
-- operating_expenses: $142.1B
-- operating_income: $59.2B
-- net_income: $30.4B
-- All other fields: null
-
-Example 2 - Balance Sheet:
-Document: As of December 31, 2023, Meta's total assets were $229.4B, including current assets of $65.4B. Total liabilities stood at $78.3B, with current liabilities of $32.1B. Shareholders equity was $151.1B.
-
-Expected fields:
-- company: Meta
-- year: 2023
-- total_assets: $229.4B
-- current_assets: $65.4B
-- total_liabilities: $78.3B
-- current_liabilities: $32.1B
-- shareholders_equity: $151.1B
-- Income statement fields: null
-
-Example 3 - Mixed Data with Ratios:
-Document: Tesla FY2023: Revenue $96.8B, net income $15.0B, total assets $106.6B, shareholders equity $62.6B. The company achieved an operating margin of 16.8% and ROE of 24.0%.
-
-Expected fields:
-- company: Tesla
-- year: 2023
-- revenue: $96.8B
-- net_income: $15.0B
-- total_assets: $106.6B
-- shareholders_equity: $62.6B
-- other_metrics dict: operating_margin=16.8%, ROE=24.0%
-
-**KEY PRINCIPLES**:
-- Extract EVERY financial number you find
-- Keep original units and formatting
-- Use None for missing data (don't guess or calculate)
-- Put non-standard metrics in other_metrics dict
-- Be thorough - this structured data replaces truncated documents"""
-
-    extractor_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", """Extract all financial data from this document into structured format:
-
-Document Content:
-{document_content}
-
-Extract all financial metrics you can find.""")
-    ])
-    
-    return extractor_prompt | structured_llm
-
 
 # ============================================================================
 # ALPHA FRAMEWORK CHAINS - For Stock Buy Timing Analysis
