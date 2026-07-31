@@ -31,7 +31,7 @@ router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
 # ========== Integration Management Endpoints ==========
 
-@router.post("/", response_model=IntegrationResponse)
+@router.post("", response_model=IntegrationResponse)
 async def create_integration(
     payload: IntegrationCreate,
     db: AsyncSession = Depends(get_db_session),
