@@ -1789,8 +1789,8 @@ def verify_grounding(state):
     grounding_llm = ChatOpenAI(model="gpt-4o", temperature=0, timeout=20, max_retries=1)
 
     doc_text = "\n\n".join(
-        (doc.page_content[:1500] if hasattr(doc, "page_content") else str(doc)[:1500])
-        for doc in documents[:15]
+        (doc.page_content[:2000] if hasattr(doc, "page_content") else str(doc)[:2000])
+        for doc in documents[:25]
     )
 
     try:
