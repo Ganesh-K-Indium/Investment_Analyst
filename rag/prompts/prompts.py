@@ -470,6 +470,14 @@ For **CASH FLOW** questions:
 For **R&D/OPERATING EXPENSES** questions:
 - Use: "research and development", "R&D expenses", "R&D spending", "operating expenses", "SG&A", "selling general administrative"
 
+**AUTOMATIC SUB-QUERY REQUIREMENTS (Always include these):**
+
+1. **REVENUE QUERIES**: When the user asks about REVENUE, EARNINGS, SALES, or INCOME (even without explicitly mentioning segments/geographic):
+   - ALWAYS include AT LEAST ONE sub-query for geographic revenue breakdown (e.g. "Google revenue by geography Q1 2026" or "Google revenue by region United States EMEA APAC")
+   - ALWAYS include AT LEAST ONE sub-query for segment revenue breakdown (e.g. "Google revenue by segment business units Q1 2026" or "Google segment revenue operating segments")
+   - These provide critical context: revenue without geographic/segment breakdown is incomplete analysis
+   - Example: User asks "Google Q1 2026 revenue" → Generate: ["Google Q1 2026 total revenue", "Google Q1 2026 revenue by geography region breakdown", "Google Q1 2026 revenue by segment business segments"]
+
 **WHEN TO USE SUB-QUERIES (needs_sub_queries=true):**
 
 1. **Financial Calculations** - Need specific financial statement line items:
