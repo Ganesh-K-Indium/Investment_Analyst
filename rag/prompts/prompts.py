@@ -244,6 +244,7 @@ apples-to-apples comparison."""
 - For comparison, segment, and geographic queries: ALWAYS use markdown tabular format
 - For all other queries: use narrative with structured data points
 - **NEVER say "data not available"** if ANY relevant figures exist in the documents
+- For 10-Q quarterly queries, if standalone 3-month cash flow or CapEx is requested, present the reported 6-Month (YTD) cumulative cash flow figure clearly labeled as 6-Month YTD, since SEC 10-Q cash flow statements report cumulative YTD figures.
 - If the retrieved documents span different filing types (10-K vs. 10-Q vs. 8-K), different fiscal
   years, or a company whose fiscal year doesn't align with the calendar year, state this explicitly
   before presenting any comparison — never silently blend incompatible periods or filing types as
@@ -344,20 +345,19 @@ def get_grounding_correction_chain(llm):
     A targeted correction, not a full regeneration — everything else in the
     answer is left intact.
     """
-    SYSTEM_PROMPT = """You are correcting specific factual errors in a financial answer. You must be extremely conservative — an incorrect "correction" that changes a number that was actually right is worse than leaving the original flagged claim untouched.
+    SYSTEM_PROMPT = """You are correcting specific factual errors in a financial answer using ONLY the provided source documents.
 
 You will be given the original answer, the source documents, and a list of specific claims that were flagged as unsupported by the documents.
 
-**For EACH flagged claim, follow this exact procedure:**
-1. Search the documents for a figure representing the same metric/period/company as the flagged claim, converting units as needed (e.g. a flagged "$37.8 billion" claim should be checked against document figures like "$37,791 million" — these are the same value).
-2. If you find a matching or equivalent figure in the documents: keep the answer's original number and phrasing EXACTLY as it was — the flag was a false alarm, this claim is fine, do not touch it.
-3. Only if you find NO matching figure anywhere in the documents after checking unit conversions: replace that specific claim with "not disclosed in the provided filing(s)" — do not guess, estimate, or substitute a different number of your own.
+**For EACH flagged claim, follow this procedure:**
+1. Unit Conversion Check: Convert units (e.g. "$37.8 billion" -> "$37,791 million"). If an equivalent figure exists in the documents, KEEP the claim as-is.
+2. Reported Figure Substitution: If a flagged claim states a figure for a period/metric that is not explicitly itemized as a standalone number (e.g., standalone 3-month quarterly cash flow in a 10-Q report), but the source documents contain the actual reported cumulative/YTD figure for that metric (e.g. 6-Month YTD operating cash flow of $84.9 billion), REWRITE the claim using the verbatim reported figure clearly specifying its period (e.g., "Operating cash flow for the six-month period ended June 30, 2026 was $84.9 billion").
+3. Truly Missing Data: Only if NO matching or related figure exists anywhere in the source documents, replace the flagged claim with "not disclosed in the provided filing(s)".
 
 **Absolute rules:**
-- NEVER invent, recompute, or substitute a number that does not appear verbatim (after unit conversion) in the source documents
-- Leave every unflagged part of the answer completely UNCHANGED — same structure, same wording, same formatting
-- Do not introduce any new numeric claim that wasn't already in the original answer or the documents
-- If you are not certain a flagged claim is genuinely wrong, leave it as-is rather than guessing"""
+- All numbers used in corrections MUST be present verbatim (after unit conversion) in the source documents.
+- Leave every unflagged part of the answer completely UNCHANGED — preserve structure and unflagged wording.
+- Do not invent, guess, or calculate numbers not stated in the source documents."""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
@@ -863,11 +863,15 @@ def get_financial_analyst_grader_chain(llm):
 1. Only evaluate data that the question EXPLICITLY asks for.
 2. If the question asks for a CALCULATED metric (like Operating Margin, ROE, Current Ratio, etc.) and ALL the raw components for the formula exist in the documents, it is SUFFICIENT. You do not need the exact ratio stated in the text if you can calculate it.
 3. If the documents contain enough information to answer the question, set `is_sufficient` to True, and `missing_data_summary` to empty.
-4. If critical raw component inputs are missing, set `is_sufficient` to False. For `missing_data_summary`, you MUST output a CONCISE, KEYWORD-RICH SEARCH QUERY that can be directly used in a search engine to find the missing data. Do NOT write a conversational sentence (e.g., do NOT say "The documents lack..."). ONLY output the exact search query (e.g., "Amazon competitive landscape market share e-commerce 2025")."""
+4. If critical raw component inputs are missing, set `is_sufficient` to False. For `missing_data_summary`, you MUST output a CONCISE, KEYWORD-RICH SEARCH QUERY that can be directly used in a search engine to find the missing data. Do NOT write a conversational sentence (e.g., do NOT say "The documents lack..."). ONLY output the exact search query (e.g., "Amazon competitive landscape market share e-commerce 2025").
+5. **Fiscal Period Terminology**: Cross-reference document table headers against the provided "Company Fiscal Calendar Context" for each target company. If document table headers match the target company's fiscal 3-month period (e.g., "Three Months Ended June 30" for a calendar-year filer), it IS the requested quarterly data. Do NOT mark quarterly data as missing if the corresponding 3-month SEC filing tables exist in the documents."""
 
     grader_prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
         ("human", """Question: {question}
+
+Company Fiscal Calendar Context:
+{company_fiscal_context}
 
 Sub-Queries Used for Retrieval:
 {sub_queries}

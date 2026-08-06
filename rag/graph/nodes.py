@@ -1299,10 +1299,23 @@ def grade_documents(state):
             content = str(doc)
 
         metadata_str = ""
-        if hasattr(doc, 'metadata'):
-            company = doc.metadata.get("company", "Unknown")
-            source = doc.metadata.get("source", "Unknown")
-            metadata_str = f" [Company: {company}, Source: {source}]"
+        if hasattr(doc, 'metadata') and doc.metadata:
+            meta = doc.metadata
+            company = meta.get("company", "Unknown")
+            filing_type = meta.get("filing_type", "")
+            year = meta.get("year", "")
+            fq = meta.get("fiscal_quarter", "")
+            period_end = meta.get("period_end_date", "")
+            source_file = meta.get("source_file", meta.get("source", "Unknown"))
+            
+            meta_parts = [f"Company: {company}"]
+            if filing_type: meta_parts.append(f"Filing: {filing_type}")
+            if year: meta_parts.append(f"Year: {year}")
+            if fq: meta_parts.append(f"Fiscal Quarter: Q{fq}")
+            if period_end: meta_parts.append(f"Period End: {period_end}")
+            if source_file: meta_parts.append(f"File: {source_file}")
+            
+            metadata_str = f" [{ ' | '.join(meta_parts) }]"
             
         preview = f"--- Document {i} ---{metadata_str}\n{content}\n"
         
@@ -1321,10 +1334,32 @@ def grade_documents(state):
 
     sub_queries = "\n".join([f"- {sq}" for sq in sub_query_analysis.get("sub_queries", [])]) if sub_query_analysis.get("sub_queries") else "None"
 
+    # Build company fiscal context using company_mapping module
+    from app.utils.company_mapping import (
+        get_ticker as _get_ticker_fn,
+        get_company_name as _map_ticker_fn,
+        get_fiscal_year_end_month as _get_fye_fn,
+        get_fiscal_quarter_calendar_span as _get_fq_span_fn
+    )
+
+    fiscal_info_lines = []
+    if companies_detected:
+        for comp in companies_detected:
+            tkr = _get_ticker_fn(comp) or comp
+            cname = _map_ticker_fn(tkr).capitalize()
+            fye_m = _get_fye_fn(tkr)
+            q_spans = [f"Q{q}: {_get_fq_span_fn(tkr, q)}" for q in (1, 2, 3, 4)]
+            fiscal_info_lines.append(f"- {cname} ({tkr.upper()}): Fiscal Year ends in Month {fye_m}. Fiscal Quarters: {', '.join(q_spans)}.")
+    else:
+        fiscal_info_lines.append("Calendar-year filers (Fiscal Year ends in December). Quarters: Q1: January-March, Q2: April-June, Q3: July-September, Q4: October-December.")
+
+    company_fiscal_context = "\n".join(fiscal_info_lines)
+
     try:
         # Perform single LLM call
         grade = analyst_grader.invoke({
             "question": question,
+            "company_fiscal_context": company_fiscal_context,
             "sub_queries": sub_queries,
             "doc_content": doc_preview_text
         })
