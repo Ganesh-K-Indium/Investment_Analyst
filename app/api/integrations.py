@@ -430,7 +430,10 @@ async def import_files(
             db=db,
             integration_id=payload.integration_id,
             file_paths=payload.file_paths,
-            ticker=ticker
+            ticker=ticker,
+            filing_type=payload.filing_type,
+            period_end_date=payload.period_end_date,
+            year=payload.year,
         )
 
         summary = FileImportService.get_import_summary(results)

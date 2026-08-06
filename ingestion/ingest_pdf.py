@@ -65,7 +65,7 @@ def format_result(result: dict) -> str:
     return "\n".join(lines)
 
 
-async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None, period_end_date: str = None) -> dict:
+async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None, period_end_date: str = None, year: int = None) -> dict:
     """
     Ingest a PDF file and return the result.
 
@@ -79,6 +79,7 @@ async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None,
             for a 10-K, fiscal quarter end for a 10-Q, event date for an 8-K
             (optional; pass this when the caller has an authoritative value, e.g.
             SEC EDGAR's reportDate — otherwise detected from cover-page text)
+        year: Fiscal/Report year (optional; explicit year override for metadata tagging)
 
     Returns:
         dict: Processing result
@@ -111,8 +112,10 @@ async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None,
         logger.info("Ticker: %s", ticker)
     if filing_type:
         logger.info("Filing type: %s", filing_type)
+    if year:
+        logger.info("Year: %s", year)
 
-    result = await process_pdf_and_get_result(pdf_path, ticker=ticker, filing_type=filing_type, period_end_date=period_end_date)
+    result = await process_pdf_and_get_result(pdf_path, ticker=ticker, filing_type=filing_type, period_end_date=period_end_date, year=year)
     return result
 
 
@@ -132,11 +135,17 @@ async def main():
         default=None,
         help="ISO date (YYYY-MM-DD) this filing covers (optional; detected from cover page if omitted)",
     )
+    parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Fiscal/Report year (optional; derived from period_end_date or filename if omitted)",
+    )
 
     args = parser.parse_args()
 
     # Process the PDF
-    result = await ingest_pdf(args.pdf_path, args.ticker, filing_type=args.filing_type, period_end_date=args.period_end_date)
+    result = await ingest_pdf(args.pdf_path, args.ticker, filing_type=args.filing_type, period_end_date=args.period_end_date, year=args.year)
 
     # Display formatted result
     logger.info(format_result(result))

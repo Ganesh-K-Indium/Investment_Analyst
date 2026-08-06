@@ -29,7 +29,8 @@ class FileImportService:
         file_paths: List[str],
         ticker: str,
         filing_type: str = None,
-        period_end_date: str = None
+        period_end_date: str = None,
+        year: int = None
     ) -> List[Dict]:
         """
         Import files from an integration and ingest them into the vector database,
@@ -49,6 +50,7 @@ class FileImportService:
             period_end_date: ISO date (YYYY-MM-DD) this filing covers (optional; applies
                 to ALL files in this batch if passed — leave unset for a mixed batch and
                 let cover-page detection resolve each file individually)
+            year: Fiscal/Report year (optional; explicit year override for metadata tagging)
 
         Returns:
             List[Dict]: List of import results for each file, in the same order as file_paths
@@ -76,6 +78,7 @@ class FileImportService:
                 "chunks_added": None,
                 "filing_type": None,
                 "period_end_date": None,
+                "year": None,
                 "error": None
             }
 
@@ -98,7 +101,13 @@ class FileImportService:
                     try:
                         from ingestion.ingest_pdf import ingest_pdf
 
-                        ingest_result = await ingest_pdf(local_path, ticker=ticker, filing_type=filing_type, period_end_date=period_end_date)
+                        ingest_result = await ingest_pdf(
+                            local_path,
+                            ticker=ticker,
+                            filing_type=filing_type,
+                            period_end_date=period_end_date,
+                            year=year
+                        )
 
                         if ingest_result.get("success"):
                             result["status"] = "completed"
@@ -107,10 +116,11 @@ class FileImportService:
                             result["ticker"] = ticker
                             result["filing_type"] = ingest_result.get("filing_type")
                             result["period_end_date"] = ingest_result.get("period_end_date")
+                            result["year"] = ingest_result.get("year")
                             result["message"] = (
                                 f"Successfully ingested to ticker_{ticker.lower()} collection as "
-                                f"{result['filing_type']} (period end: {result['period_end_date'] or 'unknown'}). "
-                                f"Added {result['chunks_added']} text chunks"
+                                f"{result['filing_type']} (period end: {result['period_end_date'] or 'unknown'}, "
+                                f"year: {result['year'] or 'unknown'}). Added {result['chunks_added']} text chunks"
                             )
                         else:
                             result["status"] = "failed"

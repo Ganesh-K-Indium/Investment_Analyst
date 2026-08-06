@@ -508,7 +508,7 @@ async def find_new_image_hashes(db_loader, image_hashes: dict) -> dict:
 
 
 async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None,
-                                      period_end_date: str = None) -> dict:
+                                      period_end_date: str = None, year: int = None) -> dict:
     """
     Process a PDF file and return a structured result.
 
@@ -523,6 +523,7 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
             (fiscal year end for a 10-K, fiscal quarter end for a 10-Q, event date for
             an 8-K) — optional; pass this when the caller has an authoritative value
             (e.g. SEC EDGAR's reportDate). Otherwise detected from cover-page text.
+        year: Fiscal/Report year (optional; explicit year override for metadata tagging).
 
     Returns:
         dict: Processing result with status and details
@@ -533,6 +534,7 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
         "ticker": ticker,
         "filing_type": filing_type,
         "period_end_date": period_end_date,
+        "year": year,
         "fiscal_quarter": None,
         "text_processed": False,
         "text_already_existed": False,
@@ -546,7 +548,7 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
 
     try:
         # Collect all progress messages
-        async for message in process_pdf_and_stream(uploaded_pdf_path, ticker, filing_type, period_end_date):
+        async for message in process_pdf_and_stream(uploaded_pdf_path, ticker, filing_type, period_end_date, year):
             result["messages"].append(message)
 
             # Parse key information from messages
@@ -572,6 +574,10 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
                 m = re.search(r"Resolved period_end_date:\s*'?([\d-]+)'?", message)
                 if m:
                     result["period_end_date"] = m.group(1)
+            elif message.startswith("Resolved year:"):
+                m = re.search(r"Resolved year:\s*(\d+)", message)
+                if m:
+                    result["year"] = int(m.group(1))
             elif "Derived fiscal_quarter" in message:
                 m = re.search(r"Derived fiscal_quarter Q(\d)", message)
                 if m:
@@ -592,7 +598,7 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
     return result
 
 async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, filing_type: str = None,
-                                  period_end_date: str = None):
+                                  period_end_date: str = None, year: int = None):
     """
     Process a PDF file and stream progress updates.
 
@@ -605,6 +611,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
         period_end_date: ISO date (YYYY-MM-DD) this filing covers (optional, explicit
             override). Resolution order: this explicit value > cover-page text. Left
             as None (never guessed) if neither resolves.
+        year: Fiscal/Report year (optional, explicit override).
     """
     if not os.path.exists(uploaded_pdf_path):
         yield f"Error: File does not exist: {uploaded_pdf_path}"
@@ -682,21 +689,16 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                 yield f"Derived fiscal_quarter Q{fiscal_quarter} from period_end_date '{period_end_date}' and {ticker}'s fiscal calendar"
 
         # Resolve the "year" tag used for retrieval filtering. MUST prefer
-        # period_end_date's year over the filename-derived year: EDGAR
-        # filenames embed the FILING date, not the period the document
-        # covers, and a 10-K is filed 1-2 months into the NEXT calendar
-        # year — e.g. a 10-K covering fiscal year 2025 (period_end_date
-        # 2025-12-31) is typically filed in 2026, so its filename contains
-        # "2026". Tagging it year=2026 would make it invisible to any
-        # query for "2025" data, which is how a user naturally refers to
-        # this filing. Falls back to the filename heuristic only when
-        # period_end_date wasn't resolved (e.g. a non-standard document
-        # whose cover page didn't match).
-        if period_end_date:
+        # explicit year > period_end_date's year > filename-derived year.
+        if year:
+            resolved_year = int(year)
+            yield f"Resolved year: {resolved_year} (from explicit parameter)"
+        elif period_end_date:
             resolved_year = int(period_end_date[:4])
+            yield f"Resolved year: {resolved_year} (from period_end_date)"
         else:
             resolved_year = extract_year_from_filename(source_file_name)
-        yield f"Resolved year: {resolved_year}" + (" (from period_end_date)" if period_end_date else " (from filename, no period_end_date available)")
+            yield f"Resolved year: {resolved_year} (from filename, no period_end_date available)"
 
         # Determine collection name
         if ticker:
