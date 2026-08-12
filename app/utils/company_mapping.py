@@ -86,7 +86,7 @@ TICKER_TO_COMPANY = {
     'gm': 'general motors',
     'f': 'ford',
     'gme': 'gamestop',
-    'tslaq': 'tesla',
+    'tsla': 'tesla',
     
     # Industrial
     'ba': 'boeing',

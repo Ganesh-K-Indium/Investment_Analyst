@@ -137,6 +137,8 @@ class GoogleDriveConnector(BaseConnector):
         try:
             service = self._get_service()
 
+            if path == '/':
+                path = None
             folder_id = path or self.folder_id or 'root'
             name_filter = f" and name contains '{search_query}'" if search_query else ""
 

@@ -2,7 +2,10 @@
 Integration management and file import endpoints
 """
 import logging
+import json
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 
@@ -11,6 +14,7 @@ from app.services.integration import IntegrationService
 from app.services.connectors.base import BaseConnector
 from app.services.file_import import FileImportService
 from app.services.portfolio import PortfolioService
+from app.utils.log_capture import sse_log_context
 from app.database.models import User
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from schemas.integrations import (
@@ -426,25 +430,56 @@ async def import_files(
         if not ticker:
             raise HTTPException(status_code=400, detail="Ticker symbol is required")
 
-        results = await FileImportService.import_files(
-            db=db,
-            integration_id=payload.integration_id,
-            file_paths=payload.file_paths,
-            ticker=ticker,
-            filing_type=payload.filing_type,
-            period_end_date=payload.period_end_date,
-            year=payload.year,
-        )
+        async def event_generator():
+            log_queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            token = sse_log_context.set((loop, log_queue))
+            main_queue = asyncio.Queue()
 
-        summary = FileImportService.get_import_summary(results)
+            async def run_import():
+                try:
+                    async for event in FileImportService.import_files_stream(
+                        db=db,
+                        integration_id=payload.integration_id,
+                        file_paths=payload.file_paths,
+                        ticker=ticker,
+                        filing_type=payload.filing_type,
+                        period_end_date=payload.period_end_date,
+                        year=payload.year,
+                    ):
+                        await main_queue.put(event)
+                except ValueError as e:
+                    await main_queue.put({"event": "error", "data": {"detail": str(e)}})
+                except Exception as e:
+                    await main_queue.put({"event": "error", "data": {"detail": f"Failed to import files: {str(e)}"}})
+                finally:
+                    await main_queue.put(None)
 
-        return FileImportResponse(
-            integration_id=payload.integration_id,
-            total_files=summary["total_files"],
-            successful=summary["successful"],
-            failed=summary["failed"],
-            file_results=summary["file_results"]
-        )
+            async def run_log_drainer():
+                try:
+                    while True:
+                        msg = await log_queue.get()
+                        if msg is None:
+                            break
+                        await main_queue.put({"event": "log", "data": {"message": msg}})
+                except asyncio.CancelledError:
+                    pass
+
+            import_task = asyncio.create_task(run_import())
+            drainer_task = asyncio.create_task(run_log_drainer())
+
+            try:
+                while True:
+                    event = await main_queue.get()
+                    if event is None:
+                        break
+                    yield f"data: {json.dumps(event)}\n\n"
+            finally:
+                import_task.cancel()
+                drainer_task.cancel()
+                sse_log_context.reset(token)
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

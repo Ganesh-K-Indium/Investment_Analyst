@@ -23,7 +23,7 @@ class FileImportService:
     """Service for importing files from data source integrations"""
 
     @staticmethod
-    async def import_files(
+    async def import_files_stream(
         db: AsyncSession,
         integration_id: int,
         file_paths: List[str],
@@ -31,7 +31,7 @@ class FileImportService:
         filing_type: str = None,
         period_end_date: str = None,
         year: int = None
-    ) -> List[Dict]:
+    ):
         """
         Import files from an integration and ingest them into the vector database,
         concurrently (bounded), so one slow/large file doesn't serialize the rest.
@@ -53,7 +53,7 @@ class FileImportService:
             year: Fiscal/Report year (optional; explicit year override for metadata tagging)
 
         Returns:
-            List[Dict]: List of import results for each file, in the same order as file_paths
+            Async generator yielding JSON-serializable dicts with 'event' and 'data' keys.
         """
         # Get integration
         integration = await IntegrationService.get_integration(db, integration_id)
@@ -67,9 +67,12 @@ class FileImportService:
             url=integration.url
         )
 
+        queue = asyncio.Queue()
         semaphore = asyncio.Semaphore(_MAX_CONCURRENT_INGESTS)
 
-        async def _import_one(file_path: str) -> Dict:
+        yield {"event": "start", "data": {"total": len(file_paths)}}
+
+        async def _import_one(file_path: str):
             result = {
                 "file_path": file_path,
                 "status": "pending",
@@ -85,17 +88,20 @@ class FileImportService:
             async with semaphore:
                 try:
                     result["status"] = "downloading"
+                    await queue.put({"event": "progress", "data": {"file": file_path, "status": "downloading"}})
 
                     # Connector I/O is sync — offload to a thread so it doesn't block the event loop.
                     local_path = await asyncio.to_thread(connector.download_file, file_path)
                     result["message"] = f"Downloaded to {local_path}"
 
                     result["status"] = "processing"
+                    await queue.put({"event": "progress", "data": {"file": file_path, "status": "processing", "message": result["message"]}})
 
                     if not local_path.lower().endswith('.pdf'):
                         result["status"] = "failed"
                         result["error"] = "Only PDF files are currently supported"
                         result["message"] = "File type not supported"
+                        await queue.put({"event": "file_completed", "data": result})
                         return result
 
                     try:
@@ -142,15 +148,33 @@ class FileImportService:
                     result["status"] = "failed"
                     result["error"] = str(e)
                     result["message"] = f"Failed to import file: {str(e)}"
-
+            
+            await queue.put({"event": "file_completed", "data": result})
             return result
 
-        results = await asyncio.gather(*(_import_one(path) for path in file_paths))
+        # Run workers in background
+        async def _run_all():
+            results = await asyncio.gather(*(_import_one(path) for path in file_paths))
+            # Update integration last_sync timestamp
+            try:
+                await IntegrationService.update_last_sync(db, integration_id)
+            except Exception as e:
+                print(f"Failed to update last_sync: {e}")
+            await queue.put({"event": "completed", "data": {"results": results}})
+            await queue.put(None) # Sentinel
 
-        # Update integration last_sync timestamp
-        await IntegrationService.update_last_sync(db, integration_id)
+        task = asyncio.create_task(_run_all())
 
-        return list(results)
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield event
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+
 
     @staticmethod
     def get_import_summary(results: List[Dict]) -> Dict:

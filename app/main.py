@@ -12,12 +12,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
+from app.utils.log_capture import SSELogHandler
+
 # ── Logging setup ────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s",
     datefmt="%H:%M:%S",
 )
+root_logger = logging.getLogger()
+root_logger.addHandler(SSELogHandler())
 logger = logging.getLogger("api")
 
 
