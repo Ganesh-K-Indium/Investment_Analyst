@@ -44,6 +44,37 @@ def _maybe_save_debug_response(response_data: dict, prefix: str) -> None:
         logger.warning("Failed to save debug response: %s", e)
 
 
+def _build_citation_info(result: dict) -> list:
+    """Build clean, structured citation info from document metadata if not present"""
+    citation_info = result.get("citation_info", [])
+    if citation_info:
+        return citation_info
+
+    docs = result.get("documents", [])
+    if not docs:
+        return []
+
+    seen = set()
+    built = []
+    for doc in docs:
+        meta = doc.metadata if hasattr(doc, "metadata") else {}
+        sf = meta.get("source_file", meta.get("source", ""))
+        pg = meta.get("page_num")
+        if sf:
+            key = (sf, pg)
+            if key not in seen:
+                seen.add(key)
+                built.append({
+                    "source_file": sf,
+                    "page_num": pg,
+                    "company": meta.get("company"),
+                    "filing_type": meta.get("filing_type"),
+                    "period_end_date": meta.get("period_end_date"),
+                    "year": meta.get("year")
+                })
+    return built
+
+
 # Pydantic Models
 class AskInput(BaseModel):
     query: str = Field(..., description="User query")
@@ -212,7 +243,7 @@ async def ask_agent(
                 "summary_strategy": result.get("summary_strategy", "single_source"),
                 "document_count": len(result.get("documents", [])),
                 "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5],
-                "citation_info": result.get("citation_info", []),
+                "citation_info": _build_citation_info(result),
                 "document_sources": result.get("document_sources", {}),
                 "documents": [
                     {
@@ -260,7 +291,7 @@ async def ask_agent(
             "needs_web_fallback": result.get("needs_web_fallback", False),
             "retry_count": result.get("retry_count", 0),
             "document_sources": result.get("document_sources", {}),
-            "citation_info": result.get("citation_info", []),
+            "citation_info": _build_citation_info(result),
             "summary_strategy": result.get("summary_strategy", "single_source"),
             "sub_query_analysis": result.get("sub_query_analysis", {}),
             "sub_query_results": result.get("sub_query_results", {})
@@ -445,7 +476,7 @@ Compare {comparison_str} {year_str}:
                 "summary_strategy": result.get("summary_strategy", "single_source"),
                 "document_count": len(result.get("documents", [])),
                 "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5],
-                "citation_info": result.get("citation_info", []),
+                "citation_info": _build_citation_info(result),
                 "document_sources": result.get("document_sources", {}),
                 "documents": [
                     {
@@ -492,7 +523,7 @@ Compare {comparison_str} {year_str}:
             "needs_web_fallback": result.get("needs_web_fallback", False),
             "retry_count": result.get("retry_count", 0),
             "document_sources": result.get("document_sources", {}),
-            "citation_info": result.get("citation_info", []),
+            "citation_info": _build_citation_info(result),
             "summary_strategy": result.get("summary_strategy", "single_source"),
             "sub_query_analysis": result.get("sub_query_analysis", {}),
             "sub_query_results": result.get("sub_query_results", {})
