@@ -271,6 +271,7 @@ ROUTING RULES:
   smart money options / unusual options activity / options positioning -> options_intelligence_agent (if available)
 - "my database", "SQL", "query my data", "table", "schema", private postgres data -> postgres_agent (if available)
 - CROSS-AGENT SYNERGY: If a user asks to query their database for tickers/companies and then analyze them, route to postgres_agent FIRST, then hand off the results to the appropriate stock/research agents.
+- MISSING DATA / MISMATCH: If an agent cannot find matching data (e.g. portfolio companies do not match database tickers), ALWAYS POLITELY ASK THE USER a clarifying question to resolve the mismatch or ask them how they want to proceed, rather than just stating an error occurred.
 - If an agent is not available, apologize and suggest alternatives
 
 CRITICAL:

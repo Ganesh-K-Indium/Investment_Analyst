@@ -157,10 +157,16 @@ async def query_stock_agent(
         )
         messages_before = len(current_state.values.get('messages', [])) if current_state.values else 0
         
-        # Inject the postgres_integration_id into the query context if provided
+        # Inject context (Postgres ID)
         final_query = payload.query
+        context_tags = []
+        
         if payload.postgres_integration_id:
-            final_query = f"{payload.query}\n\n[SYSTEM: use integration_id={payload.postgres_integration_id}]"
+            context_tags.append(f"use integration_id={payload.postgres_integration_id}")
+            
+        if context_tags:
+            context_str = " | ".join(context_tags)
+            final_query = f"{payload.query}\n\n[SYSTEM: {context_str}]"
 
         # Invoke supervisor with thread_id for memory persistence
         response = await stock_supervisor.ainvoke(
