@@ -127,6 +127,7 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             from stock_exchange_agent.subagents.ticker_finder_tool.langgraph_agent import create_ticker_finder_agent
             from stock_exchange_agent.subagents.research_agent.langgraph_agent import create_research_agent
             from stock_exchange_agent.subagents.options_agent.langgraph_agent import create_options_agent
+            from stock_exchange_agent.subagents.postgres_agent.langgraph_agent import create_postgres_agent
             from langgraph_supervisor import create_supervisor
         except ImportError as e:
             logger.error(f"ERROR: Failed to import stock agent modules: {e}")
@@ -209,10 +210,20 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             logger.info("   Skipping options_intelligence_agent (MCP server not ready)")
             options_agent = None
 
-        logger.info(f"Created {len(agents_created)}/5 sub-agents: {', '.join(agents_created)}")
+        # Postgres Agent
+        try:
+            logger.info("   Creating postgres_agent...")
+            postgres_agent = await create_postgres_agent(checkpointer=_stock_saver)
+            agents_created.append("postgres")
+            logger.info("   postgres_agent created")
+        except Exception as e:
+            logger.warning(f"   WARNING: Failed to create postgres_agent: {e}")
+            postgres_agent = None
+
+        logger.info(f"Created {len(agents_created)}/6 sub-agents: {', '.join(agents_created)}")
         
         # Check if we have at least one working agent
-        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent] if a is not None]
+        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent, postgres_agent] if a is not None]
         
         if len(available_agents) == 0:
             logger.error("ERROR: No agents were successfully created")
@@ -234,6 +245,8 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             agent_names.append("research_agent")
         if options_agent:
             agent_names.append("options_intelligence_agent")
+        if postgres_agent:
+            agent_names.append("postgres_agent")
 
         supervisor_prompt = f"""You are a stock analysis supervisor managing {len(available_agents)} agents:
 
@@ -247,6 +260,7 @@ CAPABILITIES:
 - research_agent: Analyst ratings, web research, sentiment, bull/bear scenarios
 - options_intelligence_agent: Options chain analysis — put/call ratio, OI concentration zones, max pain,
   smart money signals, unusual activity, support/resistance from OI, OI visualization charts
+- postgres_agent: Analyzes user's private PostgreSQL database, schema, and executes read-only SQL queries
 
 ROUTING RULES:
 - Company name mentioned -> ticker_finder_agent FIRST (if available)
@@ -255,6 +269,8 @@ ROUTING RULES:
 - Analyst opinions/research/scenarios -> research_agent (if available)
 - Options chain / put-call ratio / max pain / OI distribution / open interest analysis /
   smart money options / unusual options activity / options positioning -> options_intelligence_agent (if available)
+- "my database", "SQL", "query my data", "table", "schema", private postgres data -> postgres_agent (if available)
+- CROSS-AGENT SYNERGY: If a user asks to query their database for tickers/companies and then analyze them, route to postgres_agent FIRST, then hand off the results to the appropriate stock/research agents.
 - If an agent is not available, apologize and suggest alternatives
 
 CRITICAL:

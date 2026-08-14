@@ -1,7 +1,7 @@
 """
 Database models for portfolio and session management
 """
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Text, Boolean, Enum as SQLEnum, Float, Date, Index
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Text, Boolean, Enum as SQLEnum, Float, Date, Index, TypeDecorator
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -9,6 +9,35 @@ from typing import Optional
 import enum
 
 Base = declarative_base()
+
+class EncryptedJSON(TypeDecorator):
+    """
+    A SQLAlchemy TypeDecorator that transparently encrypts dictionaries into a JSON wrapper `{"_encrypted": "token..."}`
+    before saving to the database, and decrypts them back into dictionaries when loaded.
+    This allows us to secure credentials while keeping the underlying column type as JSON.
+    """
+    impl = JSON
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        from app.core.security import encrypt_dict
+        # We wrap it so that the database stores a valid JSON object
+        encrypted_token = encrypt_dict(value)
+        return {"_encrypted": encrypted_token}
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        # If it's a legacy plain JSON dictionary (unencrypted), return it as-is
+        if isinstance(value, dict) and "_encrypted" not in value:
+            return value
+        # If it's encrypted, decrypt it
+        if isinstance(value, dict) and "_encrypted" in value:
+            from app.core.security import decrypt_dict
+            return decrypt_dict(value["_encrypted"])
+        return value
 
 
 class User(Base):
@@ -193,7 +222,7 @@ class Integration(Base):
     url = Column(String, nullable=True)  # Connection URL (for SharePoint, Azure, etc.)
 
     # Authentication credentials (stored as JSON for flexibility)
-    credentials = Column(JSON, nullable=False)  # {client_id, client_secret, user_id, folder_path, etc}
+    credentials = Column(EncryptedJSON, nullable=False)  # {client_id, client_secret, user_id, folder_path, etc}
 
     # Connection status
     status = Column(String, default="active")  # active, disconnected, error

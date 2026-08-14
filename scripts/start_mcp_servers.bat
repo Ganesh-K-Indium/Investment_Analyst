@@ -34,6 +34,18 @@ set SERVER3_DIR=research_mcp
 set SERVER3_SCRIPT=server_mcp.py
 set SERVER3_PORT=8567
 
+REM 4. Options
+set SERVER4_NAME=options
+set SERVER4_DIR=options_mcp
+set SERVER4_SCRIPT=server_mcp.py
+set SERVER4_PORT=8568
+
+REM 5. Postgres
+set SERVER5_NAME=postgres
+set SERVER5_DIR=postgres_mcp
+set SERVER5_SCRIPT=server_mcp.py
+set SERVER5_PORT=8570
+
 REM Process arguments
 set COMMAND=%1
 if "%COMMAND%"=="" set COMMAND=start
@@ -136,6 +148,8 @@ echo.
 call :start_server %SERVER1_NAME% %SERVER1_DIR% %SERVER1_SCRIPT% %SERVER1_PORT%
 call :start_server %SERVER2_NAME% %SERVER2_DIR% %SERVER2_SCRIPT% %SERVER2_PORT%
 call :start_server %SERVER3_NAME% %SERVER3_DIR% %SERVER3_SCRIPT% %SERVER3_PORT%
+call :start_server %SERVER4_NAME% %SERVER4_DIR% %SERVER4_SCRIPT% %SERVER4_PORT%
+call :start_server %SERVER5_NAME% %SERVER5_DIR% %SERVER5_SCRIPT% %SERVER5_PORT%
 
 echo.
 echo All start attempts completed. Check status above.
@@ -151,6 +165,8 @@ echo.
 call :stop_server %SERVER1_NAME% %SERVER1_PORT%
 call :stop_server %SERVER2_NAME% %SERVER2_PORT%
 call :stop_server %SERVER3_NAME% %SERVER3_PORT%
+call :stop_server %SERVER4_NAME% %SERVER4_PORT%
+call :stop_server %SERVER5_NAME% %SERVER5_PORT%
 goto :eof
 
 :restart_all
@@ -169,6 +185,8 @@ echo.
 call :check_status %SERVER1_NAME% %SERVER1_PORT%
 call :check_status %SERVER2_NAME% %SERVER2_PORT%
 call :check_status %SERVER3_NAME% %SERVER3_PORT%
+call :check_status %SERVER4_NAME% %SERVER4_PORT%
+call :check_status %SERVER5_NAME% %SERVER5_PORT%
 goto :eof
 
 :check_status

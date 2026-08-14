@@ -21,7 +21,7 @@ class IntegrationCredentials(BaseModel):
 class IntegrationCreate(BaseModel):
     """Schema for creating a new integration"""
     user_id: str = Field(..., description="User identifier")
-    vendor: Literal["sharepoint", "google_drive", "onedrive", "confluence", "azure_blob", "aws_s3", "sftp"] = Field(
+    vendor: Literal["sharepoint", "google_drive", "onedrive", "confluence", "azure_blob", "aws_s3", "sftp", "postgresql"] = Field(
         ...,
         description="Data source vendor type"
     )

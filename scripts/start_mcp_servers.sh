@@ -40,6 +40,7 @@ SERVER_CONFIGS=(
     "technical|Stock_Analysis|server_mcp.py|8566"
     "research|research_mcp|server_mcp.py|8567"
     "options|options_mcp|server_mcp.py|8568"
+    "postgres|postgres_mcp|server_mcp.py|8570"
 )
 
 # Function to print colored output

@@ -33,6 +33,7 @@ class StockQueryRequest(BaseModel):
     portfolio_id: Optional[int] = Field(None, description="Optional portfolio ID to link query")
     user_id: str = Field(..., description="User identifier")
     session_id: Optional[str] = Field(None, description="Session ID for conversation continuity")
+    postgres_integration_id: Optional[int] = Field(None, description="Optional ID of the PostgreSQL integration to use as a data source")
 
 
 class StockQueryResponse(BaseModel):
@@ -156,9 +157,14 @@ async def query_stock_agent(
         )
         messages_before = len(current_state.values.get('messages', [])) if current_state.values else 0
         
+        # Inject the postgres_integration_id into the query context if provided
+        final_query = payload.query
+        if payload.postgres_integration_id:
+            final_query = f"{payload.query}\n\n[SYSTEM: use integration_id={payload.postgres_integration_id}]"
+
         # Invoke supervisor with thread_id for memory persistence
         response = await stock_supervisor.ainvoke(
-            {"messages": [HumanMessage(content=payload.query)]},
+            {"messages": [HumanMessage(content=final_query)]},
             config={"configurable": {"thread_id": f"quant:{session_id}"}}
         )
         
