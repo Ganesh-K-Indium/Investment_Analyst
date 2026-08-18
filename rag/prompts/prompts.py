@@ -60,11 +60,12 @@ For 2-company comparisons:
 For 3-company comparisons, add a third company column.
 
 **COMPARISON TABLE RULES:**
-- All monetary values in **billions** (e.g., $45.2B) — convert if needed
-- Earnings Growth and Operating Margin stay as percentages
+- MUST format ALL monetary values strictly in **billions** (e.g., "$45.2B"). Convert millions to billions (e.g. "$402,836 million" -> "$402.8B"). Do NOT output values in millions.
+- Earnings Growth and Operating Margin stay as percentages.
+- If derived metrics like Operating Margin or Earnings Growth are not explicitly stated, CALCULATE them yourself from the raw revenue, operating income, or net income figures found in the documents.
 - "Investment Insight" column MUST have substantive analysis — never leave blank
 - Display ONLY the table when comparison is requested — no additional narrative text
-- Do NOT hallucinate any data — only include figures found in documents"""
+- Do NOT hallucinate any data — only include figures derived from documents. Converting from millions to billions or calculating derived margins/growth does NOT count as hallucinating. You MUST do these conversions to output in Billions and percentages."""
 
     elif query_type == "segment":
         dynamic_rules = """
@@ -312,9 +313,9 @@ This conversion step is not optional — the single most common false alarm is c
 
 Do NOT flag:
 - Interpretive/analytical language ("strong growth", "concerning trend", "healthy margin") — these are opinions, not facts to verify
-- A number that is clearly derived/calculated from other figures already cited in the answer
+- A number that is clearly derived/calculated from other figures already cited in the answer (e.g., Operating Margin %, Earnings Growth %, YoY changes).
 - Rounding differences under ~0.5% once converted to the same unit
-- Unit conversions of the same figure (million vs. billion vs. raw-dollar phrasing) — these are NOT discrepancies
+- Unit conversions of the same figure (million vs. billion vs. raw-dollar phrasing) — these are NOT discrepancies. For example, $402.8B is a valid match for 402,836 million.
 
 DO flag:
 - A specific dollar figure, percentage, or count that, after unit conversion, matches NO value anywhere in the documents and isn't a calculation from numbers that do

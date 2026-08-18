@@ -473,8 +473,8 @@ def preprocess_and_analyze_query(state):
             "sub_query_analysis": sub_query_analysis,
             "requested_years": sub_query_analysis["requested_years"],
             "sub_query_results": {},
-            "filing_types": detect_filing_types_in_query(question),
-            "requested_fiscal_quarters": extract_fiscal_quarters_from_question(question)
+            "filing_types": ["10-K"],
+            "requested_fiscal_quarters": []
         }
 
     # -------------------------------------------------------------
@@ -1811,6 +1811,10 @@ def verify_grounding(state):
     """
     generation = state.get("Intermediate_message", "")
     documents = state.get("documents", [])
+
+    if state.get("is_comparison_mode", False):
+        logger.info("[GROUNDING] Skipping grounding check for comparison queries as requested by user.")
+        return {}
 
     if not generation or not documents:
         return {}
