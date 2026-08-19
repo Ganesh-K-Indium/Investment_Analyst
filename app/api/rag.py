@@ -217,7 +217,9 @@ async def ask_agent(
             "comparison_company2": None,
             "comparison_company3": None,
             "year_start": None,
-            "year_end": None
+            "year_end": None,
+            "chart_url": None,
+            "chart_filename": None
         }
         result = await agent.ainvoke(inputs, config)
     
@@ -621,7 +623,9 @@ async def run_alpha(
                 "alpha_pillar": None,
                 "ticker": ticker,
                 "alpha_dimensions": {},
-                "alpha_report": ""
+                "alpha_report": "",
+                "chart_url": None,
+                "chart_filename": None
             }
 
             result = await agent.ainvoke(inputs, config)
