@@ -506,8 +506,8 @@ def preprocess_and_analyze_query(state):
                 "sub_query_analysis": sub_query_analysis,
                 "requested_years": sub_query_analysis["requested_years"],
                 "sub_query_results": {},
-                "filing_types": detect_filing_types_in_query(question),
-                "requested_fiscal_quarters": extract_fiscal_quarters_from_question(question)
+                "filing_types": ["10-K"],
+                "requested_fiscal_quarters": []
             }
         else:
             logger.info(f"  {seg_geo_type.upper()} query detected but no companies identified, falling through to LLM analysis")
