@@ -2840,7 +2840,8 @@ def alpha_generate_report(state):
         if not docs:
             return "No documents available."
         parts = []
-        for d in docs[:5]:  # Limit to avoid token overload
+        # Allow up to 20 docs for dimensions like 'action' that aggregate many small web queries
+        for d in docs[:20]:
             is_form4 = d.metadata.get('content_type') == 'insider_trading'
             source_label = (
                 "SEC Form 4 — Insider Trading Analysis"
