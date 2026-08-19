@@ -474,7 +474,9 @@ def preprocess_and_analyze_query(state):
             "requested_years": sub_query_analysis["requested_years"],
             "sub_query_results": {},
             "filing_types": ["10-K"],
-            "requested_fiscal_quarters": []
+            "requested_fiscal_quarters": [],
+            "chart_url": None,
+            "chart_filename": None
         }
 
     # -------------------------------------------------------------
@@ -507,7 +509,9 @@ def preprocess_and_analyze_query(state):
                 "requested_years": sub_query_analysis["requested_years"],
                 "sub_query_results": {},
                 "filing_types": ["10-K"],
-                "requested_fiscal_quarters": []
+                "requested_fiscal_quarters": [],
+                "chart_url": None,
+                "chart_filename": None
             }
         else:
             logger.info(f"  {seg_geo_type.upper()} query detected but no companies identified, falling through to LLM analysis")
@@ -572,7 +576,9 @@ def preprocess_and_analyze_query(state):
         "requested_years": analysis.requested_years,
         "sub_query_results": {},
         "filing_types": filing_types,
-        "requested_fiscal_quarters": extract_fiscal_quarters_from_question(question)
+        "requested_fiscal_quarters": extract_fiscal_quarters_from_question(question),
+        "chart_url": None,
+        "chart_filename": None
     }
 
 def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
