@@ -6,9 +6,6 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger("core.security")
 
-# Load the secret key once
-_SECRET_KEY = os.getenv("INTEGRATION_SECRET_KEY")
-
 _fernet: Optional[Fernet] = None
 
 def _get_fernet() -> Fernet:
@@ -16,15 +13,14 @@ def _get_fernet() -> Fernet:
     if _fernet is not None:
         return _fernet
     
-    if not _SECRET_KEY:
-        logger.warning("INTEGRATION_SECRET_KEY is not set in the environment. Credentials will not be encrypted!")
-        # Fallback to a dummy key to prevent crashes in dev if forgotten, but this is highly insecure.
-        dummy_key = Fernet.generate_key()
-        _fernet = Fernet(dummy_key)
-        return _fernet
+    secret_key = os.getenv("INTEGRATION_SECRET_KEY")
+    
+    if not secret_key:
+        logger.error("INTEGRATION_SECRET_KEY is not set in the environment. Credentials cannot be encrypted securely.")
+        raise ValueError("Missing INTEGRATION_SECRET_KEY in environment configuration.")
     
     try:
-        _fernet = Fernet(_SECRET_KEY.encode('utf-8'))
+        _fernet = Fernet(secret_key.encode('utf-8'))
     except Exception as e:
         logger.error(f"Failed to initialize Fernet with INTEGRATION_SECRET_KEY: {e}")
         raise ValueError("Invalid INTEGRATION_SECRET_KEY configuration")
