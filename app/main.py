@@ -10,7 +10,6 @@ load_dotenv(override=True)
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app.utils.log_capture import SSELogHandler
 
@@ -41,8 +40,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         )
         return response
 
-from rag.graph.builder import BuildingGraph
-from app.database.connection import init_db, DATABASE_URL, _to_sync_url
+from app.database.connection import init_db
+from app.core.agents_init import AgentBundle
 from app.api.portfolios import router as portfolio_router
 from app.api.rag import router as rag_router
 from app.api.integrations import router as integrations_router
@@ -52,9 +51,12 @@ from app.api.form4 import router as form4_router
 from app.api.edgar import router as edgar_router
 from app.api.auth import router as auth_router
 from app.api.reports import router as reports_router
+from app.api.analysis_tasks import router as analysis_tasks_router
 import app.api.rag as rag_router_module
 import app.api.quant as quant_router_module
-from app.services.stock_agent import initialize_stock_agents, cleanup_stock_agents
+import app.api.analysis_tasks as analysis_tasks_module
+from app.services.stock_agent import cleanup_stock_agents
+from app.jobs.queue import get_arq_pool, close_arq_pool
 import asyncio
 from ingestion.ingest_macro_data import run_ingestion
 from pathlib import Path
@@ -95,9 +97,8 @@ app.add_middleware(
 app.add_middleware(RequestLoggingMiddleware)
 
 # Global instances
-graph_obj = None
+agent_bundle: AgentBundle | None = None
 agent = None
-checkpointer_context = None
 checkpointer = None
 stock_supervisor = None
 
@@ -105,7 +106,7 @@ stock_supervisor = None
 @app.on_event("startup")
 async def startup_event():
     """Initialize database, graph, cache, and stock agents on startup"""
-    global graph_obj, agent, checkpointer_context, checkpointer, stock_supervisor
+    global agent_bundle, agent, checkpointer, stock_supervisor
 
     logger.info("=" * 70)
     logger.info("Starting Investment Analyst API v2.1...")
@@ -114,33 +115,20 @@ async def startup_event():
     logger.info("Initializing database...")
     init_db()
 
-    logger.info("Initializing shared Postgres LangGraph checkpointer...")
-    # Single checkpointer, backed by the same Postgres database as everything
-    # else, shared between the RAG graph and the Quant supervisor — replaces
-    # two previously-separate SQLite checkpointer files.
-    pg_conn_string = _to_sync_url(DATABASE_URL)
-    checkpointer_context = AsyncPostgresSaver.from_conn_string(pg_conn_string)
-    checkpointer = await checkpointer_context.__aenter__()
-    await checkpointer.setup()
+    agent_bundle = await AgentBundle().build()
+    agent = agent_bundle.rag_agent
+    checkpointer = agent_bundle.checkpointer
+    stock_supervisor = agent_bundle.stock_supervisor
 
-    logger.info("Building RAG graph...")
-    graph_obj = BuildingGraph()
-    agent = await graph_obj.get_graph(checkpointer=checkpointer)
     rag_router_module.set_agent(agent)
+    quant_router_module.set_stock_supervisor(stock_supervisor)
+    quant_router_module.set_agents_status(agent_bundle.stock_agents_ready)
+    if agent_bundle.stock_agents_ready and stock_supervisor:
+        logger.info("Stock Analysis System ready!")
 
-    logger.info("Initializing Stock Analysis System...")
-    try:
-        stock_supervisor, agents_ready = await initialize_stock_agents(checkpointer=checkpointer)
-        quant_router_module.set_stock_supervisor(stock_supervisor)
-        quant_router_module.set_agents_status(agents_ready)
-        if agents_ready and stock_supervisor:
-            logger.info("Stock Analysis System ready!")
-        else:
-            logger.warning("Stock Analysis System not available — start MCP servers and restart")
-    except Exception as e:
-        logger.warning("Failed to initialize Stock Analysis System: %s", e)
-        quant_router_module.set_stock_supervisor(None)
-        quant_router_module.set_agents_status(False)
+    logger.info("Connecting to job queue (Redis/Arq)...")
+    arq_pool = await get_arq_pool()
+    analysis_tasks_module.set_arq_pool(arq_pool)
 
     logger.info("Checking Macro Data Initialization...")
     macro_metadata = Path("data/macro/metadata.json")
@@ -164,18 +152,15 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup resources on shutdown"""
-    global graph_obj, checkpointer_context
+    global agent_bundle
 
     logger.info("Shutting down...")
     await cleanup_stock_agents()
+    await close_arq_pool()
 
-    if checkpointer_context:
-        await checkpointer_context.__aexit__(None, None, None)
-        logger.info("Checkpointer connection closed")
-
-    if graph_obj:
-        await graph_obj.cleanup()
-        logger.info("Graph cleaned up")
+    if agent_bundle:
+        await agent_bundle.close()
+        logger.info("Agent bundle cleaned up")
 
     logger.info("Shutdown complete")
 
@@ -190,6 +175,7 @@ app.include_router(quant_router)
 app.include_router(chats_router)
 app.include_router(form4_router)
 app.include_router(edgar_router)
+app.include_router(analysis_tasks_router)
 
 
 @app.get("/")

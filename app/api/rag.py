@@ -15,6 +15,7 @@ from app.database.models import AgentType, MessageRole, User, ChatSession
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.services.vectordb_manager import get_vectordb_manager
 from app.utils.company_mapping import get_ticker
+import asyncio
 import uuid
 import json
 import datetime
@@ -128,6 +129,18 @@ async def ask_agent(
     """
     Handle RAG queries with portfolio-based filtering and chat persistence.
     Uses ticker-based vector collections.
+    """
+    return await ask_core(payload, db, current_user)
+
+
+async def ask_core(
+    payload: AskInput,
+    db: AsyncSession,
+    current_user: User,
+) -> dict:
+    """
+    Core /ask logic, factored out so both the synchronous HTTP route and the
+    background job runner (app/jobs/rag_jobs.py) share one implementation.
     """
     try:
         if not agent:
@@ -322,6 +335,15 @@ async def compare_companies(
     Creates a TEMPORARY Vector DB instance with specified companies.
     Does NOT affect portfolio-scoped DB instances.
     """
+    return await compare_core(payload, db, current_user)
+
+
+async def compare_core(
+    payload: CompareInput,
+    db: AsyncSession,
+    current_user: User,
+) -> dict:
+    """Core /compare logic, shared by the HTTP route and the background job runner."""
     verify_user_id_matches(payload.user_id, current_user)
     try:
         if not agent:
@@ -554,6 +576,28 @@ async def run_alpha(
     portfolio's ticker symbols and triggers the full 5-dimension analysis
     per ticker, bypassing the (now-disabled) keyword detection in general chat.
     """
+    return await alpha_core(payload, db, current_user)
+
+
+# At most this many tickers run through the agent concurrently per /alpha
+# call. Each ticker is a full LangGraph run (multiple LLM calls) — unbounded
+# concurrency would spike LLM-provider rate limits on large portfolios.
+_ALPHA_TICKER_CONCURRENCY = 3
+
+
+async def alpha_core(
+    payload: AlphaInput,
+    db: AsyncSession,
+    current_user: User,
+    on_ticker_done=None,
+) -> dict:
+    """
+    Core /alpha logic, shared by the HTTP route and the background job runner.
+
+    on_ticker_done: optional async callback(ticker, index, total) invoked as
+    each ticker finishes, so the caller (the batch job) can push incremental
+    progress without this function knowing about AnalysisTask/SSE at all.
+    """
     verify_user_id_matches(payload.user_id, current_user)
     try:
         if not agent:
@@ -597,54 +641,70 @@ async def run_alpha(
             content=f"Provide 360 degree ALPHA analysis for {', '.join(resolved_tickers)} stock"
         )
 
-        results = []
-        for ticker in resolved_tickers:
-            logger.info("Running ALPHA for ticker: %s", ticker)
+        # Run the agent for every ticker concurrently (bounded — each run is a
+        # full multi-LLM-call LangGraph invocation, so unbounded concurrency
+        # would spike provider rate limits on large portfolios). This used to
+        # be a plain sequential `for` loop, so an N-ticker portfolio held the
+        # HTTP connection open for N full runs back-to-back.
+        semaphore = asyncio.Semaphore(_ALPHA_TICKER_CONCURRENCY)
+        total = len(resolved_tickers)
 
-            # Each ticker gets its own checkpointer thread so per-ticker
-            # alpha_dimensions/state don't leak into one another.
-            config = {"configurable": {"thread_id": f"rag:{thread_id}-alpha-{ticker}"}}
+        async def _run_one(index: int, ticker: str) -> dict:
+            async with semaphore:
+                logger.info("Running ALPHA for ticker: %s", ticker)
 
-            inputs = {
-                "messages": [HumanMessage(content=f"ALPHA analysis for {ticker}")],
-                "vectorstore_searched": False,
-                "web_searched": False,
-                "vectorstore_quality": "none",
-                "needs_web_fallback": False,
-                "retry_count": 0,
-                "documents": [],
-                "document_sources": {},
-                "citation_info": [],
-                "summary_strategy": "single_source",
-                "company_filter": [ticker],
-                "sub_query_analysis": {},
-                "sub_query_results": {},
-                "alpha_mode": True,
-                "alpha_pillar": None,
-                "ticker": ticker,
-                "alpha_dimensions": {},
-                "alpha_report": "",
-                "chart_url": None,
-                "chart_filename": None
-            }
+                # Each ticker gets its own checkpointer thread so per-ticker
+                # alpha_dimensions/state don't leak into one another.
+                config = {"configurable": {"thread_id": f"rag:{thread_id}-alpha-{ticker}"}}
 
-            result = await agent.ainvoke(inputs, config)
-            report = result.get("alpha_report") or result["messages"][-1].content
+                inputs = {
+                    "messages": [HumanMessage(content=f"ALPHA analysis for {ticker}")],
+                    "vectorstore_searched": False,
+                    "web_searched": False,
+                    "vectorstore_quality": "none",
+                    "needs_web_fallback": False,
+                    "retry_count": 0,
+                    "documents": [],
+                    "document_sources": {},
+                    "citation_info": [],
+                    "summary_strategy": "single_source",
+                    "company_filter": [ticker],
+                    "sub_query_analysis": {},
+                    "sub_query_results": {},
+                    "alpha_mode": True,
+                    "alpha_pillar": None,
+                    "ticker": ticker,
+                    "alpha_dimensions": {},
+                    "alpha_report": "",
+                    "chart_url": None,
+                    "chart_filename": None
+                }
 
-            results.append({
-                "ticker": ticker,
-                "report": report
-            })
+                result = await agent.ainvoke(inputs, config)
+                report = result.get("alpha_report") or result["messages"][-1].content
 
+                if on_ticker_done is not None:
+                    await on_ticker_done(ticker, index, total)
+
+                return {"ticker": ticker, "report": report}
+
+        results = await asyncio.gather(
+            *(_run_one(i, ticker) for i, ticker in enumerate(resolved_tickers))
+        )
+
+        # Persisting chat messages is fast (no LLM calls) and shares one
+        # AsyncSession, which isn't safe to use concurrently — do it
+        # sequentially now that every agent run has already completed.
+        for item in results:
             await ChatService.add_message(
                 db=db,
                 session_id=thread_id,
                 role=MessageRole.ASSISTANT,
-                content=report,
+                content=item["report"],
                 metadata={
                     "portfolio_id": portfolio.id,
                     "portfolio_name": portfolio.name,
-                    "ticker": ticker,
+                    "ticker": item["ticker"],
                     "alpha_pillar": None
                 }
             )

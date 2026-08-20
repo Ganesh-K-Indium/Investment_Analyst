@@ -28,17 +28,32 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     build: .
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      # Points at the postgres/qdrant services above by default. Override
-      # DATABASE_URL / QDRANT_URL in .env (e.g. to an RDS endpoint or Qdrant
-      # Cloud) to use managed services instead of these local containers.
+      # Points at the postgres/qdrant/redis services above by default.
+      # Override DATABASE_URL / QDRANT_URL / REDIS_URL in .env (e.g. to an
+      # RDS endpoint, Qdrant Cloud, or a managed Redis) to use those instead
+      # of these local containers.
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://investment_analyst:investment_analyst@postgres:5432/investment_analyst}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "8000:8000"
       - "8565:8565"
@@ -50,9 +65,60 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+
+  worker-interactive:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://investment_analyst:investment_analyst@postgres:5432/investment_analyst}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    entrypoint: ["./docker-entrypoint-worker.sh"]
+    command: ["app.worker.InteractiveWorkerSettings"]
+    # Shares the api container's network namespace so this worker's
+    # hardcoded http://localhost:856x/mcp calls reach the MCP servers the
+    # api container hosts — see docker-entrypoint-worker.sh. This also means
+    # it inherits api's ports, so it must not declare its own `ports:`.
+    network_mode: "service:api"
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+
+  worker-batch:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://investment_analyst:investment_analyst@postgres:5432/investment_analyst}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    entrypoint: ["./docker-entrypoint-worker.sh"]
+    command: ["app.worker.BatchWorkerSettings"]
+    network_mode: "service:api"
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
 
 volumes:
   pgdata:
   qdrant_storage:
+  redis_data:

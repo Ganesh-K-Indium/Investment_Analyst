@@ -96,6 +96,16 @@ async def query_stock_agent(
 
     Maintains conversation context per session_id.
     """
+    return await query_core(payload, background_tasks, db, current_user)
+
+
+async def query_core(
+    payload: StockQueryRequest,
+    background_tasks: Optional[BackgroundTasks],
+    db: AsyncSession,
+    current_user: User,
+) -> StockQueryResponse:
+    """Core /quant/query logic, shared by the HTTP route and the background job runner."""
     verify_user_id_matches(payload.user_id, current_user)
 
     if not agents_initialized or stock_supervisor is None:
@@ -210,7 +220,7 @@ async def query_stock_agent(
             }
         )
         
-        if _SAVE_DEBUG_RESPONSES:
+        if _SAVE_DEBUG_RESPONSES and background_tasks is not None:
             background_tasks.add_task(
                 save_quant_response,
                 response,

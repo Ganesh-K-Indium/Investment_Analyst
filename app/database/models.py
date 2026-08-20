@@ -65,6 +65,14 @@ class AgentType(str, enum.Enum):
     QUANT = "quant"
 
 
+class TaskStatus(str, enum.Enum):
+    """Enum for background task tracking"""
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 class MessageRole(str, enum.Enum):
     """Enum for message roles"""
     USER = "user"
@@ -262,3 +270,24 @@ class Form4Transaction(Base):
     __table_args__ = (
         Index('idx_symbol_date', 'issuer_symbol', 'transaction_date'),
     )
+
+
+class AnalysisTask(Base):
+    """Tracks background agent analyses to allow users to leave the page while running"""
+    __tablename__ = "analysis_tasks"
+
+    id = Column(String, primary_key=True, index=True)  # UUID string
+    user_id = Column(String, nullable=False, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=True, index=True)
+    
+    agent_type = Column(SQLEnum(AgentType, values_callable=lambda enum_cls: [e.value for e in enum_cls]), nullable=False, index=True)
+    task_type = Column(String, nullable=False)  # 'alpha', 'compare', 'ask', 'sql_query', etc.
+    status = Column(SQLEnum(TaskStatus, values_callable=lambda enum_cls: [e.value for e in enum_cls]), default="PENDING", index=True)
+    
+    progress_message = Column(String, nullable=True)
+    result_metadata = Column(JSON, nullable=True)  # {thread_id: "...", etc.}
+    
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    portfolio = relationship("Portfolio")
