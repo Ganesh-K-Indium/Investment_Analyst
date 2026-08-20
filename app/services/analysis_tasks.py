@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from sqlalchemy import select
+from sqlalchemy import select, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import AnalysisTask, AgentType, TaskStatus
@@ -120,3 +120,25 @@ class AnalysisTaskService:
     @staticmethod
     def to_dict(task: AnalysisTask) -> dict:
         return _serialize(task)
+
+    @staticmethod
+    async def delete_for_session(db: AsyncSession, session_id: str) -> int:
+        """
+        Deletes any AnalysisTask whose completed result is tied to this chat
+        session — thread_id for RAG (ask/compare/alpha) tasks, session_id for
+        quant tasks, both nested under result_metadata.response. Called when
+        a chat session is deleted so it doesn't linger in the Overview
+        dashboard as a "Ready" run whose View button points at nothing.
+
+        Only COMPLETED tasks carry this id (PENDING/RUNNING/FAILED tasks
+        never got a result_metadata.response written) — those statuses also
+        don't render a View action in the dashboard, so leaving them behind
+        isn't the dangling-link problem this exists to fix.
+        """
+        thread_id_expr = AnalysisTask.result_metadata.op("->")("response").op("->>")("thread_id")
+        session_id_expr = AnalysisTask.result_metadata.op("->")("response").op("->>")("session_id")
+        result = await db.execute(
+            delete(AnalysisTask).where(or_(thread_id_expr == session_id, session_id_expr == session_id))
+        )
+        await db.commit()
+        return result.rowcount or 0

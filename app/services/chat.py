@@ -669,6 +669,7 @@ class ChatService:
             True if deleted, False if not found
         """
         from app.database.models import Session as PortfolioSession
+        from app.services.analysis_tasks import AnalysisTaskService
 
         result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
         chat_session = result.scalar_one_or_none()
@@ -677,6 +678,10 @@ class ChatService:
             # Messages are cascade-deleted via relationship
             await db.delete(chat_session)
             await db.commit()
+            # So a deleted run doesn't linger in the Overview dashboard as a
+            # "Ready" entry whose View button points at a session that no
+            # longer exists.
+            await AnalysisTaskService.delete_for_session(db, session_id)
             return True
 
         # No ChatSession found — the user may have created a portfolio session
@@ -687,6 +692,7 @@ class ChatService:
         if portfolio_session:
             await db.delete(portfolio_session)
             await db.commit()
+            await AnalysisTaskService.delete_for_session(db, session_id)
             return True
 
         return False
