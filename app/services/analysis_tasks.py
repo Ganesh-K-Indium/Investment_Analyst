@@ -15,6 +15,7 @@ from sqlalchemy import select, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import AnalysisTask, AgentType, TaskStatus
+from app.utils.time import to_iso_z
 
 logger = logging.getLogger("app.services.analysis_tasks")
 
@@ -35,8 +36,8 @@ def _serialize(task: AnalysisTask) -> dict:
         "status": task.status.value if hasattr(task.status, "value") else task.status,
         "progress_message": task.progress_message,
         "result_metadata": task.result_metadata,
-        "created_at": task.created_at.isoformat() if task.created_at else None,
-        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        "created_at": to_iso_z(task.created_at),
+        "updated_at": to_iso_z(task.updated_at),
     }
 
 

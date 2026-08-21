@@ -14,6 +14,7 @@ from app.services.portfolio import PortfolioService
 from app.services.chat import ChatService
 from app.database.models import AgentType, MessageRole, User, ChatSession
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
+from app.utils.time import to_iso_z
 from datetime import datetime
 import json
 import os
@@ -233,7 +234,7 @@ async def query_core(
             response=final_message.content,
             session_id=session_id,
             portfolio_id=payload.portfolio_id,
-            timestamp=datetime.now().isoformat(),
+            timestamp=to_iso_z(datetime.utcnow()),
             success=True,
             agent_used=agent_used,
             metadata={

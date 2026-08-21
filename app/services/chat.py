@@ -6,6 +6,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.database.models import ChatSession, ChatMessage, Portfolio, AgentType, MessageRole, ConsolidatedSummary
+from app.utils.time import to_iso_z
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from langchain_openai import ChatOpenAI
@@ -72,10 +73,10 @@ class ChatService:
                 "session_id": session.session_id,
                 "title": session.title,
                 "summary": session.summary,
-                "summary_updated_at": session.summary_updated_at.isoformat() if session.summary_updated_at else None,
+                "summary_updated_at": to_iso_z(session.summary_updated_at),
                 "message_count": len(session.messages) if session.messages else 0,
-                "created_at": session.created_at.isoformat(),
-                "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None
+                "created_at": to_iso_z(session.created_at),
+                "last_message_at": to_iso_z(session.last_message_at)
             }
             for session in rag_sessions
         ]
@@ -85,10 +86,10 @@ class ChatService:
                 "session_id": session.session_id,
                 "title": session.title,
                 "summary": session.summary,
-                "summary_updated_at": session.summary_updated_at.isoformat() if session.summary_updated_at else None,
+                "summary_updated_at": to_iso_z(session.summary_updated_at),
                 "message_count": len(session.messages) if session.messages else 0,
-                "created_at": session.created_at.isoformat(),
-                "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None
+                "created_at": to_iso_z(session.created_at),
+                "last_message_at": to_iso_z(session.last_message_at)
             }
             for session in quant_sessions
         ]
@@ -105,9 +106,9 @@ class ChatService:
                 "session_id": f"consolidated-{row.id}",
                 "title": row.title or "Consolidated Summary",
                 "summary": row.summary,
-                "summary_updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "summary_updated_at": to_iso_z(row.updated_at),
                 "message_count": row.sessions_included,
-                "created_at": row.created_at.isoformat(),
+                "created_at": to_iso_z(row.created_at),
                 "last_message_at": None,
                 "detected_type": row.detected_type,  # "rag", "compare", or "quant"
             }
@@ -743,8 +744,8 @@ class ChatService:
             "agent_type": chat_session.agent_type.value,
             "title": chat_session.title,
             "portfolio": portfolio_info,
-            "created_at": chat_session.created_at.isoformat(),
-            "last_message_at": chat_session.last_message_at.isoformat() if chat_session.last_message_at else None,
+            "created_at": to_iso_z(chat_session.created_at),
+            "last_message_at": to_iso_z(chat_session.last_message_at),
             "message_count": len(messages),
             "messages": [
                 {
@@ -752,7 +753,7 @@ class ChatService:
                     "content": msg.content,
                     "metadata": msg.message_metadata,
                     "token_count": msg.token_count,
-                    "timestamp": msg.created_at.isoformat()
+                    "timestamp": to_iso_z(msg.created_at)
                 }
                 for msg in messages
             ]
@@ -785,8 +786,8 @@ class ChatService:
             "message_count": message_count,
             "total_tokens": total_tokens,
             "agent_type": chat_session.agent_type.value,
-            "created_at": chat_session.created_at.isoformat(),
-            "last_message_at": chat_session.last_message_at.isoformat() if chat_session.last_message_at else None
+            "created_at": to_iso_z(chat_session.created_at),
+            "last_message_at": to_iso_z(chat_session.last_message_at)
         }
 
     @staticmethod

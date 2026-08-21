@@ -12,6 +12,7 @@ from app.database.connection import get_db_session
 from app.services.chat import ChatService
 from app.database.models import AgentType, ChatSession, ChatMessage, ConsolidatedSummary, Portfolio, User
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
+from app.utils.time import to_iso_z
 from datetime import datetime
 import json
 
@@ -146,7 +147,7 @@ async def get_session_summary(
     return ChatSummaryResponse(
         session_id=session_id,
         summary=summary,
-        summary_updated_at=chat_session.summary_updated_at.isoformat(),
+        summary_updated_at=to_iso_z(chat_session.summary_updated_at),
         message_count=len(chat_session.messages) if chat_session.messages else 0
     )
 
@@ -239,7 +240,7 @@ async def generate_consolidated_summary(
             detected_type=result["detected_type"],
             consolidated_summary=result["summary"],
             sessions_included=len(request.session_ids),
-            generated_at=datetime.utcnow().isoformat()
+            generated_at=to_iso_z(datetime.utcnow())
         )
 
     except HTTPException:
@@ -346,7 +347,7 @@ async def create_chat_session(
             "agent_type": chat_session.agent_type.value,
             "portfolio_id": chat_session.portfolio_id,
             "title": chat_session.title,
-            "created_at": chat_session.created_at.isoformat()
+            "created_at": to_iso_z(chat_session.created_at)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -396,8 +397,8 @@ async def get_user_chat_sessions(
                 title=session.title,
                 is_active=session.is_active,
                 message_count=message_count,
-                created_at=session.created_at.isoformat(),
-                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
+                created_at=to_iso_z(session.created_at),
+                last_message_at=to_iso_z(session.last_message_at),
                 session_metadata=session.session_metadata
             ))
 
@@ -452,7 +453,7 @@ async def get_session_chat_history(
                     role=msg.role.value,
                     content=msg.content,
                     metadata=msg.message_metadata,
-                    timestamp=msg.created_at.isoformat()
+                    timestamp=to_iso_z(msg.created_at)
                 )
                 for msg in messages
             ]
@@ -765,8 +766,8 @@ async def get_portfolio_chat_sessions(
                 title=session.title,
                 is_active=session.is_active,
                 message_count=message_count,
-                created_at=session.created_at.isoformat(),
-                last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
+                created_at=to_iso_z(session.created_at),
+                last_message_at=to_iso_z(session.last_message_at),
                 session_metadata=session.session_metadata
             ))
 

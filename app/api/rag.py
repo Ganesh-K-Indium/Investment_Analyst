@@ -15,6 +15,7 @@ from app.database.models import AgentType, MessageRole, User, ChatSession
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.services.vectordb_manager import get_vectordb_manager
 from app.utils.company_mapping import get_ticker
+from app.utils.time import to_iso_z
 import asyncio
 import uuid
 import json
@@ -879,8 +880,8 @@ async def get_portfolio_rag_sessions(
             "title": session.title,
             "is_active": session.is_active,
             "message_count": message_count,
-            "created_at": session.created_at.isoformat(),
-            "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None
+            "created_at": to_iso_z(session.created_at),
+            "last_message_at": to_iso_z(session.last_message_at)
         })
     
     return {
