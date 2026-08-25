@@ -4,8 +4,8 @@ Service layer for portfolio management
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from app.database.models import Portfolio, Session as SessionModel
-from typing import List, Optional
+from app.database.models import Portfolio, Session as SessionModel, AnalysisTask
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import uuid
 
@@ -47,6 +47,31 @@ class PortfolioService:
         """Get all portfolios for a user"""
         result = await db.execute(select(Portfolio).where(Portfolio.user_id == user_id))
         return list(result.scalars().all())
+
+    @staticmethod
+    async def get_user_portfolios_with_latest_task(
+        db: AsyncSession, user_id: str
+    ) -> List[Tuple[Portfolio, Optional[AnalysisTask]]]:
+        """
+        All of a user's portfolios paired with their most recently updated
+        AnalysisTask (or None if the portfolio has never had a run) — the
+        data the cross-portfolio dashboard's portfolio cards need.
+        """
+        portfolios = await PortfolioService.get_user_portfolios(db, user_id)
+        if not portfolios:
+            return []
+
+        tasks_result = await db.execute(
+            select(AnalysisTask)
+            .where(AnalysisTask.user_id == user_id)
+            .order_by(AnalysisTask.updated_at.desc())
+        )
+        latest_by_portfolio: Dict[int, AnalysisTask] = {}
+        for task in tasks_result.scalars().all():
+            if task.portfolio_id is not None and task.portfolio_id not in latest_by_portfolio:
+                latest_by_portfolio[task.portfolio_id] = task
+
+        return [(p, latest_by_portfolio.get(p.id)) for p in portfolios]
 
     @staticmethod
     async def update_portfolio(

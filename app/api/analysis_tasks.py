@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.connection import get_db_session
 from app.database.models import AgentType, TaskStatus, User
 from app.auth.deps import get_current_user, verify_user_id_matches
-from app.services.analysis_tasks import AnalysisTaskService, channel_for_portfolio
+from app.services.analysis_tasks import AnalysisTaskService, channel_for_portfolio, channel_for_user
 from app.services.portfolio import PortfolioService
 from app.api.rag import AskInput, CompareInput, AlphaInput
 from app.api.quant import StockQueryRequest
@@ -221,4 +221,45 @@ async def stream_tasks(
             await pubsub.unsubscribe(channel_for_portfolio(portfolio_id))
             await pubsub.close()
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/stream/user/{user_id}")
+async def stream_tasks_for_user(
+    user_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Server-Sent Events stream of AnalysisTask updates across ALL of a
+    user's portfolios — backs the cross-portfolio dashboard. One
+    subscription to a user-scoped channel instead of one per portfolio;
+    AnalysisTaskService.update_status publishes every update to both.
+    """
+    verify_user_id_matches(user_id, current_user)
+
+    pool = _require_pool()
+
+    async def event_generator():
+        pubsub = pool.pubsub()
+        await pubsub.subscribe(channel_for_user(user_id))
+        try:
+            yield "event: ping\ndata: connected\n\n"
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=15)
+                if message is not None:
+                    yield f"event: task_update\ndata: {message['data'].decode() if isinstance(message['data'], bytes) else message['data']}\n\n"
+                else:
+                    yield "event: ping\ndata: keepalive\n\n"
+        finally:
+            await pubsub.unsubscribe(channel_for_user(user_id))
+            await pubsub.close()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

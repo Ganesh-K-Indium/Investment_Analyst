@@ -7,9 +7,8 @@ import time
 import logging
 from dotenv import load_dotenv
 load_dotenv(override=True)
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.utils.log_capture import SSELogHandler
 
@@ -24,21 +23,45 @@ root_logger.addHandler(SSELogHandler())
 logger = logging.getLogger("api")
 
 
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log every request: method, path, status code, and elapsed time."""
+class RequestLoggingMiddleware:
+    """
+    Log every request: method, path, status code, and elapsed time.
 
-    async def dispatch(self, request: Request, call_next):
+    Pure ASGI middleware, deliberately NOT a BaseHTTPMiddleware subclass —
+    BaseHTTPMiddleware relays the response through an internal buffered
+    stream, which silently stalls long-lived StreamingResponse endpoints
+    (the analysis-task SSE streams) until the connection closes instead of
+    flushing each event as it's published. A pure ASGI middleware passes
+    `send` straight through, so streamed chunks reach the client immediately.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         start = time.perf_counter()
-        response = await call_next(request)
+        status_code = 500
+
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
         ms = (time.perf_counter() - start) * 1000
         logger.info(
             "%-6s %-45s %s  %.0fms",
-            request.method,
-            request.url.path,
-            response.status_code,
+            scope.get("method", "?"),
+            scope.get("path", "?"),
+            status_code,
             ms,
         )
-        return response
 
 from app.database.connection import init_db
 from app.core.agents_init import AgentBundle

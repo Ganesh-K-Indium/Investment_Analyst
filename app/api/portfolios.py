@@ -11,8 +11,10 @@ from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
 from app.services.chat import ChatService
 from app.services.vectordb_manager import get_vectordb_manager
+from app.services.analysis_tasks import AnalysisTaskService
 from app.database.models import AgentType, User
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
+from app.utils.time import to_iso_z
 from datetime import datetime
 
 logger = logging.getLogger("api.portfolios")
@@ -121,6 +123,110 @@ async def create_portfolio(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create portfolio: {str(e)}")
+
+
+class DashboardTaskSummary(BaseModel):
+    id: str
+    portfolio_id: Optional[int]
+    portfolio_name: Optional[str] = None
+    agent_type: str
+    task_type: str
+    status: str
+    progress_message: Optional[str]
+    session_id: Optional[str] = None
+    created_at: Optional[str]
+    updated_at: Optional[str]
+
+
+def _extract_session_id(task) -> Optional[str]:
+    """
+    A completed task's stashed job response carries the chat session id it
+    produced — thread_id for RAG tasks, session_id for quant tasks. Mirrors
+    the frontend's extractSessionId() so dashboard "View" links can jump
+    straight to the right conversation, same as the notification bell does.
+    """
+    response = (task.result_metadata or {}).get("response") if task.result_metadata else None
+    if not response:
+        return None
+    agent_type = task.agent_type.value if hasattr(task.agent_type, "value") else task.agent_type
+    key = "session_id" if agent_type == "quant" else "thread_id"
+    value = response.get(key)
+    return value if isinstance(value, str) else None
+
+
+class DashboardPortfolioCard(BaseModel):
+    id: int
+    name: str
+    tickers: List[str]
+    description: Optional[str]
+    created_at: Optional[str]
+    updated_at: Optional[str]
+    latest_task: Optional[DashboardTaskSummary]
+
+
+class CrossPortfolioDashboardResponse(BaseModel):
+    portfolios: List[DashboardPortfolioCard]
+    recent_activity: List[DashboardTaskSummary]
+
+
+@router.get("/dashboard/cross-portfolio", response_model=CrossPortfolioDashboardResponse)
+async def get_cross_portfolio_dashboard(
+    user_id: str,
+    activity_limit: int = 50,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Aggregate view across all of a user's portfolios: one card per portfolio
+    (with its most recent run) plus a merged recent-activity feed across all
+    portfolios, sorted by updated_at desc.
+    """
+    verify_user_id_matches(user_id, current_user)
+
+    pairs = await PortfolioService.get_user_portfolios_with_latest_task(db, user_id)
+    portfolio_cards = [
+        DashboardPortfolioCard(
+            id=p.id,
+            name=p.name,
+            tickers=p.company_names,
+            description=p.description,
+            created_at=to_iso_z(p.created_at),
+            updated_at=to_iso_z(p.updated_at),
+            latest_task=DashboardTaskSummary(
+                id=task.id,
+                portfolio_id=task.portfolio_id,
+                portfolio_name=p.name,
+                agent_type=task.agent_type.value if hasattr(task.agent_type, "value") else task.agent_type,
+                task_type=task.task_type,
+                status=task.status.value if hasattr(task.status, "value") else task.status,
+                progress_message=task.progress_message,
+                session_id=_extract_session_id(task),
+                created_at=to_iso_z(task.created_at),
+                updated_at=to_iso_z(task.updated_at),
+            ) if task is not None else None,
+        )
+        for p, task in pairs
+    ]
+
+    portfolio_names_by_id = {p.id: p.name for p, _ in pairs}
+    tasks = await AnalysisTaskService.list_for_user(db, user_id, limit=activity_limit)
+    recent_activity = [
+        DashboardTaskSummary(
+            id=t.id,
+            portfolio_id=t.portfolio_id,
+            portfolio_name=portfolio_names_by_id.get(t.portfolio_id),
+            agent_type=t.agent_type.value if hasattr(t.agent_type, "value") else t.agent_type,
+            task_type=t.task_type,
+            status=t.status.value if hasattr(t.status, "value") else t.status,
+            progress_message=t.progress_message,
+            session_id=_extract_session_id(t),
+            created_at=to_iso_z(t.created_at),
+            updated_at=to_iso_z(t.updated_at),
+        )
+        for t in tasks
+    ]
+
+    return CrossPortfolioDashboardResponse(portfolios=portfolio_cards, recent_activity=recent_activity)
 
 
 @router.get("/{portfolio_id}", response_model=PortfolioResponse)

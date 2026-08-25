@@ -22,8 +22,15 @@ logger = logging.getLogger("app.services.analysis_tasks")
 CHANNEL_PREFIX = "analysis_tasks:portfolio:"
 
 
+CHANNEL_USER_PREFIX = "analysis_tasks:user:"
+
+
 def channel_for_portfolio(portfolio_id: Optional[int]) -> str:
     return f"{CHANNEL_PREFIX}{portfolio_id if portfolio_id is not None else 'none'}"
+
+
+def channel_for_user(user_id: str) -> str:
+    return f"{CHANNEL_USER_PREFIX}{user_id}"
 
 
 def _serialize(task: AnalysisTask) -> dict:
@@ -83,6 +90,26 @@ class AnalysisTaskService:
         return list(result.scalars().all())
 
     @staticmethod
+    async def list_for_user(
+        db: AsyncSession, user_id: str, limit: int = 50
+    ) -> List[AnalysisTask]:
+        """
+        Recent activity across all of a user's portfolios, newest first.
+        Excludes tasks with no portfolio_id (e.g. /rag/compare runs, which
+        aren't tied to any portfolio) — this feed is portfolio-scoped, and
+        those tasks never show up on any single-portfolio dashboard either,
+        so including them here would surface them as "Unknown portfolio"
+        with no page they actually belong to.
+        """
+        result = await db.execute(
+            select(AnalysisTask)
+            .where(AnalysisTask.user_id == user_id, AnalysisTask.portfolio_id.isnot(None))
+            .order_by(AnalysisTask.updated_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
     async def update_status(
         db: AsyncSession,
         task_id: str,
@@ -109,12 +136,15 @@ class AnalysisTaskService:
         await db.refresh(task)
 
         if redis_client is not None:
+            payload = json.dumps(_serialize(task))
             try:
-                await redis_client.publish(
-                    channel_for_portfolio(task.portfolio_id), json.dumps(_serialize(task))
-                )
+                await redis_client.publish(channel_for_portfolio(task.portfolio_id), payload)
             except Exception as e:
                 logger.warning("Failed to publish task update for %s: %s", task_id, e)
+            try:
+                await redis_client.publish(channel_for_user(task.user_id), payload)
+            except Exception as e:
+                logger.warning("Failed to publish user-scoped task update for %s: %s", task_id, e)
 
         return task
 
