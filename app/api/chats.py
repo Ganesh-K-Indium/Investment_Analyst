@@ -13,6 +13,7 @@ from app.services.chat import ChatService
 from app.database.models import AgentType, ChatSession, ChatMessage, ConsolidatedSummary, Portfolio, User
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.utils.time import to_iso_z
+from app.api.analysis_tasks import get_arq_pool_if_ready
 from datetime import datetime
 import json
 
@@ -632,7 +633,7 @@ async def delete_session(
                 raise HTTPException(status_code=404, detail="Chat session not found")
             verify_owner(portfolio_session.user_id, current_user)
 
-        success = await ChatService.delete_session(db, session_id)
+        success = await ChatService.delete_session(db, session_id, redis_client=get_arq_pool_if_ready())
         
         if not success:
             raise HTTPException(status_code=404, detail="Chat session not found")

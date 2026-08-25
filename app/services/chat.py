@@ -654,7 +654,8 @@ class ChatService:
     @staticmethod
     async def delete_session(
         db: AsyncSession,
-        session_id: str
+        session_id: str,
+        redis_client=None,
     ) -> bool:
         """
         Permanently delete a session and all its messages.
@@ -665,6 +666,10 @@ class ChatService:
         Args:
             db: Database session
             session_id: Session identifier
+            redis_client: optional arq/redis pool — passed through to
+                AnalysisTaskService.delete_for_session so a live-connected
+                dashboard drops the deleted run immediately instead of
+                waiting for a page refresh.
 
         Returns:
             True if deleted, False if not found
@@ -682,7 +687,7 @@ class ChatService:
             # So a deleted run doesn't linger in the Overview dashboard as a
             # "Ready" entry whose View button points at a session that no
             # longer exists.
-            await AnalysisTaskService.delete_for_session(db, session_id)
+            await AnalysisTaskService.delete_for_session(db, session_id, redis_client=redis_client)
             return True
 
         # No ChatSession found — the user may have created a portfolio session
@@ -693,7 +698,7 @@ class ChatService:
         if portfolio_session:
             await db.delete(portfolio_session)
             await db.commit()
-            await AnalysisTaskService.delete_for_session(db, session_id)
+            await AnalysisTaskService.delete_for_session(db, session_id, redis_client=redis_client)
             return True
 
         return False

@@ -50,6 +50,30 @@ def _require_pool():
     return _arq_pool
 
 
+def get_arq_pool_if_ready():
+    """Non-raising variant of _require_pool — for callers (e.g. session
+    deletion) where publishing a live-update event is a nice-to-have, not
+    something that should fail the request if the queue isn't connected."""
+    return _arq_pool
+
+
+def _sse_frame(raw_data) -> str:
+    """
+    Every message on a task channel is one of AnalysisTaskService's two
+    publish shapes: a full task dict (status update) or {"type":
+    "task_deleted", ...}. Pick the SSE event name from that so the frontend
+    can tell the two apart without guessing from field shape.
+    """
+    data = raw_data.decode() if isinstance(raw_data, bytes) else raw_data
+    event_name = "task_update"
+    try:
+        if json.loads(data).get("type") == "task_deleted":
+            event_name = "task_deleted"
+    except Exception:
+        pass
+    return f"event: {event_name}\ndata: {data}\n\n"
+
+
 async def _enqueue(
     *,
     function: str,
@@ -214,7 +238,7 @@ async def stream_tasks(
             while True:
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=15)
                 if message is not None:
-                    yield f"event: task_update\ndata: {message['data'].decode() if isinstance(message['data'], bytes) else message['data']}\n\n"
+                    yield _sse_frame(message["data"])
                 else:
                     yield "event: ping\ndata: keepalive\n\n"
         finally:
@@ -251,7 +275,7 @@ async def stream_tasks_for_user(
             while True:
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=15)
                 if message is not None:
-                    yield f"event: task_update\ndata: {message['data'].decode() if isinstance(message['data'], bytes) else message['data']}\n\n"
+                    yield _sse_frame(message["data"])
                 else:
                     yield "event: ping\ndata: keepalive\n\n"
         finally:

@@ -153,7 +153,7 @@ class AnalysisTaskService:
         return _serialize(task)
 
     @staticmethod
-    async def delete_for_session(db: AsyncSession, session_id: str) -> int:
+    async def delete_for_session(db: AsyncSession, session_id: str, redis_client=None) -> int:
         """
         Deletes any AnalysisTask whose completed result is tied to this chat
         session — thread_id for RAG (ask/compare/alpha) tasks, session_id for
@@ -165,11 +165,35 @@ class AnalysisTaskService:
         never got a result_metadata.response written) — those statuses also
         don't render a View action in the dashboard, so leaving them behind
         isn't the dangling-link problem this exists to fix.
+
+        Publishes a "task_deleted" event per removed task (when redis_client
+        is given) so an open dashboard drops it immediately instead of only
+        on the next full refetch — without this, a deleted run kept showing
+        up as "Ready" until the user navigated away and back.
         """
         thread_id_expr = AnalysisTask.result_metadata.op("->")("response").op("->>")("thread_id")
         session_id_expr = AnalysisTask.result_metadata.op("->")("response").op("->>")("session_id")
-        result = await db.execute(
-            delete(AnalysisTask).where(or_(thread_id_expr == session_id, session_id_expr == session_id))
-        )
+        condition = or_(thread_id_expr == session_id, session_id_expr == session_id)
+
+        result = await db.execute(select(AnalysisTask).where(condition))
+        tasks = list(result.scalars().all())
+        if not tasks:
+            return 0
+
+        deleted_refs = [(t.id, t.portfolio_id, t.user_id) for t in tasks]
+        await db.execute(delete(AnalysisTask).where(condition))
         await db.commit()
-        return result.rowcount or 0
+
+        if redis_client is not None:
+            for task_id, portfolio_id, user_id in deleted_refs:
+                payload = json.dumps({"type": "task_deleted", "id": task_id, "portfolio_id": portfolio_id})
+                try:
+                    await redis_client.publish(channel_for_portfolio(portfolio_id), payload)
+                except Exception as e:
+                    logger.warning("Failed to publish task deletion for %s: %s", task_id, e)
+                try:
+                    await redis_client.publish(channel_for_user(user_id), payload)
+                except Exception as e:
+                    logger.warning("Failed to publish user-scoped task deletion for %s: %s", task_id, e)
+
+        return len(deleted_refs)
