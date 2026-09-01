@@ -95,6 +95,9 @@ class Portfolio(Base):
     # Relationships
     sessions = relationship("Session", back_populates="portfolio", cascade="all, delete-orphan")
     chat_sessions = relationship("ChatSession", back_populates="portfolio", cascade="all, delete-orphan")
+    analyst_reports = relationship("AnalystReport", back_populates="portfolio", cascade="all, delete-orphan")
+    analysis_tasks = relationship("AnalysisTask", back_populates="portfolio", cascade="all, delete-orphan")
+    report_draft_items = relationship("ReportDraftItem", back_populates="portfolio", cascade="all, delete-orphan")
 
 
 class Session(Base):
@@ -198,7 +201,7 @@ class AnalystReport(Base):
     created_at         = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at         = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    portfolio = relationship("Portfolio", foreign_keys=[portfolio_id])
+    portfolio = relationship("Portfolio", foreign_keys=[portfolio_id], back_populates="analyst_reports")
 
 
 class ReportDraftItem(Base):
@@ -207,7 +210,7 @@ class ReportDraftItem(Base):
 
     id           = Column(Integer, primary_key=True, index=True)
     user_id      = Column(String, nullable=False, index=True)
-    portfolio_id = Column(Integer, nullable=True, index=True)  # scopes clip to a portfolio
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=True, index=True)  # scopes clip to a portfolio
     item_type    = Column(String, nullable=False)   # "text" | "image" | "summary"
     content      = Column(Text, nullable=True)       # markdown text or summary
     html         = Column(Text, nullable=True)       # sanitized rich-text HTML for this clip
@@ -217,6 +220,8 @@ class ReportDraftItem(Base):
     label        = Column(String, nullable=True)     # user-editable label
     sort_order   = Column(Integer, default=0)
     created_at   = Column(DateTime, default=datetime.utcnow)
+
+    portfolio = relationship("Portfolio", back_populates="report_draft_items")
 
 
 class Integration(Base):
@@ -290,4 +295,4 @@ class AnalysisTask(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    portfolio = relationship("Portfolio")
+    portfolio = relationship("Portfolio", back_populates="analysis_tasks")

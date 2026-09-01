@@ -102,13 +102,13 @@ class PortfolioService:
 
     @staticmethod
     async def delete_portfolio(db: AsyncSession, portfolio_id: int) -> bool:
-        """Delete a portfolio"""
+        """Delete a portfolio and all associated analyst reports"""
         result = await db.execute(select(Portfolio).where(Portfolio.id == portfolio_id))
         portfolio = result.scalar_one_or_none()
         if not portfolio:
             return False
 
-        await db.delete(portfolio)
+        db.delete(portfolio)
         await db.commit()
         return True
 
