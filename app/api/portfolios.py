@@ -224,6 +224,7 @@ async def get_cross_portfolio_dashboard(
             updated_at=to_iso_z(t.updated_at),
         )
         for t in tasks
+        if t.portfolio_id is not None and t.portfolio_id in portfolio_names_by_id
     ]
 
     return CrossPortfolioDashboardResponse(portfolios=portfolio_cards, recent_activity=recent_activity)
