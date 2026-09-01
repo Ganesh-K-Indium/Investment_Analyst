@@ -108,7 +108,7 @@ class PortfolioService:
         if not portfolio:
             return False
 
-        db.delete(portfolio)
+        await db.delete(portfolio)
         await db.commit()
         return True
 
