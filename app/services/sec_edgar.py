@@ -99,9 +99,13 @@ class SecEdgarService:
                                 period_end_date=item.get("period_end_date")
                             )
                             if ingest_result.get("success"):
-                                result["status"] = "ingested"
                                 result["success"] = True
                                 result["chunks_added"] = ingest_result.get("text_chunks", 0)
+                                # Distinguish between new ingestion and already ingested
+                                if ingest_result.get("text_processed") or ingest_result.get("images_processed"):
+                                    result["status"] = "ingested"
+                                else:
+                                    result["status"] = "already_ingested"
                             else:
                                 result["status"] = "ingest_failed"
                                 result["error"] = ingest_result.get("error", "Unknown ingestion error")
@@ -125,6 +129,7 @@ class SecEdgarService:
                     "date_range": {"start": str(start_date) if start_date else None, "end": str(end_date) if end_date else None},
                     "total_filings_found": len(to_fetch),
                     "ingested": sum(1 for r in results if r["status"] == "ingested"),
+                    "already_ingested": sum(1 for r in results if r["status"] == "already_ingested"),
                     "downloaded_only": sum(1 for r in results if r["status"] == "downloaded"),
                     "failed": sum(1 for r in results if r["status"] in ("failed", "ingest_failed")),
                     "filings": list(results),
