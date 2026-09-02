@@ -766,32 +766,6 @@ async def export_report_pdf(
 
             i += 1
 
-    # --- Images ---
-    if report.image_urls:
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(w, 8, "Charts & Visuals", new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(2)
-
-        tmp_files = []
-        for url in report.image_urls:
-            try:
-                suffix = ".png" if "png" in url.lower() else ".jpg"
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-                urllib.request.urlretrieve(url, tmp.name)
-                tmp_files.append(tmp.name)
-                pdf.image(tmp.name, x=10, w=w)
-                pdf.ln(4)
-            except Exception:
-                pdf.set_font("Helvetica", "I", 9)
-                pdf.multi_cell(w, 5, _safe(f"[Image unavailable: {url}]"))
-
-        for f in tmp_files:
-            try:
-                os.remove(f)
-            except Exception:
-                pass
-
     # --- Output ---
     pdf_bytes = pdf.output()
     filename = f"report_{report_id}_{report.company_name.replace(' ', '_')}.pdf"
