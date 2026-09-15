@@ -103,6 +103,7 @@ output/
 /UI
 *.tmp
 *.temp
+/sec_filings
 
 # AWS & Infrastructure
 *.pem
@@ -116,3 +117,4 @@ terraform.tfvars
 # IDE temporary files
 .vscode-server/
 node_modules/
+

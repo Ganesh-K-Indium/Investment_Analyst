@@ -36,7 +36,8 @@ TICKER_TO_COMPANY = {
     'tsm': 'taiwan semiconductor manufacturing',
     'asml': 'asml',
     'arm': 'arm',
-    
+    'avgo': 'broadcom',
+
     # Financial companies
     'jpm': 'jpmorgan chase',
     'bac': 'bank of america',
@@ -54,6 +55,7 @@ TICKER_TO_COMPANY = {
     
     # Healthcare
     'jnj': 'johnson & johnson',
+    'lly': 'eli lilly',
     'pfe': 'pfizer',
     'mrna': 'moderna',
     'abbv': 'abbvie',
