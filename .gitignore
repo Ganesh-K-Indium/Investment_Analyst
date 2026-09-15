@@ -4,42 +4,95 @@
 /.env.*.local
 .env.production
 service_account.json
+credentials.json
+aws_credentials
 
-# Python
+# Python - Core
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
+*.so
+
+# Python - Packages & Distributions
 pip-log.txt
 pip-delete-this-directory.txt
 .tox/
-.coverage
+.nox/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Testing & Coverage
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
 
 # Data & Databases
-/data
+/data/
+/data/macro/
+/data/checkpoints*
 *.db
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# Virtual Environments
 /venv
 /env
+/.venv
+/ENV
+env.bak/
+venv.bak/
 
 # Logs
 logs/
 output/
+*.log
+*.log.*
 
 # OS & IDE
 .DS_Store
+.AppleDouble
+.LSOverride
 .vscode/
+.vscode-insiders/
 .idea/
+*.sublime-workspace
+*.sublime-project
 *.swp
 *.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
 
 # Build artifacts
 /dist
 /build
-*.egg-info/
 
 # Project-specific
 *.png
@@ -48,11 +101,18 @@ output/
 /10k_7_companies
 /10q_filings
 /UI
+*.tmp
+*.temp
 
-# AWS & Infrastructure (credentials/configs should never be committed)
-aws_credentials
+# AWS & Infrastructure
 *.pem
 *.key
 terraform.tfvars
 *.tfstate
 *.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# IDE temporary files
+.vscode-server/
+node_modules/
