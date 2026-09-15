@@ -1,17 +1,58 @@
+# Environment & Secrets
 /.env
+/.env.local
+/.env.*.local
+.env.production
+service_account.json
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.pytest_cache/
+
+# Data & Databases
 /data
+*.db
+*.sqlite
+*.sqlite3
 /venv
-service_account.json
+/env
+
+# Logs
 logs/
 output/
-*.db
+
+# OS & IDE
 .DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+/dist
+/build
+*.egg-info/
+
+# Project-specific
 *.png
 /xml_filings
 /pdf_filings
 /10k_7_companies
 /10q_filings
 /UI
+
+# AWS & Infrastructure (credentials/configs should never be committed)
+aws_credentials
+*.pem
+*.key
+terraform.tfvars
+*.tfstate
+*.tfstate.*
