@@ -3,6 +3,7 @@ SEC EDGAR Filing Ingestion Endpoints
 
 POST /edgar/list — fetch list of 10-K/10-Q/8-K filings for a ticker directly from SEC EDGAR.
 POST /edgar/ingest — fetch and ingest SEC filings (via SSE streaming).
+GET /edgar/file/{file_path} — serve SEC filing PDF file
 """
 import logging
 import re
@@ -10,9 +11,10 @@ import json
 import asyncio
 from datetime import date
 from typing import List, Optional
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from app.database.models import User
@@ -142,3 +144,57 @@ async def ingest_edgar_filings(
             sse_log_context.reset(token)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@router.get(
+    "/file/{file_path:path}",
+    summary="Serve SEC filing PDF file",
+)
+async def get_sec_filing_pdf(
+    file_path: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Serve SEC filing PDFs with authentication.
+    File path can be just the filename or include sec_filings/ prefix.
+    """
+    # Security: prevent directory traversal attacks
+    if ".." in file_path or file_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    # Strip sec_filings/ prefix if present (frontend may include it)
+    if file_path.startswith("sec_filings/"):
+        file_path = file_path[len("sec_filings/"):]
+
+    file_path_obj = Path("sec_filings") / file_path
+
+    # Ensure file exists and is within sec_filings directory
+    try:
+        file_path_obj = file_path_obj.resolve()
+        sec_filings_dir = Path("sec_filings").resolve()
+
+        if not file_path_obj.is_relative_to(sec_filings_dir):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # If file doesn't exist and path doesn't have a directory component,
+        # try to find it in ticker subdirectories
+        if not file_path_obj.exists() and "/" not in file_path:
+            # Extract ticker from filename (e.g., GOOGL_10-K_... -> GOOGL)
+            ticker_candidate = file_path.split("_")[0].upper()
+            alternative_path = sec_filings_dir / ticker_candidate / file_path
+            if alternative_path.exists() and alternative_path.is_file():
+                file_path_obj = alternative_path
+
+        if not file_path_obj.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+        if not file_path_obj.is_file():
+            raise HTTPException(status_code=400, detail="Not a file")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    # Return PDF file with appropriate headers
+    return FileResponse(
+        file_path_obj,
+        media_type="application/pdf",
+        filename=file_path_obj.name
+    )
