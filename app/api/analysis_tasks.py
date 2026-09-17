@@ -134,11 +134,17 @@ async def enqueue_rag_compare(
     current_user: User = Depends(get_current_user),
 ):
     verify_user_id_matches(payload.user_id, current_user)
+    # Compare isn't restricted to a portfolio's own tickers, but when it's
+    # run from within a portfolio's page (thread_id points at that
+    # portfolio's session), tag the task with that portfolio_id anyway —
+    # same as ask/alpha — so it shows up in that portfolio's history.
+    session = await PortfolioService.get_session(db, payload.thread_id) if payload.thread_id else None
+    portfolio_id = session.portfolio.id if session else None
     scheduled_at = payload.scheduled_at
     payload_dict = payload.model_dump(exclude={"scheduled_at"})
     return await _enqueue(
         function="run_rag_compare", payload_dict=payload_dict, user=current_user,
-        agent_type=AgentType.RAG, task_type="compare", portfolio_id=None,
+        agent_type=AgentType.RAG, task_type="compare", portfolio_id=portfolio_id,
         queue=QUEUE_INTERACTIVE, db=db, scheduled_at=scheduled_at,
     )
 

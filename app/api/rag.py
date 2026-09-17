@@ -393,14 +393,22 @@ async def compare_core(
             import hashlib
             companies_key = "_".join(sorted(companies))  # sorted for order-independence
             thread_id = f"compare_{user_id}_{hashlib.md5(companies_key.encode()).hexdigest()[:12]}"
-        
+
+        # Compare isn't restricted to a portfolio's own tickers, but when
+        # it's run from within a portfolio's page (thread_id points at that
+        # portfolio's session), tag it with that portfolio_id anyway — same
+        # as ask/alpha — so it shows up in that portfolio's history instead
+        # of nowhere. Falls back to None when run without portfolio context.
+        portfolio_session = await PortfolioService.get_session(db, thread_id)
+        portfolio_id = portfolio_session.portfolio.id if portfolio_session else None
+
         # Create or get chat session for persistence
         chat_session = await ChatService.create_or_get_chat_session(
             db=db,
             session_id=thread_id,
             user_id=user_id,
             agent_type=AgentType.RAG,
-            portfolio_id=None,  # Comparisons are not portfolio-linked
+            portfolio_id=portfolio_id,
             title=f"Comparison: {comparison_str}",
             session_metadata={
                 "type": "compare",
