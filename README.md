@@ -164,15 +164,15 @@ python scripts/ingest_ticker.py AAPL
 | `GOOGLE_API_KEY` | Required | Gemini vision, used for quant chart-summary generation (distinct from the GPT-4o vision used in filing ingestion) |
 | `DATABASE_URL` | Required | Postgres connection string (one URL, translated internally to asyncpg at runtime / psycopg2 for Alembic) |
 | `REDIS_URL` | Required | Redis/Arq background job queue — backs interactive + batch analysis workers |
-| `FRED_API_KEY` | Required for macro data | Federal Reserve Economic Data API — **not in `.env.example`, must be added manually** |
-| `BLS_API_KEY` | Optional | Bureau of Labor Statistics API — supplements FRED for macro series; **not in `.env.example`** |
+| `FRED_API_KEY` | Required for macro data | Federal Reserve Economic Data API |
+| `BLS_API_KEY` | Optional | Bureau of Labor Statistics API — supplements FRED for macro series |
 | `GROQ_API_KEY` | Optional | Alternative/faster LLM provider |
 | `TAVILY_API_KEY` | Optional | Web-search augmentation (research agent, RAG web fallback, ALPHA horizon/action dimensions) |
 | `POSTGRES_USER`/`PASSWORD`/`DB` | Required (docker-compose) | Initializes the `postgres` container's default role/db |
 | `SEC_USER_AGENT` | Optional | Sent on every SEC EDGAR request per SEC's fair-use policy; defaults to a placeholder if unset — **set this to your own contact info** |
 | `JWT_SECRET_KEY` | Required in production | Signs auth tokens. In dev, if unset, a random secret is generated per process start (warning logged, tokens invalidate on restart). In production (`APP_ENV=production`), the app **refuses to start** if unset. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` / `REFRESH_TOKEN_EXPIRE_DAYS` | Optional | JWT lifetimes (default 30 min / 7 days) |
-| `INTEGRATION_SECRET_KEY` | Required for Integrations | Encrypts stored connector credentials (S3/SharePoint/Google Drive/etc.) — the app raises an error the first time an integration endpoint touches credentials if unset. **Not in `.env.example`.** |
+| `INTEGRATION_SECRET_KEY` | Required for Integrations | Encrypts stored connector credentials (S3/SharePoint/Google Drive/etc.) — the app raises an error the first time an integration endpoint touches credentials if unset |
 | `CLOUDINARY_CLOUD_NAME`/`API_KEY`/`API_SECRET` | Optional | Chart image hosting (technical analysis, options charts) — features degrade gracefully if unset |
 | `CORS_ALLOWED_ORIGINS` | Optional | Comma-separated list of allowed frontend origins (must exactly match the deployed frontend for credentialed requests) |
 | `TESSERACT_CMD` | Optional | Explicit path to the Tesseract OCR binary (needed in Docker/ECS environments); falls back to vision-only extraction if unset/missing |
@@ -211,7 +211,6 @@ docs/                   TECHNICAL_GUIDE.md — the full architectural reference
 
 ## Known limitations (see the technical guide for detail)
 
-- **`FRED_API_KEY`, `BLS_API_KEY`, `INTEGRATION_SECRET_KEY`, and Cloudinary vars aren't in `.env.example`** despite being required/used in code — add them manually per the table above.
 - Native-PDF tables now extract with real column structure (`ingestion/table_extractor.py`); image-embedded charts/tables go through OCR + GPT-4o vision. Flattened prose extraction is still the fallback when neither applies.
 - The semantic cache (`rag/graph/semantic_cache.py`) exists and is correctness-fixed but isn't wired into any live code path yet.
 - Auth is enforced **per-route** (`Depends(get_current_user)` on individual endpoints), not via a global middleware — by design, since login/signup/token-refresh and a handful of health/capabilities endpoints must stay public. Nearly every other endpoint requires a valid JWT; see `docs/TECHNICAL_GUIDE.md` for the exact per-router breakdown.
