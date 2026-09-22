@@ -336,7 +336,7 @@ class SecEdgarFetcher:
         semaphore = asyncio.Semaphore(max_concurrent_ingests)
 
         async def _process_one(item: Dict) -> Dict:
-            result = {**item, "status": "pending", "error": None, "chunks_added": None}
+            result = {**item, "status": "pending", "error": None, "chunks_added": None, "usage": None}
             try:
                 if not _is_valid_filing_pdf(item["pdf_path"], item["form"]):
                     if os.path.exists(item["pdf_path"]):
@@ -360,6 +360,7 @@ class SecEdgarFetcher:
                     if ingest_result.get("success"):
                         result["status"] = "ingested"
                         result["chunks_added"] = ingest_result.get("text_chunks", 0)
+                        result["usage"] = ingest_result.get("usage")
                     else:
                         result["status"] = "ingest_failed"
                         result["error"] = ingest_result.get("error", "Unknown ingestion error")

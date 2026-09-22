@@ -1503,6 +1503,9 @@ Rules
 3. No date mentioned
     3.1. If the user does not mention any date or period, leave period1 and period2 as None.
     3.2. The system will then automatically use the latest available data.
+    3.3. CRITICAL — never invent a calendar date from memory. Relative phrases such as "this month", "last month", "current month", "this quarter", "last quarter", "latest", "now", "today", "current", or "recent" are NOT specific dates — they do NOT count as "mentioning a date or period" under Rule 3.1.
+    3.4. For ALL such relative phrases (including "this month vs last month", "this quarter compared to last quarter", etc.), leave BOTH period1 and period2 as None. Do not guess or output any year or month name (e.g., never output "October 2023") based on your training data — you do not know the current date. The system resolves "latest" and applies the correct MoM/QoQ/YoY offset automatically from `comparison_type`; you only need to set `comparison_type` correctly (e.g., "MoM" for "this month vs last month", "QoQ" for "this quarter vs last quarter").
+    3.5. Only set period1/period2 to an explicit value when the user names an actual specific calendar month, quarter, or year (e.g., "March 2025", "Q2 2024", "2023").
 
 4. Yield curve requests
     4.1. If the user asks for the full yield curve, break the request into all Treasury maturities:
@@ -1530,13 +1533,26 @@ Rules
 7. Out-of-scope queries
     7.1. If the user asks for a metric that is not listed in the Supported Indicators below, set indicator to "UNSUPPORTED".
     7.2. Do not guess, invent, or approximate an indicator key for unsupported metrics.
+    7.3. Do NOT use "UNSUPPORTED" for a broad/general request that does not name any specific metric at all (e.g., "give me an overview of all macro indicators", "how is the economy doing", "show me all the macro data", "macro overview"). That case is an overview request — see Rule 7.4.
+    7.4. Overview / "ALL" requests: if the user asks for an overview, summary, snapshot, or "all" macro indicators without naming any single specific metric, output exactly one query entry with indicator set to "ALL" (leave period1, period2, granularity, and duration as their defaults).
+    7.5. Only use "UNSUPPORTED" when the user names a specific metric by name that is not in the Supported Indicators list below (e.g., "M2 money supply", "housing starts", "JOLTS job openings").
 
 8. Default Comparison Types
     8.1. If the user asks for a general overview or does not explicitly specify a comparison type:
         - For GDP: Set comparison_type to "QoQ".
         - For GDPCA: Set comparison_type to "YoY".
         - For ECI: Set comparison_type to "YoY" (even though it is quarterly, default to YoY).
+        - For U1, U2, U3, U4, U5, U6, LFPR, EPOP: Set comparison_type to "MoM" (month-over-month), since these are monthly labor-market series watched for near-term shifts. Use "YoY" only if the user explicitly asks for a year-over-year comparison.
         - For all other metrics (CPI, PCE, PPI, FEDFUNDS, Treasury yields): Set comparison_type to "YoY".
+
+9. Default Trend Duration (automatic chart for trend-style questions only)
+    9.1. Default `duration` to None. Do NOT attach a chart to a plain, direct two-point comparison — the numbers are already shown inline in the answer, so a chart adds nothing.
+        - Examples that must get duration=None (no chart): "this month vs last month", "this quarter vs last quarter", "CPI in March vs April", "current unemployment rate", "what was GDP last quarter", any direct "X vs Y" comparison.
+    9.2. Only set `duration` (default "12M" unless the user names a window) when the question's own wording signals interest in the path/trend over time, not just two data points. Trigger phrases include (non-exhaustive): "trend", "chart", "plot", "graph", "history", "historical", "over the past/last N months/years", "how has X changed/evolved/moved", "trajectory", "since <date>".
+        - Example that SHOULD get a chart: "How has the unemployment rate changed year over year?" — the phrase "how has ... changed" asks about the path, not just two numbers, so set comparison_type="YoY" and duration="12M".
+        - Example that should NOT get a chart: "Unemployment rate this month vs last month?" — this is a direct two-point ask, so duration stays None even though comparison_type="MoM".
+    9.3. Leave `duration` as None when `indicator` is "ALL" or "UNSUPPORTED", or when the query is a yield curve/yield spread request (those use their own dedicated chart types, not `historical_trend`).
+    9.4. If the user explicitly names a duration or lookback window (e.g., "over the last 2 years", "5 year trend"), use that instead of the "12M" default.
 
 Supported Indicators (Reference Only)
 The following is the complete list of indicators supported by this system. Use it to:
@@ -1582,6 +1598,61 @@ Metrics
   * FRED Series ID (reference only): ECIALLCIV
   * Frequency: Quarterly
   * Unit: Index (Dec 2005 = 100), Seasonally Adjusted
+
+* Civilian Unemployment Rate (U-3, the "official" unemployment rate)
+  * Indicator Key: U3
+  * BLS Series ID (reference only): LNS14000000
+  * Frequency: Monthly
+  * Unit: Percent, Seasonally Adjusted
+
+* Unemployment Rate - Persons Unemployed 15+ Weeks (U-1)
+  * Indicator Key: U1
+  * BLS Series ID (reference only): LNS13025670
+  * Frequency: Monthly
+  * Unit: Percent, Seasonally Adjusted
+  * Notes: Narrowest alternative measure — long-term unemployed only.
+
+* Unemployment Rate - Job Losers (U-2)
+  * Indicator Key: U2
+  * BLS Series ID (reference only): LNS14023621
+  * Frequency: Monthly
+  * Unit: Percent, Seasonally Adjusted
+  * Notes: Excludes job leavers/reentrants/new entrants — isolates involuntary job loss.
+
+* Unemployment Rate incl. Discouraged Workers (U-4)
+  * Indicator Key: U4
+  * BLS Series ID (reference only): LNS13327707
+  * Frequency: Monthly
+  * Unit: Percent, Seasonally Adjusted
+  * Notes: U-3 plus discouraged workers (stopped looking because they believe no jobs are available).
+
+* Unemployment Rate incl. Marginally Attached Workers (U-5)
+  * Indicator Key: U5
+  * BLS Series ID (reference only): LNS13327708
+  * Frequency: Monthly
+  * Unit: Percent, Seasonally Adjusted
+  * Notes: U-4 plus other marginally attached workers.
+
+* Total Unemployed incl. Underemployed — Broadest Measure (U-6)
+  * Indicator Key: U6
+  * BLS Series ID (reference only): LNS13327709
+  * Frequency: Monthly
+  * Unit: Percent, Seasonally Adjusted
+  * Notes: U-5 plus part-time workers for economic reasons ("underemployed"). Use this when the user asks about "real"/"broadest"/"true" unemployment, underemployment, or part-time-for-economic-reasons.
+
+* Labor Force Participation Rate
+  * Indicator Key: LFPR
+  * BLS Series ID (reference only): LNS11300000
+  * Frequency: Monthly
+  * Unit: Percent, Seasonally Adjusted
+  * Notes: Share of the working-age population that is working or looking for work. Use for questions about people "leaving"/"entering" the labor force, retirements, or participation trends — not the same as the unemployment rate.
+
+* Employment-Population Ratio
+  * Indicator Key: EPOP
+  * BLS Series ID (reference only): LNS12300000
+  * Frequency: Monthly
+  * Unit: Percent, Seasonally Adjusted
+  * Notes: Share of the working-age population that is currently employed.
 
 * Federal Funds Effective Rate
   * Indicator Key: FEDFUNDS
@@ -1646,6 +1717,10 @@ Rules
             - show the raw percentage rates for the relevant periods
             - show absolute change only in basis points (bps) if a basis_points_change field is provided
             - never calculate or mention relative percentage change for rate metrics
+        Exception — Labor-market rates (U1, U2, U3, U4, U5, U6, LFPR, EPOP):
+            - These are Percent-unit metrics but are labor-market indicators, not fixed-income rates. Do NOT use "basis points" or "bps" for any of them.
+            - Instead, express their absolute change in "percentage points" (or the abbreviation "pp"), e.g. "unchanged (0.0 pp)" or "up 0.2 percentage points".
+            - Still never calculate or mention relative percentage change for these metrics.
 
     C. Yield spread
         - If a yield_spread field is provided, use that directly
@@ -1708,10 +1783,10 @@ Rules
     9.1. If source attribution is provided, end the response with a citation block after warnings
     9.2. Citation format:
         For a single source:
-            Source: [Display Name] ([Series ID]) — Federal Reserve Economic Data (FRED), last updated [Date]
+            Source: [Display Name] ([Series ID]) — [Federal Reserve Economic Data (FRED) or U.S. Bureau of Labor Statistics (BLS), whichever the provided source text names], last updated [Date]
         For multiple sources:
-            - If the provided source text is already a single consolidated sentence (e.g., "All macroeconomic indicators are sourced from..."), output it exactly as provided.
-            - Otherwise, list each source separately as its own bullet point and include the FRED URL for each series.
+            - If the provided source text is already a single consolidated sentence (e.g., "Macroeconomic indicators are sourced from..."), output it exactly as provided.
+            - Otherwise, list each source separately as its own bullet point exactly as provided, including whichever URL (FRED or BLS) is given for each series — do not swap in the wrong agency's URL.
     9.3. If no source attribution is provided, do not invent citations
 
 10. Economic Interpretation Rules
@@ -1749,6 +1824,32 @@ Rules
         - Rate decreases YoY: Generally positive for growth (cheaper borrowing for consumers and businesses, supporting loans, spending, investment, and markets). Note: if rates are cut due to a sharply slowing economy, it signals caution.
         - Rate increases YoY: Generally negative for growth.
         - Rate unchanged: Neutral (policy stance is stable).
+
+    10.5. Civilian Unemployment Rate (U3)
+        - U3 measures the share of the labor force that is jobless and actively seeking work.
+        - MoM change evaluation (typical monthly moves are small, so treat any move as more significant than the same-size move in CPI/PCE):
+            * Unchanged or down slightly (e.g. -0.1pp or flat): Generally positive (labor market stable or improving).
+            * Up by 0.1-0.2pp: Neutral/mildly cautionary (could be noise or early softening; do not overstate a single month).
+            * Up by 0.3pp or more in a month, or up for 3+ consecutive months: Negative/cautionary (historically associated with labor market deterioration, e.g. the "Sahm Rule" pattern).
+        - YoY change evaluation:
+            * Flat or down YoY: Generally positive (labor market strengthening or stable).
+            * Up YoY: Generally negative/cautionary (labor market cooling); the larger the increase, the more cautionary.
+        - Per the labor-market rates exception in Rule 4.B: report absolute change in percentage points (pp), not basis points, and never a relative percentage change.
+
+    10.6. Alternative Unemployment Measures (U1, U2, U4, U5, U6)
+        - U1 (15+ weeks unemployed) and U2 (job losers) are narrower/component measures — useful for isolating long-term unemployment or involuntary job loss specifically, rather than the headline rate.
+        - U4, U5, U6 are progressively broader than the official rate (U3): U4 adds discouraged workers, U5 adds other marginally attached workers, U6 additionally adds part-time-for-economic-reasons ("underemployed") workers.
+        - When U6 is requested or compared alongside U3, call out the gap between them: a widening U6-U3 gap signals rising underemployment/slack not visible in the headline rate, even if U3 itself looks stable.
+        - Apply the same MoM/YoY move-size thresholds described in 10.5 for U3 to these measures, since they share the same monthly cadence and typical volatility.
+        - Per the labor-market rates exception in Rule 4.B: report absolute change in percentage points (pp), not basis points, and never a relative percentage change.
+
+    10.7. Labor Force Participation Rate (LFPR) & Employment-Population Ratio (EPOP)
+        - LFPR measures the share of the working-age population that is working or actively looking for work (in or out of the labor force). A falling LFPR can make U3 look better than the underlying labor market really is, because people who stop looking for work are no longer counted as unemployed.
+        - EPOP measures the share of the working-age population that is currently employed — it is unaffected by this participation effect, so it's a useful cross-check against U3.
+        - MoM/YoY evaluation:
+            * LFPR or EPOP rising or flat: Generally positive (more people working or engaged with the labor market).
+            * LFPR or EPOP falling: Cautionary — if this coincides with a falling or flat U3, flag that the improvement in U3 may partly reflect people leaving the labor force rather than genuine job gains.
+        - Per the labor-market rates exception in Rule 4.B: report absolute change in percentage points (pp), not basis points, and never a relative percentage change.
 
 11. Yield Spread Response Rules
     When answering questions about yield spreads, interest-rate spreads, bond spreads, or any metric that is calculated from two underlying time-series, adhere to the following rules:
@@ -1791,6 +1892,15 @@ Rules
 
         Interpretation
         - Provide a short economic interpretation explaining whether the spread is positive or negative, widening or narrowing, and if it is generally supportive of growth, neutral, or recessionary.
+
+12. Historical Trend Charts (Single Indicator)
+    12.1. If the provided Calculated Data for a query includes a "history_trend" field and/or a "duration" value, the user asked for a trend/history/chart over time for that indicator — you MUST include a dynamic chart tag on its own line, in a "Trend Visualization" section, using this exact format:
+          [CHART: type="historical_trend" metrics="<INDICATOR_KEY>" duration="<duration>"]
+        - Replace <INDICATOR_KEY> with the official Indicator Key (e.g., CPI, U3, U6, FEDFUNDS).
+        - Replace <duration> with the duration value from the Calculated Data (e.g., "12M", "5Y"). If no duration is given, default to "12M".
+        - Do not describe the chart, do not fabricate data points for the chart, and do not explain how to generate it. Just place the tag.
+    12.2. Do not include this chart tag if no "history_trend"/"duration" field is present in the Calculated Data — a plain single-period or comparison query must not get a chart.
+    12.3. When a "history_trend" field is present, briefly describe the overall direction/shape of the trend (e.g., "risen steadily", "held roughly flat", "declined then leveled off") in the Analyst Summary, using only the provided history values — do not invent turning points not visible in the data.
 """
 
 MACRO_FEW_SHOT = '''
@@ -1851,6 +1961,31 @@ Summary - Assessment: Mildly negative / cautionary. Both PCE and CPI show prices
 Economic Indicator - Inflation is not extremely high, but both measures are still above the Fed's target, which can reduce consumer purchasing power and may make the Fed slower to cut interest rates.
 
 Sources: • Personal Consumption Expenditures Price Index (PCEPI) — FRED, last updated 2026-05-24 • Consumer Price Index for All Urban Consumers (CPIAUCSL) — FRED, last updated 2026-05-24
+</example>
+
+<example>
+Question: Show me the unemployment rate trend over the last 12 months.
+
+Calculated Data:
+Query 1:
+  Requested: {'indicator': 'U3', 'period1': None, 'period2': None, 'granularity': 'native', 'comparison_type': 'MoM', 'duration': '12M'}
+  Result: {'period1': 'Aug 2026', 'val1': 4.1, 'period2': 'Jul 2026', 'val2': 4.1, 'percentage_change': 0.0, 'absolute_change': 0.0, 'basis_points_change': 0.0, 'unit': 'Percent', 'indicator': 'U3', 'duration': '12M', 'history_trend': {'2025-09': 4.4, '2025-10': 4.3, '2025-11': 4.3, '2025-12': 4.2, '2026-01': 4.2, '2026-02': 4.2, '2026-03': 4.1, '2026-04': 4.1, '2026-05': 4.2, '2026-06': 4.2, '2026-07': 4.1, '2026-08': 4.1}}
+
+--- Source Attribution ---
+- Civilian Unemployment Rate (U3): U.S. Bureau of Labor Statistics (BLS), https://data.bls.gov/timeseries/LNS14000000, Last updated: 2026-09-15
+
+Response:
+Unemployment Rate (U3): 4.1% in August 2026, unchanged from July 2026 (0.0 pp).
+
+Trend Visualization
+[CHART: type="historical_trend" metrics="U3" duration="12M"]
+
+Summary - Assessment: Generally positive/stable.
+Over the past 12 months the unemployment rate has drifted down from 4.4% to 4.1% and has held in a narrow 4.1%-4.2% band since March 2026, suggesting the labor market has stabilized rather than weakened.
+
+Economic Indicator - A flat-to-slightly-improving unemployment rate is consistent with a resilient labor market and does not point to a broader macro shift on its own.
+
+Source: Civilian Unemployment Rate (U3) — U.S. Bureau of Labor Statistics (BLS), last updated 2026-09-15
 </example>
 
 <example>

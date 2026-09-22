@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import time
 import fitz
 import json
 import openai
@@ -13,6 +14,16 @@ from langchain_core.documents import Document
 from pathlib import Path
 from dotenv import load_dotenv
 import pytesseract
+
+# Ensure app/utils is importable when this module is loaded standalone from
+# ingestion/ (mirrors the same sys.path setup in ingestion/pdf_processor1.py)
+import sys
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(_current_dir)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+from app.utils.usage_tracker import record_usage
 
 load_dotenv()
 
@@ -382,7 +393,13 @@ class ImageDescription:
         try:
             # Step 1: Extract ALL text using OCR
             logger.info("    Running OCR on %s...", os.path.basename(image_path))
+            _ocr_start = time.perf_counter()
             ocr_text = self.extract_text_from_image_ocr(image_path)
+            record_usage(
+                stage="ingestion.image_ocr", model="tesseract",
+                duration_seconds=time.perf_counter() - _ocr_start,
+                detail=os.path.basename(image_path),
+            )
 
             if ocr_text:
                 logger.info("    OCR extracted %d characters", len(ocr_text))
@@ -493,6 +510,7 @@ class ImageDescription:
             Only respond "INVALID_IMAGE" if this is purely decorative (logo, border, background) with ZERO data.
             """
 
+            _vision_start = time.perf_counter()
             response = await self.openai_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -549,8 +567,19 @@ class ImageDescription:
                 temperature=0  # Zero temperature for maximum accuracy
             )
             
+            _vision_duration = time.perf_counter() - _vision_start
+            usage = getattr(response, "usage", None)
+            record_usage(
+                stage="ingestion.image_vision", model="gpt-4o",
+                prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                total_tokens=getattr(usage, "total_tokens", 0) or 0,
+                duration_seconds=_vision_duration,
+                detail=os.path.basename(image_path),
+            )
+
             result = response.choices[0].message.content.strip()
-            
+
             # Debug logging
             if not result or len(result) < 10:
                 logger.warning("\n  WARNING: Got very short/empty response for %s", os.path.basename(image_path))

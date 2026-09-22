@@ -4,6 +4,8 @@ this module is used for loading the unified RAG database with hybrid search capa
 
 import asyncio
 import logging
+import time
+import tiktoken
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore, RetrievalMode
@@ -13,7 +15,16 @@ from qdrant_client.http.models import PayloadSchemaType
 from tqdm import tqdm
 import os
 
+from app.utils.usage_tracker import record_usage
+
 logger = logging.getLogger("rag.vectordb.client")
+
+# text-embedding-3-large uses the same BPE as GPT-4/GPT-4o (cl100k_base).
+# Embeddings billing is input-tokens-only (no "completion" side), and
+# OpenAIEmbeddings.aembed_documents() doesn't surface the API's usage field,
+# so token counts here are a tiktoken-based count of the exact input text —
+# not an estimate, just not read back from the response itself.
+_EMBEDDING_ENCODING = tiktoken.get_encoding("cl100k_base")
 
 load_dotenv()
 
@@ -387,9 +398,19 @@ class load_vector_database():
             "Generating dense embeddings for %d %s (%d batch(es) of %d, concurrent)...",
             len(texts), label, len(batches), BATCH_SIZE,
         )
+        _embed_start = time.perf_counter()
         batch_results = await asyncio.gather(*(self.embeddings.aembed_documents(batch) for batch in batches))
+        _embed_duration = time.perf_counter() - _embed_start
         for batch_embeddings in batch_results:
             result['dense'].extend(batch_embeddings)
+
+        _input_tokens = sum(len(_EMBEDDING_ENCODING.encode(t)) for t in texts)
+        record_usage(
+            stage=f"embeddings.dense.{label}", model="text-embedding-3-large",
+            prompt_tokens=_input_tokens, total_tokens=_input_tokens,
+            duration_seconds=_embed_duration,
+            detail=f"{len(texts)} text(s), {len(batches)} batch(es)",
+        )
 
         # Generate sparse embeddings (BM25)
         if self.sparse_model:

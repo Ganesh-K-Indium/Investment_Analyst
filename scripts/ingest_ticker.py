@@ -35,12 +35,19 @@ At the selection prompt, mix and match any of:
  
 import argparse
 import asyncio
+import logging
 import os
 import sys
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
+
+# Surface the pipeline's INFO-level logs (stage banners, per-image OCR/vision
+# usage lines from app/utils/usage_tracker, etc.) on the console — without
+# this, the logging module's default root level (WARNING) silently drops
+# them and only tqdm progress bars are visible.
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 from ingestion.edgar_fetcher import SecEdgarFetcher, VALID_FORM_TYPES  # noqa: E402
 from app.utils.company_mapping import get_fiscal_quarter  # noqa: E402
@@ -315,10 +322,25 @@ async def main():
             print(f"Ingested:  {summary['ingested']}")
             print(f"Failed:    {summary['failed']}")
             if not args.no_ingest:
+                total_tokens = 0
+                total_seconds = 0.0
                 for f in summary["filings"]:
                     status_marker = "OK" if f["status"] == "ingested" else "FAIL"
+                    usage = f.get("usage")
+                    usage_str = ""
+                    if usage:
+                        usage_str = (
+                            f" — {usage['total_tokens']} tokens "
+                            f"(prompt={usage['prompt_tokens']}, completion={usage['completion_tokens']}) "
+                            f"in {usage['total_seconds']:.1f}s"
+                        )
+                        total_tokens += usage["total_tokens"]
+                        total_seconds += usage["total_seconds"]
                     print(f"  [{status_marker}] {f['form']} ({f.get('period_end_date') or 'unknown'}) — "
-                          f"{f.get('chunks_added', 0)} chunks" + (f" — {f['error']}" if f.get("error") else ""))
+                          f"{f.get('chunks_added', 0)} chunks" + usage_str +
+                          (f" — {f['error']}" if f.get("error") else ""))
+                if total_tokens:
+                    print(f"\nTotal for this run: {total_tokens} tokens, {total_seconds:.1f}s of LLM/embedding time")
 
             if explicit_form_types or args.all:
                 # Scripted invocation — single-shot, exit after one ingestion.

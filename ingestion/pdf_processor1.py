@@ -5,6 +5,7 @@ import re
 import hashlib
 import asyncio
 import logging
+import time
 import traceback
 from datetime import datetime
 import fitz  # PyMuPDF
@@ -27,6 +28,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from app.utils.company_mapping import TICKER_TO_COMPANY, get_company_name, get_ticker
+from app.utils.usage_tracker import track_usage, record_usage
 
 load_dotenv()
 
@@ -543,7 +545,8 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
         "images_already_existed": False,
         "image_count": 0,
         "messages": [],
-        "error": None
+        "error": None,
+        "usage": None
     }
 
     try:
@@ -584,6 +587,19 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
                     result["fiscal_quarter"] = int(m.group(1))
             elif "Error" in message:
                 result["error"] = message
+            elif message.startswith("[usage] Total ingestion time:"):
+                m = re.search(
+                    r"Total ingestion time:\s*([\d.]+)s \| Total tokens:\s*(\d+) "
+                    r"\(prompt=(\d+), completion=(\d+)\)",
+                    message,
+                )
+                if m:
+                    result["usage"] = {
+                        "total_seconds": float(m.group(1)),
+                        "total_tokens": int(m.group(2)),
+                        "prompt_tokens": int(m.group(3)),
+                        "completion_tokens": int(m.group(4)),
+                    }
 
         # Determine overall success
         result["success"] = not result["error"] and (
@@ -617,6 +633,13 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
         yield f"Error: File does not exist: {uploaded_pdf_path}"
         yield f"Failed to process {os.path.basename(uploaded_pdf_path)} - file not found"
         return
+
+    # Entered/exited manually (rather than a `with` block) so the large
+    # existing try/except body below doesn't need re-indenting; every exit
+    # path (success, error, or falling off the end) reaches the `finally`.
+    usage_ctx = track_usage(f"ingest:{os.path.basename(uploaded_pdf_path)}")
+    usage_ctx.__enter__()
+    ingest_start = time.perf_counter()
 
     try:
         yield f"Processing document: {uploaded_pdf_path}"
@@ -728,9 +751,15 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
             yield f"{source_file_name} already ingested (text) with {len(existing_points)} chunks. Skipping text ingestion."
 
         if not text_already_exists:
+            _text_extract_start = time.perf_counter()
             documents = await asyncio.to_thread(
                 _extract_text_documents, pdf_document, source_file_name, company_name, ticker,
                 content_hash, resolved_year, filing_type, period_end_date, fiscal_quarter,
+            )
+            record_usage(
+                stage="ingestion.text_extraction", model="n/a",
+                duration_seconds=time.perf_counter() - _text_extract_start,
+                detail=f"{len(documents)} segment(s)" if documents else "0 segments",
             )
 
             if documents:
@@ -763,7 +792,13 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
         img_processor = ImageDescription(uploaded_pdf_path, filing_type=filing_type)
 
         # Blocking PyMuPDF image extraction + hashing over every page — offload.
+        _img_extract_start = time.perf_counter()
         image_info, image_hashes = await asyncio.to_thread(img_processor.get_image_information)
+        record_usage(
+            stage="ingestion.image_extraction", model="n/a",
+            duration_seconds=time.perf_counter() - _img_extract_start,
+            detail=f"{len(image_hashes)} image(s) found",
+        )
 
         if image_hashes:
             yield f"Found {len(image_hashes)} images; checking which are already ingested..."
@@ -844,6 +879,14 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
         else:
             yield f"Completed ingestion for {source_file_name}"
 
+        total_duration = time.perf_counter() - ingest_start
+        summary = usage_ctx.tracker.summary()
+        yield (
+            f"[usage] Total ingestion time: {total_duration:.1f}s | "
+            f"Total tokens: {summary['total_tokens']} "
+            f"(prompt={summary['total_prompt_tokens']}, completion={summary['total_completion_tokens']})"
+        )
+
     except Exception as e:
         yield f"Error while processing PDF {uploaded_pdf_path}: {str(e)}"
         import traceback
@@ -851,3 +894,6 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
 
     except Exception as e:
         yield f"Error while processing PDF {uploaded_pdf_path}: {str(e)}"
+
+    finally:
+        usage_ctx.__exit__(None, None, None)

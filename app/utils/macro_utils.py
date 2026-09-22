@@ -26,6 +26,14 @@ SERIES_DISPLAY_NAMES = {
     "PCE":      "Personal Consumption Expenditures Price Index",
     "PPI":      "Producer Price Index for Final Demand",
     "ECI":      "Employment Cost Index",
+    "U3":       "Civilian Unemployment Rate (U-3)",
+    "U1":       "Unemployment Rate - Persons Unemployed 15+ Weeks (U-1)",
+    "U2":       "Unemployment Rate - Job Losers (U-2)",
+    "U4":       "Unemployment Rate incl. Discouraged Workers (U-4)",
+    "U5":       "Unemployment Rate incl. Marginally Attached Workers (U-5)",
+    "U6":       "Total Unemployed incl. Underemployed, Broadest Measure (U-6)",
+    "LFPR":     "Labor Force Participation Rate",
+    "EPOP":     "Employment-Population Ratio",
     "FEDFUNDS": "Federal Funds Effective Rate",
     "GS1M":     "1-Month Treasury Constant Maturity Rate",
     "GS3M":     "3-Month Treasury Constant Maturity Rate",
@@ -459,22 +467,31 @@ def build_source_attribution_context(calc_results: list) -> str:
         
     # If there are many indicators, consolidate to keep UI clean
     if len(valid_indicators) > 3 or "ALL" in valid_indicators:
-        return f"\n--- Source Attribution ---\n- All macroeconomic indicators are sourced from Federal Reserve Economic Data (FRED), Last updated: {sync_date}\n"
+        return f"\n--- Source Attribution ---\n- Macroeconomic indicators are sourced from Federal Reserve Economic Data (FRED) and the U.S. Bureau of Labor Statistics (BLS), Last updated: {sync_date}\n"
 
     source_lines = []
     for indicator in valid_indicators:
         if indicator == "ALL":
             continue
-            
+
         series_info = metadata.get("series_ids", {}).get(indicator, {})
         series_id = series_info.get("series_id", indicator)
         display_name = SERIES_DISPLAY_NAMES.get(indicator, indicator)
+        source = series_info.get("source", "FRED")
 
-        source_lines.append(
-            f"- {display_name} ({series_id}): "
-            f"Federal Reserve Economic Data (FRED), "
-            f"https://fred.stlouisfed.org/series/{series_id}, "
-            f"Last updated: {sync_date}"
-        )
-        
+        if source == "BLS":
+            source_lines.append(
+                f"- {display_name} ({series_id}): "
+                f"U.S. Bureau of Labor Statistics (BLS), "
+                f"https://data.bls.gov/timeseries/{series_id}, "
+                f"Last updated: {sync_date}"
+            )
+        else:
+            source_lines.append(
+                f"- {display_name} ({series_id}): "
+                f"Federal Reserve Economic Data (FRED), "
+                f"https://fred.stlouisfed.org/series/{series_id}, "
+                f"Last updated: {sync_date}"
+            )
+
     return "\n--- Source Attribution ---\n" + "\n".join(source_lines) + "\n"

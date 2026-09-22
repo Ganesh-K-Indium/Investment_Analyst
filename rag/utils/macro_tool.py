@@ -7,8 +7,8 @@ from app.utils.macro_utils import get_macro_comparison, get_all_macro_latest
 
 class MacroDataInput(BaseModel):
     indicator: str = Field(
-        ..., 
-        description="The macroeconomic indicator to analyze. Must be one of: 'GDP', 'CPI', 'PCE', 'PPI', 'ECI', or 'ALL'."
+        ...,
+        description="The macroeconomic indicator to analyze. Must be one of: 'GDP', 'CPI', 'PCE', 'PPI', 'ECI', 'U3', 'U1', 'U2', 'U4', 'U5', 'U6', 'LFPR', 'EPOP', or 'ALL'."
     )
     period1: Optional[str] = Field(
         None, 
@@ -32,7 +32,7 @@ def macro_data_tool(indicator: str, period1: Optional[str] = None, period2: Opti
     """
     Use this tool to fetch and calculate accurate percentage changes for key macroeconomic indicators.
     It automatically handles monthly-to-quarterly aggregation and missing data.
-    Supported indicators: GDP, CPI, PCE, PPI, ECI, or ALL.
+    Supported indicators: GDP, CPI, PCE, PPI, ECI, U3, U1, U2, U4, U5, U6, LFPR, EPOP, or ALL.
     """
     if indicator.upper() == "ALL":
         result = get_all_macro_latest(comparison_type)

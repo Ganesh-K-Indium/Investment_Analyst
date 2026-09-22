@@ -2,12 +2,14 @@
 RAG endpoints (ask and compare) with portfolio integration and chat persistence
 """
 import logging
+import time
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import HumanMessage
+from langchain_community.callbacks import get_openai_callback
 from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
 from app.services.chat import ChatService
@@ -16,6 +18,7 @@ from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.services.vectordb_manager import get_vectordb_manager
 from app.utils.company_mapping import get_ticker
 from app.utils.time import to_iso_z
+from app.utils.usage_tracker import track_usage
 import asyncio
 import uuid
 import json
@@ -44,6 +47,30 @@ def _maybe_save_debug_response(response_data: dict, prefix: str) -> None:
         logger.info("Debug response saved to: %s", json_path)
     except Exception as e:
         logger.warning("Failed to save debug response: %s", e)
+
+
+async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str):
+    """Run one LangGraph query end-to-end while capturing total tokens (via
+    LangChain's get_openai_callback, which aggregates every ChatOpenAI call
+    made anywhere in the graph during this invoke — main RAG generation,
+    grading, verification, and — for ALPHA — all 5 dimension chains plus the
+    combiner) and wall-clock time. Isolated per call via a contextvar
+    (app/utils/usage_tracker.track_usage), so concurrent requests (e.g. one
+    ainvoke per ticker in an ALPHA portfolio run) don't interfere with each
+    other's totals.
+
+    Returns (result, usage_summary_dict).
+    """
+    with track_usage(run_label) as tracker:
+        start = time.perf_counter()
+        with get_openai_callback() as cb:
+            result = await agent.ainvoke(inputs, config)
+        tracker.record(
+            stage="graph_total", model="gpt-4o/gpt-4o-mini (all nodes)",
+            prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
+            total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - start,
+        )
+    return result, tracker.summary()
 
 
 def _build_citation_info(result: dict) -> list:
@@ -235,8 +262,8 @@ async def ask_core(
             "chart_url": None,
             "chart_filename": None
         }
-        result = await agent.ainvoke(inputs, config)
-    
+        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"ask:{thread_id}")
+
         # Extract answer
         answer = result["messages"][-1].content
         
@@ -271,10 +298,12 @@ async def ask_core(
                 "sub_query_analysis": result.get("sub_query_analysis", {}),
                 "sub_query_results": result.get("sub_query_results", {}),
                 "intermediate_message": result.get("Intermediate_message", ""),
-                "ticker": result.get("ticker")
-            }
+                "ticker": result.get("ticker"),
+                "usage": usage_summary
+            },
+            token_count=usage_summary["total_tokens"]
         )
-        
+
         logger.info("Query: %s | Thread: %s | Answer: %.200s...", query, thread_id, answer)
 
         # Prepare response
@@ -482,13 +511,13 @@ Compare {comparison_str} {year_str}:
         }
         
         # Invoke with memory
-        result = await agent.ainvoke(inputs, config)
-        
+        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"compare:{thread_id}")
+
         # Extract answer and chart URL
         answer = result["messages"][-1].content
         chart_url = result.get("chart_url")
         chart_filename = result.get("chart_filename")
-        
+
         # Save assistant message with metadata
         await ChatService.add_message(
             db=db,
@@ -521,10 +550,12 @@ Compare {comparison_str} {year_str}:
                 ],
                 "sub_query_analysis": result.get("sub_query_analysis", {}),
                 "sub_query_results": result.get("sub_query_results", {}),
-                "intermediate_message": result.get("Intermediate_message", "")
-            }
+                "intermediate_message": result.get("Intermediate_message", ""),
+                "usage": usage_summary
+            },
+            token_count=usage_summary["total_tokens"]
         )
-        
+
         logger.info("Comparison query: %s | Thread: %s | Chart: %s", comparison_str, thread_id, chart_url)
         
         # Prepare response
@@ -689,13 +720,14 @@ async def alpha_core(
                     "chart_filename": None
                 }
 
-                result = await agent.ainvoke(inputs, config)
+                result, usage_summary = await _run_agent_tracked(
+                    agent, inputs, config, f"alpha:{thread_id}:{ticker}")
                 report = result.get("alpha_report") or result["messages"][-1].content
 
                 if on_ticker_done is not None:
                     await on_ticker_done(ticker, index, total)
 
-                return {"ticker": ticker, "report": report}
+                return {"ticker": ticker, "report": report, "usage": usage_summary}
 
         results = await asyncio.gather(
             *(_run_one(i, ticker) for i, ticker in enumerate(resolved_tickers))
@@ -714,8 +746,10 @@ async def alpha_core(
                     "portfolio_id": portfolio.id,
                     "portfolio_name": portfolio.name,
                     "ticker": item["ticker"],
-                    "alpha_pillar": None
-                }
+                    "alpha_pillar": None,
+                    "usage": item["usage"]
+                },
+                token_count=item["usage"]["total_tokens"]
             )
 
         return {

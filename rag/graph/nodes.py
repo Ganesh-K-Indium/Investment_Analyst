@@ -2823,7 +2823,10 @@ def alpha_generate_report(state):
     ticker = state.get("ticker", "UNKNOWN")
     alpha_dimensions = state.get("alpha_dimensions", {})
     
+    import time
     from langchain_openai import ChatOpenAI
+    from langchain_community.callbacks import get_openai_callback
+    from app.utils.usage_tracker import record_usage
     from rag.prompts.prompts import (
         get_alpha_alignment_chain,
         get_alpha_liquidity_chain,
@@ -2832,7 +2835,7 @@ def alpha_generate_report(state):
         get_alpha_action_chain,
         get_alpha_report_combiner_chain
     )
-    
+
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
     # Helper to format documents
@@ -2910,7 +2913,15 @@ def alpha_generate_report(state):
 
         try:
             chain = chain_func(llm, ticker=ticker) if dim_key == 'performance' else chain_func(llm)
-            result = chain.invoke(invoke_kwargs)
+            _dim_start = time.perf_counter()
+            with get_openai_callback() as cb:
+                result = chain.invoke(invoke_kwargs)
+            record_usage(
+                stage=f"alpha.{dim_key}", model="gpt-4o-mini",
+                prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
+                total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - _dim_start,
+                detail=f"ticker={ticker}",
+            )
 
             analysis = result.analysis
 
@@ -2934,15 +2945,23 @@ def alpha_generate_report(state):
 
     try:
         combiner_chain = get_alpha_report_combiner_chain(llm)
-        final_report = combiner_chain.invoke({
-            "company": ticker,
-            "ticker": ticker,
-            "alignment": dimension_outputs.get('alignment', {}).get('analysis', 'N/A'),
-            "liquidity": dimension_outputs.get('liquidity', {}).get('analysis', 'N/A'),
-            "performance": dimension_outputs.get('performance', {}).get('analysis', 'N/A'),
-            "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
-            "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
-        })
+        _combiner_start = time.perf_counter()
+        with get_openai_callback() as cb:
+            final_report = combiner_chain.invoke({
+                "company": ticker,
+                "ticker": ticker,
+                "alignment": dimension_outputs.get('alignment', {}).get('analysis', 'N/A'),
+                "liquidity": dimension_outputs.get('liquidity', {}).get('analysis', 'N/A'),
+                "performance": dimension_outputs.get('performance', {}).get('analysis', 'N/A'),
+                "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
+                "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
+            })
+        record_usage(
+            stage="alpha.combiner", model="gpt-4o-mini",
+            prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
+            total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - _combiner_start,
+            detail=f"ticker={ticker}",
+        )
         logger.info(f"    ✓ Final report: {len(final_report)} chars")
 
     except Exception as e:
@@ -3505,7 +3524,15 @@ def detect_macro_query(state):
         "producer price index", "economy", "interest rate",
         "yield curve", "yield spread", "treasury yield", "treasury curve",
         "bond yield", "fed funds", "federal funds", "fedfunds",
-        "maturity", "10-year", "2-year", "30-year", "t-bill", "t-bond"
+        "maturity", "10-year", "2-year", "30-year", "t-bill", "t-bond",
+        "unemployment", "unrate", "jobless rate", "jobless claims",
+        "labor market", "labour market", "jobs report", "nonfarm payroll",
+        "labor force participation", "labour force participation",
+        "u-1", "u1 rate", "u-2", "u2 rate", "u-3", "u-4", "u4 rate",
+        "u-5", "u5 rate", "u-6", "u6 rate", "underemployment", "underemployed",
+        "discouraged workers", "marginally attached", "participation rate",
+        "employment-population ratio", "employment to population",
+        "job losers", "broadest measure of unemployment"
     ]
     
     is_macro = any(kw in question for kw in macro_keywords)
@@ -3545,13 +3572,28 @@ def macro_analyze_query(state):
     
     class MacroExtraction(BaseModel):
         indicator: str = Field(description=(
-            "The macro indicator code: GDP, GDPCA, CPI, PCE, PPI, ECI, FEDFUNDS, "
-            "GS1M, GS3M, GS6M, GS1, GS2, GS3, GS5, GS7, GS10, GS20, GS30, or 'ALL'."
+            "The macro indicator code. Valid keys are exactly: GDP, GDPCA, CPI, PCE, PPI, ECI, "
+            "FEDFUNDS, GS1M, GS3M, GS6M, GS1, GS2, GS3, GS5, GS7, GS10, GS20, GS30, "
+            "U1, U2, U3, U4, U5, U6, LFPR, EPOP, ALL, UNSUPPORTED.\n"
+            "Exact string-to-key mapping for the alternative unemployment measures — match the user's "
+            "wording against this table literally:\n"
+            "  'U-3' or 'U3' or 'official unemployment rate' or plain 'unemployment rate' -> key = U3\n"
+            "  'U-1' or 'U1' or '15 weeks or longer unemployed' -> key = U1\n"
+            "  'U-2' or 'U2' or 'job losers' -> key = U2\n"
+            "  'U-4' or 'U4' or 'discouraged workers' -> key = U4\n"
+            "  'U-5' or 'U5' or 'marginally attached' -> key = U5\n"
+            "  'U-6' or 'U6' or 'broadest measure of unemployment' or 'underemployment' -> key = U6\n"
+            "  'labor force participation rate' or 'participation rate' -> key = LFPR\n"
+            "  'employment-population ratio' or 'employment rate' -> key = EPOP"
         ))
         period1: Optional[str] = Field(None, description=(
             "The primary period. Use EXACT format from the user's query: "
             "'Q1 2026' for quarters, 'January 2025' for months. "
-            "Leave None if no date is mentioned (will use latest available)."
+            "Leave None if no specific calendar date is named — this includes relative phrases like "
+            "'this month', 'last month', 'this quarter', 'latest', 'current', 'now'. "
+            "Never invent a calendar month/quarter/year from memory for these; the system resolves "
+            "'latest available' automatically. Only set this when the user names an actual date, e.g. "
+            "'March 2025' or 'Q2 2024'."
         ))
         period2: Optional[str] = Field(None, description=(
             "The comparison period. Same format rules as period1. "
@@ -3564,12 +3606,21 @@ def macro_analyze_query(state):
             "'native' if no specific period is mentioned (system uses the metric's default frequency)."
         ))
         comparison_type: str = Field("YoY", description=(
-            "The comparison type to use ('YoY' or 'QoQ'). "
-            "If the user does NOT explicitly specify a type: for GDP default to 'QoQ', for all others (CPI, ECI, etc) default to 'YoY'."
+            "The comparison type to use ('YoY', 'QoQ', or 'MoM'). "
+            "If the user does NOT explicitly specify a type: for GDP default to 'QoQ'; "
+            "for U1, U2, U3, U4, U5, U6, LFPR, EPOP default to 'MoM' (monthly labor-market series watched for near-term shifts); "
+            "for all others (CPI, ECI, etc) default to 'YoY'."
         ))
         duration: Optional[str] = Field(None, description=(
-            "If the user asks for a historical trend or a chart over time, extract the duration "
-            "(e.g., '12M' for 12 months, '5Y' for 5 years, '10Y' for 10 years). Leave None if no trend is requested."
+            "The lookback window for an automatic trend chart (e.g., '12M', '5Y', '10Y'). "
+            "Default to None — most questions (including direct two-point comparisons like "
+            "'this month vs last month' or 'CPI in March vs April') should NOT get a chart, "
+            "since the two numbers are already shown inline. "
+            "Only set this (default '12M' unless the user names a window) when the question's wording "
+            "signals interest in the path over time, not just two points: 'trend', 'chart', 'plot', 'graph', "
+            "'history', 'over the past/last N months/years', 'how has X changed/evolved', 'trajectory'. "
+            "Leave as None when indicator is 'ALL'/'UNSUPPORTED', or for yield curve/yield spread queries "
+            "(those use their own chart types)."
         ))
 
     class MacroQueryPlan(BaseModel):
@@ -3635,8 +3686,8 @@ def macro_fetch_and_calculate(state):
         indicator = q["indicator"].upper()
         period1 = q.get("period1")
         period2 = q.get("period2")
-        granularity = q.get("granularity", "native")
-        comparison_type = q.get("comparison_type", "YoY")
+        granularity = q.get("granularity") or "native"
+        comparison_type = q.get("comparison_type") or "YoY"
         duration = q.get("duration")
         
         logger.info(f"   [{i}/{len(queries)}] {indicator} | {granularity} | "
