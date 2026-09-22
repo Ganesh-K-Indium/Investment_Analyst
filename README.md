@@ -38,9 +38,10 @@ FastAPI app (app/main.py)
 │   │   macro_format), or the standard path — retrieve → grade_documents →
 │   │   web_search (fallback) → generate → verify_grounding → decide_chart
 │   │   → (generate_chart) → show_result
-│   ├── Qdrant: one unified hybrid collection (dense + BM25 + RRF),
-│   │   filtered by ticker/filing-type/period metadata — not one
-│   │   collection per ticker
+│   ├── Qdrant: one hybrid collection per ticker (dense + BM25 + RRF,
+│   │   `ticker_{ticker}`), filtered further by filing-type/period
+│   │   metadata; falls back to a shared `unified_rag_db_hybrid`
+│   │   collection when no ticker can be resolved
 │   ├── Filing-type + fiscal-quarter aware retrieval (company_mapping.py fiscal calendars)
 │   └── Ingestion: PDF text + table extraction + OCR/GPT-4o vision for
 │       images, EDGAR fetcher (cover-page detection, period_end_date

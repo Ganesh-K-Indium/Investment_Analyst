@@ -10,13 +10,14 @@ Complete reference for every subsystem in the backend. Written to be read top-to
 4. [RAG pipeline](#4-rag-pipeline)
 5. [Ingestion pipeline](#5-ingestion-pipeline)
 6. [Quant subsystem](#6-quant-subsystem)
-7. [Form 4 insider-trading pipeline](#7-form-4-insider-trading-pipeline)
-8. [Macro data pipeline](#8-macro-data-pipeline)
-9. [API reference](#9-api-reference)
-10. [Services layer](#10-services-layer)
-11. [Integration connectors](#11-integration-connectors)
-12. [Deployment](#12-deployment)
-13. [Known limitations and architectural notes](#13-known-limitations-and-architectural-notes)
+7. [Background job system (Redis/Arq)](#7-background-job-system-redisarq)
+8. [Form 4 insider-trading pipeline](#8-form-4-insider-trading-pipeline)
+9. [Macro data pipeline](#9-macro-data-pipeline)
+10. [API reference](#10-api-reference)
+11. [Services layer](#11-services-layer)
+12. [Integration connectors](#12-integration-connectors)
+13. [Deployment](#13-deployment)
+14. [Known limitations and architectural notes](#14-known-limitations-and-architectural-notes)
 
 ---
 
@@ -28,6 +29,8 @@ Investment Analyst is one FastAPI backend fronting three largely-independent sub
 - **Quant subsystem** — a separate LangGraph *supervisor* multi-agent system for live market/technical/options/research queries, each sub-agent backed by its own standalone MCP (Model Context Protocol) server process.
 - **Insider trading (Form 4) and macro data pipelines** — standalone ingestion jobs whose output is consumed by the RAG subsystem (as retrievable documents and as tool context, respectively), not by the quant supervisor.
 
+A **Redis/Arq background job system** (`app/worker.py`, `app/jobs/`) sits across both the RAG and Quant subsystems: `/ask`, `/compare`, `/alpha`, and `/quant/query` all have a queued equivalent under `/analysis-tasks/*` that runs the same underlying `*_core` logic asynchronously on a worker process instead of blocking the HTTP request — see [§7](#7-background-job-system-redisarq).
+
 Everything else — portfolios, chat history, analyst report authoring/publishing, data-source integrations (SharePoint/Google Drive/S3/etc.) — is plain CRUD + service-layer business logic over the same Postgres database, largely independent of which "agent" produced the content being stored.
 
 ---
@@ -36,7 +39,7 @@ Everything else — portfolios, chat history, analyst report authoring/publishin
 
 **File:** `app/main.py`
 
-FastAPI app (`title="Investment Analyst API"`, `version="2.1.0"`, `redirect_slashes=False`). Middleware: permissive CORS (all origins/methods/headers) plus a custom `RequestLoggingMiddleware` logging method/path/status/elapsed-ms for every request.
+FastAPI app (`title="Investment Analyst API"`, `version="2.1.0"`, `redirect_slashes=False`). Middleware: CORS locked to explicit origins (`CORS_ALLOWED_ORIGINS` env var, comma-separated; defaults to `http://localhost:5173,http://127.0.0.1:5173`) with `allow_credentials=True` (required for the credentialed refresh-token cookie — browsers reject `"*"` origins combined with credentials) and wildcarded methods/headers, plus a custom `RequestLoggingMiddleware` logging method/path/status/elapsed-ms for every request.
 
 ### Startup sequence (`@app.on_event("startup")`)
 
@@ -45,8 +48,9 @@ FastAPI app (`title="Investment Analyst API"`, `version="2.1.0"`, `redirect_slas
    - **Cross-agent isolation**: a checkpointer partitions stored state purely by `thread_id` — it has no concept of "which graph" wrote a checkpoint. Since this app's session model allows one portfolio session's ID to be attached to either a `rag` or `quant` `ChatSession`, RAG and Quant invocations always prefix the LangGraph `thread_id` they pass to the checkpointer (`f"rag:{thread_id}"` / `f"quant:{session_id}"`) so the two can never collide in the shared checkpoint tables, even if the same underlying session/thread ID were ever reused across both. Verified directly: invoking a compiled graph twice with the same underlying ID but different prefixes produces fully isolated state. Everywhere else (DB records, portfolio-session mapping, API responses) still uses the original unprefixed ID — only the checkpoint storage key is prefixed.
 3. Builds the RAG graph (`rag.graph.builder.BuildingGraph().get_graph(checkpointer=...)`) and injects the compiled agent into `app/api/rag.py`'s module state via `set_agent()`.
 4. Initializes the quant multi-agent system (`app.services.stock_agent.initialize_stock_agents(checkpointer=checkpointer)` — passed the same shared checkpointer instance), injecting the resulting supervisor/status into `app/api/quant.py` via `set_stock_supervisor()`/`set_agents_status()`. Failures here are caught and logged as warnings — non-fatal; quant endpoints then return 503 rather than crashing the whole app.
-5. Checks `data/macro/metadata.json`; if missing, schedules a one-off background `run_ingestion()` task.
-6. Starts a permanent background task, `macro_sync_loop()` — sleeps 24h, then re-runs `run_ingestion()`, forever, wrapped in try/except so one failure doesn't kill the loop.
+5. Connects to the Redis/Arq job queue (`app/jobs/queue.py`'s `get_arq_pool()`) used to enqueue background analysis runs — see [§7](#7-background-job-system-redisarq).
+6. Checks `data/macro/metadata.json`; if missing, schedules a one-off background `run_ingestion()` task.
+7. Starts a permanent background task, `macro_sync_loop()` — sleeps 24h, then re-runs `run_ingestion()`, forever, wrapped in try/except so one failure doesn't kill the loop.
 
 ### Shutdown sequence
 
@@ -54,11 +58,20 @@ Calls `cleanup_stock_agents()`, exits the RAG checkpointer's async context manag
 
 ### Routers registered
 
-`auth` (`/auth`) · `reports` (`/reports`) · `portfolios` (`/portfolios`) · `rag` (no prefix — `/ask`, `/compare`, `/alpha`) · `integrations` (`/integrations`) · `quant` (`/quant`) · `chats` (`/chats`) · `form4` (`/form4`) · `edgar` (`/edgar`)
+`auth` (`/auth`) · `reports` (`/reports`) · `portfolios` (`/portfolios`) · `rag` (no prefix — `/ask`, `/compare`, `/alpha`) · `integrations` (`/integrations`) · `quant` (`/quant`) · `chats` (`/chats`) · `form4` (`/form4`) · `edgar` (`/edgar`) · `analysis_tasks` (`/analysis-tasks`) — **10 routers total**.
 
-Plus root routes: `GET /` (service directory), `GET /health` (aggregated RAG agent / stock supervisor / DB status).
+Plus root routes: `GET /` (service directory), `GET /health` (aggregated RAG agent / stock supervisor / DB status) — neither requires auth.
 
-**Auth is enforced on every route.** Every endpoint across all 8 routers (portfolios, chats, reports, integrations, rag, quant, edgar, form4) requires a valid JWT (`get_current_user` dependency) — resolved via `app/auth/deps.py`'s two verification helpers: `verify_user_id_matches(user_id, current_user)` for routes carrying an explicit `user_id` field (403 on mismatch), and `verify_owner(owner_user_id, current_user)` for resource-id-only routes, checked immediately after fetching the resource and before any mutation (404 on mismatch — deliberately, so another user's resource existence isn't leaked). No request/response schemas changed to add this. Verified live against a running server: unauthenticated requests → 401, authenticated-but-mismatched `user_id` → 403, another user's portfolio by ID → 404, the actual owner → 200.
+**Auth is enforced per-route (`Depends(get_current_user)`), not via a global middleware, and covers nearly every endpoint.** Resolved via `app/auth/deps.py`'s two verification helpers: `verify_user_id_matches(user_id, current_user)` for routes carrying an explicit `user_id` field (403 on mismatch), and `verify_owner(owner_user_id, current_user)` for resource-id-only routes, checked immediately after fetching the resource and before any mutation (404 on mismatch — deliberately, so another user's resource existence isn't leaked). Exact per-router coverage:
+
+| Router | Total routes | Authenticated | Unauthenticated (and why) |
+|---|---|---|---|
+| `auth` | 6 | 3 | `POST /signup`, `POST /login`, `POST /refresh` — issue the very token they'd otherwise require |
+| `reports`, `portfolios`, `integrations`, `chats`, `form4`, `edgar`, `analysis_tasks` | 8/8/9/17/2/3/8 | 100% | none |
+| `rag` | 7 | 5 | `GET /health`, `GET /capabilities` — public status/introspection |
+| `quant` | 5 | 3 | `GET /quant/health`, `GET /quant/capabilities` — public status/introspection |
+
+Verified live against a running server: unauthenticated requests → 401, authenticated-but-mismatched `user_id` → 403, another user's portfolio by ID → 404, the actual owner → 200.
 
 ---
 
@@ -87,29 +100,33 @@ Plus root routes: `GET /` (service directory), `GET /health` (aggregated RAG age
 | `analyst_reports` | `AnalystReport` | Published/draft report records: `content_markdown` + `content_html` (dual storage — markdown is *derived* from HTML, not authoritative), `image_urls` JSON, `status` enum (draft/published, stored as plain string via `native_enum=False`), `search_vector` (Postgres `TSVECTOR`, added in migration 014). |
 | `report_draft_items` | `ReportDraftItem` | Server-side "clipboard" staging area for building a report before it's assembled (replaces what used to be browser localStorage). `item_type` (text/image/summary), `html` (sanitized), `sort_order` for drag-reorder. |
 | `integrations` | `Integration` | External connector configs — `vendor` (sharepoint/google_drive/onedrive/confluence/azure_blob/aws_s3/sftp), `credentials` JSON, `status`. |
-| `form4_transactions` | `Form4Transaction` | SEC Form 4 insider-trading transaction records — see [§7](#7-form-4-insider-trading-pipeline). Composite index on `(issuer_symbol, transaction_date)`. |
+| `form4_transactions` | `Form4Transaction` | SEC Form 4 insider-trading transaction records — see [§8](#8-form-4-insider-trading-pipeline). Composite index on `(issuer_symbol, transaction_date)`. |
+| `analysis_tasks` | `AnalysisTask` | Background job status/result tracking (RAG/Quant async runs) — see [§7](#7-background-job-system-redisarq). |
 
 ### Enums
 
 - `AgentType`: `rag` | `quant`
 - `MessageRole`: `user` | `assistant` | `system`
 - `ReportStatus`: `draft` | `published` (stored as plain string, `native_enum=False`)
+- `TaskStatus` (on `AnalysisTask`): `PENDING` | `RUNNING` | `COMPLETED` | `FAILED`
 
 `AgentType`/`MessageRole` use `SQLEnum(..., values_callable=lambda enum_cls: [e.value for e in enum_cls])` so Postgres stores the lowercase value, not the Python member name — this was a real bug fixed during the async/Postgres migration (SQLAlchemy defaults to serializing by `.name`, which SQLite silently tolerated but Postgres's native enum type rejected).
 
-### Migration chain (17 revisions, in dependency order)
+### Migration chain (19 revisions, single linear chain, in dependency order)
 
 ```
-001_initial → 002_chat_history → aca5bd3b31cf (no-op stub) → 1578dc4794bb (no-op stub)
-  → 20b80069323a (adds chat_sessions.summary) → 003_add_session_metadata
-  → 004_add_form4_transactions → 005_add_consolidated_summaries
-  → 006_add_form4_document_type → 007_add_form4_has_common_stock
-  → 008_add_users → 009_add_report_draft_items → 010_add_analyst_reports
-  → 011_simplify_analyst_reports → 012_draft_items_portfolio_id
-  → 013_add_content_html → 014_postgres_fulltext_search
+001_initial → 002_chat_history → aca5bd3b31cf_add_chat_summary_fields
+  → 1578dc4794bb_add_chat_summary_fields → 20b80069323a_add_chat_summary_fields
+  → 003_add_session_metadata → 004_add_form4_transactions
+  → 005_add_consolidated_summaries → 006_add_form4_document_type
+  → 007_add_form4_has_common_stock → 008_add_users → 009_add_report_draft_items
+  → 010_add_analyst_reports → 011_simplify_analyst_reports
+  → 012_draft_items_portfolio_id → 013_add_content_html
+  → 014_postgres_fulltext_search → 015_add_token_version
+  → 016_add_analysis_tasks → 017_cascade_deletes  (head)
 ```
 
-Notes: `aca5bd3b31cf` and `1578dc4794bb` are empty autogenerated stubs from an early `alembic revision --autogenerate` run, left in the chain as no-ops. Migration `010` originally created `analyst_reports` with a SQLite FTS5 virtual table + triggers (SQLite-only path); `011` simplified the model (dropped `recommendation` and related columns); `014` is the Postgres equivalent — adds a `TSVECTOR` column + trigger function (`analyst_reports_search_vector_update()`, weighted: company_name='A', content_markdown='B') + GIN index, and backfills existing rows.
+Notes: `aca5bd3b31cf`/`1578dc4794bb`/`20b80069323a` are three differently-hashed autogenerated revisions that look like duplicates by name (all "add_chat_summary_fields") but are a genuine linear 3-step sequence, each correctly chaining to the next via `down_revision` — not a branch or a merge. Migration `010` originally created `analyst_reports` with a SQLite FTS5 virtual table + triggers (SQLite-only path); `011` simplified the model (dropped `recommendation` and related columns); `014` is the Postgres equivalent — adds a `TSVECTOR` column + trigger function (`analyst_reports_search_vector_update()`, weighted: company_name='A', content_markdown='B') + GIN index, and backfills existing rows. `015` adds `users.token_version` for real logout/session revocation — embedded in every issued JWT and checked against the current DB value on every auth check, so a stolen or "logged out" token can be invalidated before its natural expiry instead of staying valid for up to 7 days (refresh token lifetime); `016` adds the `analysis_tasks` table backing the background job system ([§7](#7-background-job-system-redisarq)); `017` adds `ON DELETE CASCADE` to several FKs.
 
 ---
 
@@ -127,7 +144,7 @@ preprocess_and_analyze_query → retrieve → grade_documents
   → (insufficient) → integrate_web_search → generate
 ```
 
-Comparison/segment/geographic queries take a **direct-vectordb shortcut** (`_is_direct_vectordb_mode()` in `edges.py`): they skip grading and web search entirely and go `retrieve → generate`, on the rationale that pre-optimized template queries against SEC filings are authoritative enough not to need a relevance check — this bypass is a known risk area if 10-Q/8-K data returns thin results (see [§13](#13-known-limitations-and-architectural-notes)).
+Comparison/segment/geographic queries take a **direct-vectordb shortcut** (`_is_direct_vectordb_mode()` in `edges.py`): they skip grading and web search entirely and go `retrieve → generate`, on the rationale that pre-optimized template queries against SEC filings are authoritative enough not to need a relevance check — this bypass is a known risk area if 10-Q/8-K data returns thin results (see [§14](#14-known-limitations-and-architectural-notes)).
 
 Two other "framework" modes are layered on the same graph: **ALPHA** (`alpha_dimension_retrieve` → `alpha_generate_report`, a 5-dimension equity research report) and **Scenario** (Bull/Bear/Base case analysis). A **Macro** mode also exists as a step-by-step pipeline (query understanding → deterministic calculation → LLM formatting) for FRED-data questions.
 
@@ -243,13 +260,17 @@ Lists available filings with a **Period** column (`FY2024` for 10-Ks, `2025Q3` f
 
 Resumable CLI for many-PDF ingestion with a persistent JSON progress file (`--manifest`/`--dir` modes); re-running the same command skips already-succeeded files and (optionally, via `--retry-failed`) retries only the failed ones.
 
+### Token/timing usage tracking (`app/utils/usage_tracker.py`)
+
+A contextvar-based tracker (`track_usage(run_label)` context manager + a free `record_usage(...)` function) records per-call token counts (from the real OpenAI `response.usage`, not an estimate — except embeddings, which are tiktoken-counted since `OpenAIEmbeddings` doesn't return usage) and wall-clock durations for every LLM/embedding/OCR call in a run, then logs a summary on exit. Because it's contextvar-based rather than a passed-in object, deeply nested code (the vision call in `image_data_prep.py`, the embeddings call in `rag/vectordb/client.py`) can call `record_usage()` without a tracker parameter threaded through every intermediate function — and because contextvars are copied per-`asyncio.Task`, concurrent runs (e.g. one `ainvoke` per ALPHA ticker via `asyncio.gather`) each get an isolated tracker automatically. Wired into: per-image OCR + GPT-4o vision calls and embedding generation during ingestion (`process_pdf_and_stream` in `pdf_processor1.py` yields a final `[usage] Total ingestion time: ...` line, and the number is also plumbed back through `process_pdf_and_get_result` → `ingest_pdf` → `edgar_fetcher.fetch_filings`'s per-filing result dict, so `scripts/ingest_ticker.py` can print it directly instead of relying on log visibility); and the RAG/ALPHA generation side, where `app/api/rag.py`'s `ask_core`/`compare_core`/`alpha_core` each wrap their `agent.ainvoke(...)` in `track_usage(...)` + LangChain's `get_openai_callback()` (captures every `ChatOpenAI` call anywhere in that graph run), and `alpha_generate_report` in `rag/graph/nodes.py` additionally wraps each of its 5 dimension chains and the combiner chain individually for a per-dimension token/time breakdown. Usage summaries are saved into the persisted chat message's `metadata.usage` field and the previously-unused `ChatMessage.token_count` column.
+
 ---
 
 ## 6. Quant subsystem
 
 **Core files:** `quant/stock_agent/{main_agent,api_server}.py`, `quant/stock_agent/stock_exchange_agent/subagents/*/langgraph_agent.py`, `quant/{options_mcp,Stock_Analysis,research_mcp,yahoo-finance-mcp}/`
 
-A separate LangGraph **supervisor** (`langgraph_supervisor.create_supervisor`, `app/services/stock_agent.py`) routes user queries to 5 specialized sub-agents, each a LangGraph react-agent (`create_agent`) connecting to its own standalone MCP server over `streamable-http`.
+A separate LangGraph **supervisor** (`langgraph_supervisor.create_supervisor`, `app/services/stock_agent.py`) routes user queries to up to 6 specialized sub-agents, each a LangGraph react-agent (`create_agent`); 4 of them connect to their own standalone MCP server over `streamable-http`.
 
 | Sub-agent | MCP server / port | Backing tech |
 |---|---|---|
@@ -258,8 +279,9 @@ A separate LangGraph **supervisor** (`langgraph_supervisor.create_supervisor`, `
 | `technical_analysis_agent` | `Stock_Analysis/server_mcp.py` :8566 | 14 tools: SMA/RSI/MACD/Bollinger/volume/support-resistance (single + multi-stock comparison variants), composite chart, GPT-4o/Gemini chart-summary |
 | `research_agent` | `research_mcp/server_mcp.py` :8567 | 9 tools: web search, analyst-rating aggregation, sentiment (TextBlob), MD&A sentiment, scenario generation (Bull/Bear/Base), in-memory TTL cache |
 | `options_agent` | `options_mcp/server_mcp.py` :8568 | 3 tools: `analyze_options_chain` (deterministic analytics, no LLM reasoning over raw data), `get_oi_chart`, `get_options_expiration_dates` |
+| `postgres_agent` | `postgres_mcp/server_mcp.py` :8570 | Lets a user query their own connected Postgres database ("my database", "SQL", "query my data", "table", "schema" routes here) via the Integrations feature |
 
-All 4 MCP servers are built on **FastMCP**, run as independent processes (`transport="streamable-http"`), and are started together by `docker-entrypoint.sh` in a container deployment, or manually per the README quick-start.
+The 4 core MCP servers (8565-8568) are built on **FastMCP**, run as independent processes (`transport="streamable-http"`), and are started together by `docker-entrypoint.sh` in a container deployment, or manually per the README quick-start. **`postgres_mcp` (:8570) is not part of that startup set** — it isn't started by `docker-entrypoint.sh`, isn't in `docker-compose.yml`'s exposed ports, and isn't checked by `/quant/health` — it must be started manually if the Postgres-integration query feature is needed.
 
 ### Options intelligence deep-dive (`quant/options_mcp/analytics.py`)
 
@@ -267,11 +289,53 @@ Pure deterministic Python analytics (explicitly documented as "the LLM's role is
 
 ### Supervisor initialization (`app/services/stock_agent.py`)
 
-`initialize_stock_agents()` is idempotent, waits (5s timeout each) for the 4 MCP servers with per-server readiness tracking (not fail-hard), dynamically imports each sub-agent factory with its own try/except (one down MCP server doesn't prevent the others from initializing), and builds the supervisor only from whichever sub-agents actually came up. Requires a `checkpointer` to be passed in (raises if `None`) — uses the same shared `AsyncPostgresSaver` instance as the RAG graph (see [§2](#2-backend-foundations)), with `thread_id`s prefixed `quant:` at every invocation site to keep its checkpoint history fully isolated from RAG's.
+`initialize_stock_agents()` is idempotent, waits (5s timeout each) for the 4 core MCP servers (8565-8568 — `postgres_mcp` :8570 is not in this readiness list at all) with per-server readiness tracking (not fail-hard), and gates `stock_information`/`technical_analysis_agent`/`research_agent`/`options_agent` on their respective server actually being reachable. `ticker_finder_tool` and `postgres_agent` are created **unconditionally** (each in its own try/except, not gated on any MCP-server readiness check — `postgres_agent`'s own tool calls presumably check per-user Postgres-integration state at call time, not at supervisor-build time). The supervisor is built only from whichever sub-agents actually came up. Requires a `checkpointer` to be passed in (raises if `None`) — uses the same shared `AsyncPostgresSaver` instance as the RAG graph (see [§2](#2-backend-foundations)), with `thread_id`s prefixed `quant:` at every invocation site to keep its checkpoint history fully isolated from RAG's.
 
 ---
 
-## 7. Form 4 insider-trading pipeline
+## 7. Background job system (Redis/Arq)
+
+**Files:** `app/worker.py`, `app/jobs/queue.py`, `app/jobs/rag_jobs.py`, `app/jobs/quant_jobs.py`, `app/api/analysis_tasks.py`, `docker-entrypoint-worker.sh`. See also [BACKGROUND_ANALYSIS_GUIDE.md](../BACKGROUND_ANALYSIS_GUIDE.md) at the repo root.
+
+`/ask`, `/compare`, `/alpha`, and `/quant/query` are all synchronous — the HTTP request blocks until the full LangGraph run finishes, which can be minutes for a multi-ticker ALPHA run. `/analysis-tasks/*` provides a queued equivalent of each: enqueue a job, get a task ID back immediately, poll or stream its status/result separately.
+
+### Queue split
+
+`app/jobs/queue.py` defines two named Arq queues: `QUEUE_INTERACTIVE` and `QUEUE_BATCH`, both backed by the same Redis instance (`REDIS_URL`). Which queue a job goes to is a **hardcoded per-route choice**, not dynamic:
+
+| Route | Queue |
+|---|---|
+| `POST /analysis-tasks/rag/ask` | interactive |
+| `POST /analysis-tasks/rag/compare` | interactive |
+| `POST /analysis-tasks/rag/alpha` | **batch** |
+| `POST /analysis-tasks/quant/query` | interactive |
+
+`app/worker.py` defines `InteractiveWorkerSettings` (`max_jobs=20` — reserved concurrency, never queued behind batch work) and `BatchWorkerSettings` (`max_jobs=5`); both run the same function list (`run_rag_ask`, `run_rag_compare`, `run_rag_alpha`, `run_quant_query`) and the same startup/shutdown hooks (each worker process builds its own full `AgentBundle` — RAG graph + quant supervisor — on boot, same as the API process). In `docker-compose.yml` these run as two separate containers (`worker-interactive`, `worker-batch`), both `network_mode: "service:api"` so their hardcoded `http://localhost:856x/mcp` calls reach the MCP servers the `api` container hosts.
+
+### Job functions (`app/jobs/rag_jobs.py`, `app/jobs/quant_jobs.py`)
+
+Each is a thin wrapper: marks the job's `AnalysisTask` row `RUNNING`, calls the **same** `*_core` function the synchronous HTTP route uses (`ask_core`/`compare_core`/`alpha_core` in `app/api/rag.py`, `query_core` in `app/api/quant.py` — so queued and direct execution share one code path, not two), then marks `COMPLETED` with `result_metadata={"response": result}` or `FAILED` with the exception string. `run_rag_alpha` additionally streams per-ticker progress via an `on_ticker_done` callback into `progress_message` (e.g. `"3/8 tickers done (AAPL)"`).
+
+### Status tracking and API
+
+`AnalysisTask` (`app/database/models.py`, table `analysis_tasks`): `id` (UUID PK), `user_id`, `portfolio_id` (nullable FK), `agent_type` (`rag`/`quant`), `task_type` (free string — 'alpha'/'compare'/'ask'/'query'), `status` (`TaskStatus`: PENDING/RUNNING/COMPLETED/FAILED), `progress_message`, `result_metadata` (JSON), timestamps. `AnalysisTaskService.update_status()` writes this row **and** publishes to a Redis pub/sub channel (per-portfolio and per-user) that the SSE routes consume.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/analysis-tasks/rag/ask` | Enqueue an `/ask`-equivalent run (interactive queue) |
+| POST | `/analysis-tasks/rag/compare` | Enqueue a `/compare`-equivalent run (interactive queue) |
+| POST | `/analysis-tasks/rag/alpha` | Enqueue a multi-ticker ALPHA run (batch queue) |
+| POST | `/analysis-tasks/quant/query` | Enqueue a quant supervisor query (interactive queue) |
+| GET | `/analysis-tasks?portfolio_id=` | List all tasks for one portfolio (ownership-checked) |
+| GET | `/analysis-tasks/{task_id}` | Get one task's current status/result (ownership-checked) |
+| GET | `/analysis-tasks/stream/{portfolio_id}` | SSE stream of task updates for one portfolio |
+| GET | `/analysis-tasks/stream/user/{user_id}` | SSE stream across all of a user's portfolios |
+
+All 8 routes require auth. Every enqueue route also accepts an optional `scheduled_at`, deferring the job via Arq's `_defer_until` (e.g. "run this overnight"). The SSE routes use a 15-second `pubsub.get_message(timeout=15)` keepalive/ping loop rather than relying on client-side polling.
+
+---
+
+## 8. Form 4 insider-trading pipeline
 
 **Files:** `ingestion/Form4_Ingestion/{fetch,parse,save_xml,ingest}.py`, `rag/utils/Insights_Form4/{database,advisory_hub,advisory_analyst}.py`
 
@@ -283,7 +347,7 @@ A standalone pipeline (not part of the LangGraph supervisor) consumed from the R
 
 ---
 
-## 8. Macro data pipeline
+## 9. Macro data pipeline
 
 **Files:** `ingestion/ingest_macro_data.py`, `rag/utils/macro_tool.py`, `app/utils/macro_utils.py`
 
@@ -295,9 +359,9 @@ Fetches ~17 FRED series concurrently (`asyncio.Semaphore(5)`) — GDP (quarterly
 
 ---
 
-## 9. API reference
+## 10. API reference
 
-### `/auth` — JWT authentication (the only router that actually enforces auth)
+### `/auth` — JWT authentication (see [§2](#2-backend-foundations) for the per-router auth coverage table — every other router below requires auth on nearly every route too, not just this one)
 
 | Method | Path | Purpose | Auth |
 |---|---|---|---|
@@ -337,7 +401,7 @@ Fetches ~17 FRED series concurrently (`asyncio.Semaphore(5)`) — GDP (quarterly
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/quant/query` | Route a query to the stock-analysis supervisor |
-| GET | `/quant/health` | TCP connectivity check for 3 of the 4 MCP servers (Options Intelligence :8568 is not checked here) |
+| GET | `/quant/health` | TCP connectivity check for 3 of the 5 MCP servers (Options Intelligence :8568 and Postgres :8570 are not checked here) |
 | GET | `/quant/capabilities` | Static capability listing |
 | GET | `/quant/sessions/{id}` | Raw LangGraph state dump |
 | GET | `/quant/portfolio/{id}/sessions` | Portfolio info stub (dedicated quant-session query not yet implemented) |
@@ -369,9 +433,13 @@ Session CRUD, message history, LLM summaries (single + consolidated multi-sessio
 
 `POST /integrations/` (create), `GET /integrations/{id}` / `/user/{user_id}` (list, credentials masked), `PUT`/`DELETE /integrations/{id}`, `POST /integrations/{id}/disconnect`, `POST /integrations/{id}/test` (live connection test), `POST /integrations/browse` (list remote files, optionally with available tickers), `POST /integrations/import` (download + ingest PDFs).
 
+### `/analysis-tasks`
+
+Queued/async equivalents of `/ask`, `/compare`, `/alpha`, `/quant/query`, plus status polling and SSE streaming — see [§7](#7-background-job-system-redisarq) for the full route table.
+
 ---
 
-## 10. Services layer
+## 11. Services layer
 
 | Service | File | Purpose |
 |---|---|---|
@@ -381,12 +449,13 @@ Session CRUD, message history, LLM summaries (single + consolidated multi-sessio
 | `IntegrationService` | `app/services/integration.py` | CRUD over `Integration`. `mask_credentials()` redacts any key containing `client_secret`/`password`/`secret_key`/`access_token`/`refresh_token` before returning to the API layer. |
 | `FileImportService` | `app/services/file_import.py` | Downloads + ingests files from a connector. Bounded concurrency (`asyncio.Semaphore(3)` — explicitly sized to overlap I/O without hammering OpenAI embedding rate limits, not "as parallel as possible"). |
 | `stock_agent` module | `app/services/stock_agent.py` | Lifecycle management for the quant supervisor — see [§6](#6-quant-subsystem). |
-| `VectorDBManager` | `app/services/vectordb_manager.py` | Per-ticker Qdrant instance cache (`get_instance(ticker)`). **Several methods are now no-op/legacy stubs** (`initialize_for_portfolio`, `cleanup_portfolio`, `get_for_session`, `create_temporary`) — see [§13](#13-known-limitations-and-architectural-notes). |
+| `VectorDBManager` | `app/services/vectordb_manager.py` | Per-ticker Qdrant instance cache (`get_instance(ticker)`). **Several methods are now no-op/legacy stubs** (`initialize_for_portfolio`, `cleanup_portfolio`, `get_for_session`, `create_temporary`) — see [§14](#14-known-limitations-and-architectural-notes). |
+| `AnalysisTaskService` | `app/services/analysis_tasks.py` | CRUD + status updates for `AnalysisTask` rows; publishes updates to Redis pub/sub for the `/analysis-tasks/stream/*` SSE routes — see [§7](#7-background-job-system-redisarq). |
 | `pdf_render.py` | `app/services/pdf_render.py` | Renders sanitized report HTML to PDF via `fpdf2`, walking the DOM manually (chosen over fpdf2's built-in `write_html()` because that ignores inline color/background outside heading tags and crashes on TipTap-style pixel-width image attributes). |
 
 ---
 
-## 11. Integration connectors
+## 12. Integration connectors
 
 **File:** `app/services/connectors/base.py` + one file per vendor
 
@@ -406,13 +475,18 @@ All SDK clients are constructed lazily on first use, and each connector raises a
 
 ---
 
-## 12. Deployment
+## 13. Deployment
 
 ### Docker Compose (`docker-compose.yml`)
 
+6 services:
+
 - `postgres` — `postgres:16-alpine`, host port **5433** → container 5432 (avoids clashing with a local Postgres install), healthcheck via `pg_isready`.
 - `qdrant` — `qdrant/qdrant:latest`, ports 6333 (REST)/6334 (gRPC).
-- `api` — built from the local `Dockerfile`, `depends_on` postgres (`service_healthy`) and qdrant; exposes 8000 (main API) + 8565-8568 (MCP servers); mounts `./data` → `/app/data`.
+- `redis` — `redis:7-alpine`, port 6379, healthcheck — backs the Arq job queue ([§7](#7-background-job-system-redisarq)).
+- `api` — built from the local `Dockerfile`, `depends_on` postgres (`service_healthy`), qdrant, and redis (`service_healthy`); exposes 8000 (main API) + 8565-8568 (the 4 core MCP servers — **not** 8570/postgres_mcp, which isn't started by this stack); mounts `./data` → `/app/data`.
+- `worker-interactive` — same image as `api`, `docker-entrypoint-worker.sh` → `arq app.worker.InteractiveWorkerSettings`; `network_mode: "service:api"` (shares the `api` container's network namespace so its hardcoded `http://localhost:856x/mcp` calls reach the MCP servers `api` hosts — so it declares no `ports:` of its own); `depends_on` api/postgres/redis.
+- `worker-batch` — identical setup, `arq app.worker.BatchWorkerSettings`.
 
 ### Dockerfile
 
@@ -429,13 +503,13 @@ Base `python:3.11-slim`. System deps: `gcc`/`libpq-dev` (Postgres build), `libjp
 
 ---
 
-## 13. Known limitations and architectural notes
+## 14. Known limitations and architectural notes
 
-A prior pass through this backend surfaced 7 architectural gaps; all 7 have since been fixed (below), verified against a live running server, not just compiled. Two smaller items remain open (still worth knowing about) and are listed at the end.
+A prior pass through this backend surfaced a series of architectural gaps; 11 have since been fixed (below), most verified against a live running server, not just compiled. Two smaller items remain open (still worth knowing about) and are listed after.
 
 ### Fixed
 
-1. **Auth enforcement** — was opt-in per route (only `/auth/me`, `/auth/logout`, `PUT /auth/me` required a token; every other endpoint accepted `user_id` as an unverified client-supplied string). Now every route across all 8 routers requires a valid JWT and verifies the client-supplied `user_id`/fetched resource's owner matches the token — see [§2](#2-backend-foundations) for the exact mechanism. Verified live: unauthenticated → 401, mismatched `user_id` → 403, another user's resource by ID → 404 (not leaked as 403), the actual owner → 200.
+1. **Auth enforcement** — was opt-in per route (only `/auth/me`, `/auth/logout`, `PUT /auth/me` required a token; every other endpoint accepted `user_id` as an unverified client-supplied string). Now every route across all 10 routers requires a valid JWT and verifies the client-supplied `user_id`/fetched resource's owner matches the token, **except** a small intentional public surface (auth's own signup/login/refresh, and `/health`+`/capabilities` on both `rag` and `quant`) — see [§2](#2-backend-foundations) for the exact per-router mechanism and coverage table. Verified live: unauthenticated → 401, mismatched `user_id` → 403, another user's resource by ID → 404 (not leaked as 403), the actual owner → 200.
 2. **Checkpointer fragmentation** — RAG and Quant used two independent SQLite files despite the rest of the stack being Postgres, and `initialize_stock_agents()`'s `checkpointer` param was explicitly documented as ignored. Now both share one `AsyncPostgresSaver` on the same Postgres database. Fixing this surfaced a real follow-on risk — a shared checkpointer partitions only by `thread_id`, so if a RAG and a Quant session ever used the same underlying ID (the session model allows this), their state could collide. Fixed by prefixing every checkpoint `thread_id` (`rag:`/`quant:`) at the point of use — verified directly that identical underlying IDs stay fully isolated across the prefix boundary.
 3. **`VectorDBManager` stub/comment mismatch** — `initialize_for_portfolio()`, `cleanup_portfolio()`, `get_for_session()`, `create_temporary()` are legacy no-op shims (retrieval is fully lazy per-ticker via `get_instance(ticker)`), but `app/api/portfolios.py`'s comments described them as doing real work ("CRITICAL: Initialize Vector DB ONCE..."). Docstrings now say what these methods actually do (nothing), and `portfolios.py` no longer calls the dead ones or claims they matter. The one genuinely-live piece of state (`register_session`'s in-memory `thread_id → portfolio_id` map) is untouched and still refreshed correctly on ticker changes.
 4. **Unbounded disk growth from debug dumps** — `POST /ask`, `POST /compare`, `POST /quant/query` wrote full JSON response payloads to `output/json/...` on every single call, unconditionally. Now gated behind `SAVE_DEBUG_RESPONSES` (env var, default `false`) — off by default in every environment, opt-in when you actually want the dumps for debugging.
@@ -445,12 +519,14 @@ A prior pass through this backend surfaced 7 architectural gaps; all 7 have sinc
 8. **`is_comparison_mode` checkpointer leak** — `/compare` set `is_comparison_mode`/`comparison_company1-3`/`year_start`/`year_end` on the graph state, and the Postgres checkpointer persists state per `thread_id` across turns by merging inputs rather than replacing state. `/ask` never reset these fields, so a thread that was ever used for `/compare` would silently route every later `/ask` question through the annual-only comparison templates. Fixed by having `/ask` explicitly reset all of these every call. Reproduced and verified live against the actual Postgres-backed checkpointer (not just read from code) before and after the fix.
 9. **Company-name alias gaps** — `TICKER_TO_COMPANY` had a duplicate `'googl'` dict key, silently dropping the `'alphabet'` alias (Python keeps only the last literal key); `detect_tickers_in_query()` also only checked a ticker's single canonical name, so even after the alias was restored, "Alphabet ..." sub-queries fell back to querying every company in the request instead of just Google. Fixed via `get_company_aliases()` (§ Fiscal calendar utilities above) used by both `get_ticker()`'s reverse mapping and `detect_tickers_in_query()`.
 10. **`generate_comparison_chart` `datetime.now()` crash** — a local `import datetime` inside the function shadowed the module-level `from datetime import datetime`, so `datetime.now()` (written expecting the class-level import) resolved against the module instead and raised `AttributeError: module 'datetime' has no attribute 'now'` whenever chart generation fell back to it (i.e. neither `year_start` nor `year_end` was set on state). Fixed by removing the redundant local import.
+11. **`.env.example` missing several vars used in code**: `FRED_API_KEY`, `BLS_API_KEY`, `SEC_USER_AGENT`, `CLOUDINARY_CLOUD_NAME`/`CLOUDINARY_API_KEY`/`CLOUDINARY_API_SECRET`, `INTEGRATION_SECRET_KEY`, `TESSERACT_CMD`, `USE_HYBRID_SEARCH`, `SAVE_DEBUG_RESPONSES` were all read by code but absent from `.env.example`, and the file had a literal duplicate block (`GOOGLE_API_KEY` defined twice, a duplicated Tavily comment). All now added/deduplicated.
 
 ### Still open
 
-11. **Env vars used in code but missing from `.env.example`**: `FRED_API_KEY` (macro ingestion raises without it), `CLOUDINARY_CLOUD_NAME`/`CLOUDINARY_API_KEY`/`CLOUDINARY_API_SECRET` (chart upload features degrade gracefully without them), `JWT_SECRET_KEY` (if unset, `app/auth/jwt.py` refuses to start when `APP_ENV=production`; in dev it falls back to a *random secret generated fresh every process start* — safe against forgery, but means every restart invalidates all existing tokens, which reads as "sessions expire instantly" under `uvicorn --reload`. Set it explicitly in `.env` for any environment where restarts shouldn't log everyone out), `SEC_USER_AGENT` (defaults to a placeholder contact string).
 12. **Semantic cache (`rag/graph/semantic_cache.py`) is not wired into any live code path** — correctness-fixed (filter-aware cache key) in case it's adopted later, but currently dead code.
+13. **`postgres_mcp` (:8570) has no health/startup safety net** — unlike the 4 core MCP servers, it isn't started by `docker-entrypoint.sh`, isn't exposed in `docker-compose.yml`, isn't in `initialize_stock_agents()`'s readiness-wait list, and isn't checked by `/quant/health`. `postgres_agent` is still added to the supervisor's `available_agents` unconditionally (see [§6](#6-quant-subsystem)), so a query routed to it when the server isn't running fails at tool-call time with no earlier, clearer signal.
 
 ### Still true, by design (not gaps)
 
 - **Bounded concurrency appears in exactly one place** in the services layer: `FileImportService.import_files` (`asyncio.Semaphore(3)`). The ingestion pipeline itself (embeddings, image captioning, EDGAR filing fetches) uses bounded concurrency extensively, but the services/API layer otherwise doesn't need it since most work is single-document per request.
+- **`JWT_SECRET_KEY` dev fallback**: if unset, `app/auth/jwt.py` refuses to start when `APP_ENV=production`; in dev it falls back to a *random secret generated fresh every process start* — safe against forgery, but means every restart invalidates all existing tokens, which reads as "sessions expire instantly" under `uvicorn --reload`. Set it explicitly in `.env` for any environment where restarts shouldn't log everyone out.
