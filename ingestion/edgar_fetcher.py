@@ -143,24 +143,53 @@ class SecEdgarFetcher:
         same UA succeeds fine. So: fetch the HTML via httpx (already proven
         to work, same client used for the JSON API calls), then hand that
         content to Playwright via set_content() purely for local rendering —
-        the browser never makes a request to sec.gov itself, sidestepping
-        the block entirely.
+        the browser never makes a direct navigation request to sec.gov itself,
+        sidestepping the block entirely.
+
+        The filing's own sub-resources (images, CSS) are same-origin sec.gov
+        URLs though, and Chromium requesting them directly would risk the
+        same WAF block — so each image/stylesheet request is instead
+        intercepted and served via the proven httpx client (same UA header,
+        shared rate limiter) rather than letting Chromium fetch it itself.
+        A <base> tag is injected so the filing's relative image/CSS URLs
+        resolve against the real SEC directory instead of about:blank.
         """
         html_response = await self._rate_limited_request(url)
         html_content = html_response.text
+
+        base_url = url.rsplit("/", 1)[0] + "/"
+        base_tag = f'<base href="{base_url}">'
+        if "<head>" in html_content:
+            html_content = html_content.replace("<head>", f"<head>{base_tag}", 1)
+        else:
+            html_content = base_tag + html_content
+
+        async def _handle_route(route):
+            request = route.request
+            if request.url == "about:blank" or request.resource_type == "document":
+                await route.continue_()
+                return
+            if request.resource_type in ("image", "stylesheet"):
+                try:
+                    resp = await self._rate_limited_request(request.url)
+                    await route.fulfill(
+                        status=resp.status_code,
+                        headers={"content-type": resp.headers.get("content-type", "application/octet-stream")},
+                        body=resp.content,
+                    )
+                except Exception:
+                    await route.abort()
+                return
+            # Scripts, fonts, media etc. aren't needed for a static PDF render.
+            await route.abort()
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             try:
                 context = await browser.new_context(user_agent=SEC_USER_AGENT)
                 page = await context.new_page()
-                # Sub-resources (images/CSS) would still hit sec.gov and could
-                # trip the same block — not needed for text extraction, so drop them.
-                await page.route("**/*", lambda route: (
-                    route.continue_() if route.request.url == "about:blank" or route.request.resource_type == "document"
-                    else route.abort()
-                ))
-                await page.set_content(html_content, wait_until="domcontentloaded", timeout=30000)
+                await page.route("**/*", _handle_route)
+                await page.set_content(html_content, wait_until="networkidle", timeout=30000)
                 await page.pdf(path=output_path, format="A4", print_background=True)
             finally:
                 await browser.close()

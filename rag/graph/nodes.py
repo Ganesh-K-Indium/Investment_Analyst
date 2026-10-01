@@ -3525,14 +3525,19 @@ def detect_macro_query(state):
         "yield curve", "yield spread", "treasury yield", "treasury curve",
         "bond yield", "fed funds", "federal funds", "fedfunds",
         "maturity", "10-year", "2-year", "30-year", "t-bill", "t-bond",
-        "unemployment", "unrate", "jobless rate", "jobless claims",
+        "unemployment", "unemployed", "unrate", "jobless rate", "jobless claims",
         "labor market", "labour market", "jobs report", "nonfarm payroll",
         "labor force participation", "labour force participation",
         "u-1", "u1 rate", "u-2", "u2 rate", "u-3", "u-4", "u4 rate",
         "u-5", "u5 rate", "u-6", "u6 rate", "underemployment", "underemployed",
-        "discouraged workers", "marginally attached", "participation rate",
+        "discouraged workers", "gave up looking for work", "marginally attached",
+        "participation rate", "labor force", "labour force",
         "employment-population ratio", "employment to population",
-        "job losers", "broadest measure of unemployment"
+        "employment rate", "employment situation",
+        "job losers", "laid off", "involuntary job loss",
+        "broadest measure of unemployment", "real unemployment rate",
+        "true unemployment rate", "part-time for economic reasons",
+        "15 weeks or longer", "long-term unemployed", "long-term unemployment"
     ]
     
     is_macro = any(kw in question for kw in macro_keywords)
