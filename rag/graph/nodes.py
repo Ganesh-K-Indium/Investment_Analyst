@@ -2449,6 +2449,20 @@ async def alpha_dimension_retrieve(state):
 
     if alpha_pillar == "insider_trading":
         logger.info(" [SINGLE PILLAR] Insider Trading (Form 4)")
+        from app.utils.company_mapping import is_foreign_private_issuer, form4_exemption_message
+        if is_foreign_private_issuer(ticker):
+            # No Form 4 exists for foreign private issuers — say so (and where the
+            # equivalent ownership data lives) rather than "no data found".
+            logger.info(f"    {ticker} is a foreign private issuer — no Form 4 filings exist, skipping lookup")
+            return {
+                "Intermediate_message": (
+                    f"## Insider Trading Analysis — {ticker}\n\n{form4_exemption_message(ticker)}\n\n"
+                    f"You can still ask about director and officer share ownership, major shareholders or "
+                    f"related-party transactions in {ticker}'s latest 20-F."
+                ),
+                "alpha_dimensions": {"insider_trading": {}},
+                "documents": [],
+            }
         try:
             from rag.utils.Insights_Form4.advisory_hub import get_advisory_report
             form4_report = await get_advisory_report(ticker)
@@ -2521,11 +2535,23 @@ async def alpha_dimension_retrieve(state):
         db_instance = vectordb_mgr.get_instance(ticker, create_if_missing=False)
 
         # Query for MD&A and governance documents — latest filing only
+        from app.utils.company_mapping import is_foreign_private_issuer, form4_exemption_message
+        _foreign_issuer = is_foreign_private_issuer(ticker)
+
         alignment_queries = [
             f"{ticker} management discussion analysis MD&A latest fiscal year {_cur_yr}",
             f"{ticker} governance board independence proxy statement latest {_cur_yr}",
             f"{ticker} related party transactions latest {_cur_yr}"
         ]
+        if _foreign_issuer:
+            # 20-F stands in for the missing Form 4 data: Item 6 (directors, senior
+            # management, share ownership) and Item 7 (major shareholders, related parties).
+            # Runs FIRST: only the first 5 docs survive the slice below, and the exemption
+            # note takes slot 0, so the ownership chunks must lead the retrieved ones.
+            alignment_queries.insert(0,
+                f"{ticker} share ownership of directors and senior management major shareholders "
+                f"Item 6 Item 7 related party transactions latest {_cur_yr}"
+            )
 
         alignment_docs = []
         for query in alignment_queries:
@@ -2544,9 +2570,23 @@ async def alpha_dimension_retrieve(state):
         try:
             from rag.utils.Insights_Form4.advisory_hub import get_advisory_report
 
-            form4_report = await get_advisory_report(ticker)
+            # Foreign private issuers file no Form 4 — skip the DB lookup and tell the
+            # analysis why insider data is absent and what stands in for it.
+            form4_report = None if _foreign_issuer else await get_advisory_report(ticker)
 
-            if form4_report and "status" not in form4_report and "error" not in form4_report:
+            if _foreign_issuer:
+                from langchain_core.documents import Document
+                alignment_docs.insert(0, Document(
+                    page_content=(
+                        f"INSIDER TRADING DATA — {ticker}\n\n{form4_exemption_message(ticker)} "
+                        f"Assess alignment from the 20-F ownership and related-party disclosures "
+                        f"below, and state that insider buying/selling data is not available for "
+                        f"this issuer by regulation (not because data is missing)."
+                    ),
+                    metadata={"source": "form4_exemption_note", "company": ticker, "content_type": "insider_trading"}
+                ))
+                logger.info(f"    {ticker} is a foreign private issuer — added Form 4 exemption note instead of insider data")
+            elif form4_report and "status" not in form4_report and "error" not in form4_report:
                 lines = [f"INSIDER TRADING ANALYSIS (SEC Form 4) — {ticker}\n"]
                 for issuer_name, detail in form4_report.items():
                     if issuer_name in ("error", "status", "message", "ticker"):

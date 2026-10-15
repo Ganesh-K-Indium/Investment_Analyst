@@ -24,6 +24,7 @@ logger.addHandler(console_handler)
 
 try:
     from settings import LOG_LEVEL
+    from app.utils.company_mapping import is_foreign_private_issuer, form4_exemption_message
     from sqlalchemy import select, delete
     from rag.utils.Insights_Form4.database import reset_db, get_db, Form4Transaction
     from fetch import SecEdgarFetcher
@@ -109,7 +110,24 @@ async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset
         end_date = date.today()
 
     logger.info(f"Starting Ingestion - Ticker: {ticker}, Date Range: {start_date} to {end_date}")
-    
+
+    # Foreign private issuers never file Form 4 (Section 16 exemption) — don't hit
+    # EDGAR just to report an empty result that looks like an ingestion failure.
+    # Checked before reset_database so this ticker can't trigger a table wipe.
+    if is_foreign_private_issuer(ticker):
+        logger.info(f"Skipping {ticker}: foreign private issuer (no Form 4 filings exist).")
+        return {
+            "ticker": ticker,
+            "total_url_fetched": 0,
+            "forms_with_common_stock": 0,
+            "forms_with_0_common_stock": 0,
+            "transactions_saved_total": 0,
+            "skipped_already_in_db": 0,
+            "failed": 0,
+            "date_range": {"start": str(start_date), "end": str(end_date)},
+            "message": form4_exemption_message(ticker),
+        }
+
     # 1. Reset Database (optional)
     if reset_database:
         try:

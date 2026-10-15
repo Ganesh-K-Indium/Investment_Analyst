@@ -386,6 +386,21 @@ def is_foreign_private_issuer(ticker: str) -> bool:
     return bool(ticker) and ticker.lower().split('_')[0] in FOREIGN_PRIVATE_ISSUER_TICKERS
 
 
+def form4_exemption_message(ticker: str) -> str:
+    """
+    Why there is no Form 4 data for a foreign private issuer. Their officers,
+    directors and 10% holders are exempt from Section 16 of the Exchange Act
+    (Rule 3a12-3(b)), so no Form 4 is ever filed — "no data" here is a fact about
+    the issuer, not a gap in ingestion.
+    """
+    return (
+        f"{ticker.upper()} is a foreign private issuer. Its officers, directors and 10% holders "
+        f"are exempt from Section 16 of the Exchange Act, so no Form 4 insider-transaction filings "
+        f"exist for it. Share ownership of directors and senior management, major shareholders and "
+        f"related-party transactions are disclosed in its annual report (Form 20-F, Items 6 and 7) instead."
+    )
+
+
 def get_fiscal_year_end_month(ticker: str) -> int:
     """
     Return the fiscal-year-end month (1-12) for a ticker.
