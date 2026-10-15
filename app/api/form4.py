@@ -1,19 +1,25 @@
 """
 Form 4 Insider Trading Endpoints
 
-POST /form4/ingest  — fetch and ingest Form 4 filings from SEC EDGAR for a ticker.
+POST /form4/ingest         — fetch and ingest Form 4 filings from SEC EDGAR for a ticker.
+POST /form4/ingest/batch   — same, for several tickers (single JSON response).
+POST /form4/ingest/stream  — same as batch, streamed as SSE (progress + live logs).
 """
+import asyncio
+import json
 import logging
 import re
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.form4_ingestion import run_form4_ingestion, run_form4_ingestion_multi
 from app.database.models import User
 from app.auth.deps import get_current_user
+from app.utils.log_capture import sse_log_context
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +78,10 @@ class Form4BatchIngestRequest(BaseModel):
         None,
         description="Fetch filings from this date onward (YYYY-MM-DD), applied to every ticker. Defaults to 2025-01-01.",
         examples=["2025-01-01"],
+    )
+    end_date: Optional[date] = Field(
+        None,
+        description="Only used by /form4/ingest/stream: fetch filings up to this date (YYYY-MM-DD). Defaults to today.",
     )
 
 
@@ -172,3 +182,99 @@ async def ingest_form4_batch(
             status_code=500,
             detail=f"Batch ingestion failed for {tickers}: {exc}",
         )
+
+
+# Progress dicts emitted by the ingestion pipeline -> SSE event names.
+_PROGRESS_EVENT_NAMES = {
+    "ticker_start": "ticker_start",
+    "fetched": "fetched",
+    "filing": "progress",
+    "ticker_done": "ticker_completed",
+}
+
+
+@router.post(
+    "/ingest/stream",
+    summary="Ingest Form 4 data for one or more tickers via SSE",
+    description=(
+        "Same ingestion as /form4/ingest/batch, streamed as Server-Sent Events so the UI can show "
+        "live progress. Events (each `data: {\"event\": ..., \"data\": {...}}`): `start` "
+        "{tickers, total}, `ticker_start` {ticker, index, count}, `fetched` {ticker, total}, "
+        "`progress` {ticker, processed, total}, `log` {message}, `ticker_completed` {result}, "
+        "`completed` {tickers, results, totals, date_range}, `error` {detail}. Foreign private "
+        "issuers are skipped with an explanatory message (they file no Form 4)."
+    ),
+)
+async def ingest_form4_stream(
+    request: Form4BatchIngestRequest,
+    current_user: User = Depends(get_current_user),
+):
+    # Validated before the stream opens so bad input is a normal 400, not a stream error.
+    tickers = list(dict.fromkeys(_validate_ticker(t) for t in request.tickers))
+
+    async def event_generator():
+        log_queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        token = sse_log_context.set((loop, log_queue))
+        main_queue = asyncio.Queue()
+
+        def on_progress(payload: dict):
+            event = _PROGRESS_EVENT_NAMES.get(payload.get("type"))
+            if event:
+                data = {k: v for k, v in payload.items() if k != "type"}
+                main_queue.put_nowait({"event": event, "data": data})
+
+        async def flush_logs():
+            # Let pending log callbacks land, then move anything the drainer hasn't yet, so the
+            # last lines (e.g. the ingestion summary) arrive before `completed` / `error`.
+            await asyncio.sleep(0)
+            while not log_queue.empty():
+                msg = log_queue.get_nowait()
+                if msg is not None:
+                    await main_queue.put({"event": "log", "data": {"message": msg}})
+
+        async def run_ingestion():
+            try:
+                await main_queue.put({"event": "start", "data": {"tickers": tickers, "total": len(tickers)}})
+                result = await run_form4_ingestion_multi(
+                    tickers=tickers,
+                    start_date=request.start_date,
+                    end_date=request.end_date,
+                    progress_cb=on_progress,
+                )
+                if result is None:
+                    raise RuntimeError("Ingestion pipeline returned no result (check logs for details).")
+                await flush_logs()
+                await main_queue.put({"event": "completed", "data": result})
+            except Exception as exc:
+                logger.error(f"Form4 stream ingestion failed for {tickers}: {exc}", exc_info=True)
+                await flush_logs()
+                await main_queue.put({"event": "error", "data": {"detail": f"Form 4 ingestion failed: {exc}"}})
+            finally:
+                await main_queue.put(None)
+
+        async def run_log_drainer():
+            try:
+                while True:
+                    msg = await log_queue.get()
+                    if msg is None:
+                        break
+                    await main_queue.put({"event": "log", "data": {"message": msg}})
+            except asyncio.CancelledError:
+                pass
+
+        ingest_task = asyncio.create_task(run_ingestion())
+        drainer_task = asyncio.create_task(run_log_drainer())
+
+        try:
+            while True:
+                event = await main_queue.get()
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+        finally:
+            ingest_task.cancel()
+            drainer_task.cancel()
+            sse_log_context.reset(token)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

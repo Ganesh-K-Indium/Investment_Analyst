@@ -1,6 +1,7 @@
 
 import sys
 import os
+import asyncio
 import logging
 from datetime import datetime, date
 
@@ -89,7 +90,7 @@ def is_common_stock(security_title: str, is_derivative: bool) -> bool:
     return False
 
 
-async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_database=False):
+async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset_database=False, progress_cb=None):
     """
     Fetches and ingests ALL Form 4 filings from SEC EDGAR since start_date.
     
@@ -98,6 +99,9 @@ async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset
         start_date: Start date for fetching filings (inclusive). Defaults to Jan 1, 2025.
         end_date: End date for fetching filings (inclusive). Defaults to today.
         reset_database: If True, resets the database before ingestion.
+        progress_cb: Optional callable receiving progress dicts (used by the SSE endpoint):
+            {"type": "fetched", "ticker", "total"} once the filing list is known, then
+            {"type": "filing", "ticker", "processed", "total"} after each filing.
     """
     if not ticker:
         logger.error("No ticker or company mentioned. Please provide a ticker symbol (e.g. 'NVDA', 'AAPL').")
@@ -151,13 +155,18 @@ async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset
     logger.info(f"Fetching all filings for {ticker}...")
     
     try:
-        xml_urls = fetcher.fetch_latest_filings(
-            ticker=ticker, 
-            start_date=start_date, 
+        # The fetcher uses blocking `requests` + rate-limit sleeps; run it in a worker thread so
+        # the event loop (and the SSE stream) keeps flushing instead of freezing for the whole listing.
+        xml_urls = await asyncio.to_thread(
+            fetcher.fetch_latest_filings,
+            ticker=ticker,
+            start_date=start_date,
             end_date=end_date,
-            limit=500
+            limit=500,
         )
         logger.info(f"SEC returned {len(xml_urls)} valid Form 4 filing URLs total within date range {start_date} to {end_date}.")
+        if progress_cb:
+            progress_cb({"type": "fetched", "ticker": ticker, "total": len(xml_urls)})
     except Exception as e:
         logger.error(f"Failed to fetch filings from SEC: {e}")
         return
@@ -202,7 +211,7 @@ async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset
                     continue
 
                 # Fetch Content
-                content = fetcher.fetch_xml_content(url)
+                content = await asyncio.to_thread(fetcher.fetch_xml_content, url)
 
                 if not content:
                     logger.warning(f"  -> Failed to fetch XML content. Skipping.")
@@ -223,9 +232,9 @@ async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset
                 xml_saver.save_xml(content, ticker, url, filing_date)
                 
                 # Download and save the filing document (HTML) for cross-checking
-                pdf_url = fetcher.fetch_pdf_url(url)
+                pdf_url = await asyncio.to_thread(fetcher.fetch_pdf_url, url)
                 if pdf_url:
-                    pdf_content = fetcher.fetch_pdf_content(pdf_url)
+                    pdf_content = await asyncio.to_thread(fetcher.fetch_pdf_content, pdf_url)
                     if pdf_content:
                         xml_saver.save_pdf(pdf_content, url)
                 
@@ -319,6 +328,11 @@ async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset
                 await db.rollback()
                 fail_count += 1
 
+            finally:
+                # finally (not after the try): the skip/failed branches above `continue`
+                if progress_cb:
+                    progress_cb({"type": "filing", "ticker": ticker, "processed": i + 1, "total": len(xml_urls)})
+
     logger.info("="*50)
     logger.info("INGESTION SUMMARY")
     logger.info("="*50)
@@ -356,7 +370,7 @@ async def run_form4_ingestion(ticker=None, start_date=None, end_date=None, reset
         "date_range": {"start": str(start_date), "end": str(end_date)},
     }
 
-async def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None, reset_database=False):
+async def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None, reset_database=False, progress_cb=None):
     """
     Runs run_form4_ingestion() once per ticker, sequentially, and aggregates the results.
 
@@ -370,6 +384,8 @@ async def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None
         start_date: Start date for fetching filings (inclusive). Defaults to Jan 1, 2025 (per-ticker default).
         end_date: End date for fetching filings (inclusive). Defaults to today.
         reset_database: If True, resets the database once before ingesting any ticker.
+        progress_cb: Optional callable receiving progress dicts — the single-ticker events plus
+            {"type": "ticker_start", "ticker", "index", "count"} and {"type": "ticker_done", "result"}.
     """
     if not tickers:
         logger.error("No tickers provided. Usage: run_form4_ingestion_multi(tickers=['NVDA', 'AAPL'])")
@@ -411,12 +427,15 @@ async def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None
     results = []
     for i, ticker in enumerate(normalized_tickers):
         logger.info(f"=== [{i+1}/{len(normalized_tickers)}] Ingesting ticker: {ticker} ===")
+        if progress_cb:
+            progress_cb({"type": "ticker_start", "ticker": ticker, "index": i, "count": len(normalized_tickers)})
         try:
             result = await run_form4_ingestion(
                 ticker=ticker,
                 start_date=start_date,
                 end_date=end_date,
                 reset_database=False,  # already handled once above
+                progress_cb=progress_cb,
             )
         except Exception as e:
             logger.error(f"Ingestion crashed for ticker {ticker}: {e}")
@@ -435,6 +454,8 @@ async def run_form4_ingestion_multi(tickers=None, start_date=None, end_date=None
                 "message": f"Ingestion failed or returned no result for {ticker}.",
             }
         results.append(result)
+        if progress_cb:
+            progress_cb({"type": "ticker_done", "result": result})
 
     totals = {
         "total_url_fetched": sum(r.get("total_url_fetched", 0) for r in results),
