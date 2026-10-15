@@ -1,5 +1,6 @@
 """
-SEC EDGAR filing fetcher — downloads 10-K / 10-Q / 8-K filings for a ticker,
+SEC EDGAR filing fetcher — downloads 10-K / 10-Q / 8-K (and, for foreign private
+issuers, 20-F / 6-K) filings for a ticker,
 renders each to PDF, and ingests them into the RAG vector store with the
 correct filing_type tag.
 
@@ -28,6 +29,8 @@ import httpx
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
+from app.utils.filing_types import MIN_PLAUSIBLE_PAGES, VALID_FILING_TYPES
+
 load_dotenv()
 
 logger = logging.getLogger("ingestion.edgar_fetcher")
@@ -35,14 +38,26 @@ logger = logging.getLogger("ingestion.edgar_fetcher")
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "Indium Capital contact@indium.com")
 SEC_REQUEST_RATE_LIMIT = 10  # max 10 requests/sec (SEC guideline) — enforced per-IP, not per-instance
 
-VALID_FORM_TYPES = ("10-K", "10-Q", "8-K")
+VALID_FORM_TYPES = VALID_FILING_TYPES
+
+# Default when a caller doesn't pick form types. 6-K is deliberately opt-in: a
+# foreign issuer files them in bulk (often hundreds), and each is rendered with its
+# exhibits, so pulling them should be an explicit choice. 20-F is low-volume annual
+# data and costs nothing for domestic tickers (they simply have none).
+DEFAULT_FORM_TYPES = ("10-K", "10-Q", "8-K", "20-F")
 
 # Minimum plausible page count per filing type — a sanity floor, not an exact
-# expectation. 10-K/10-Q are always substantial (audited/condensed financial
-# statements + footnotes + MD&A); 8-Ks are genuinely often just 1-3 pages, so
-# they get a much lower floor. Anything under this for its form type almost
-# certainly means a truncated/interrupted render, not a real short filing.
-_MIN_PLAUSIBLE_PAGES = {"10-K": 15, "10-Q": 10, "8-K": 1}
+# expectation. 10-K/10-Q/20-F are always substantial (audited/condensed financial
+# statements + footnotes + MD&A); 8-Ks and 6-Ks are genuinely often just 1-3
+# pages, so they get a much lower floor. Anything under this for its form type
+# almost certainly means a truncated/interrupted render, not a real short filing.
+_MIN_PLAUSIBLE_PAGES = MIN_PLAUSIBLE_PAGES
+
+# A 6-K's primary document is usually only a cover page + signature; the actual
+# content (press release, interim financials) lives in its exhibits (EX-99.x).
+# Cap how many exhibits get rendered into one PDF so a 6-K bundling dozens of
+# attachments can't produce an unbounded render.
+_MAX_6K_EXHIBITS = 6
 
 
 def _is_valid_filing_pdf(pdf_path: str, form: Optional[str] = None) -> bool:
@@ -96,7 +111,7 @@ _edgar_rate_limiter = _SharedRateLimiter(SEC_REQUEST_RATE_LIMIT)
 
 
 class SecEdgarFetcher:
-    """Fetches SEC filings (10-K/10-Q/8-K), converts them to PDF, and ingests them."""
+    """Fetches SEC filings (10-K/10-Q/8-K/20-F/6-K), converts them to PDF, and ingests them."""
 
     def __init__(self):
         self.headers = {
@@ -134,8 +149,75 @@ class SecEdgarFetcher:
 
         raise ValueError(f"CIK not found for ticker {ticker}")
 
+    async def _list_6k_exhibit_urls(self, primary_url: str) -> List[str]:
+        """
+        URLs of the HTML exhibits (EX-99.x press releases / interim financials)
+        sitting beside a 6-K's primary document, from the filing's directory
+        listing. Best-effort: returns [] if the listing can't be read, in which
+        case the 6-K is ingested from its primary document alone.
+        """
+        base_url = primary_url.rsplit("/", 1)[0] + "/"
+        primary_name = primary_url.rsplit("/", 1)[1].lower()
+        try:
+            listing = (await self._rate_limited_request(base_url + "index.json")).json()
+            names = [item["name"] for item in listing.get("directory", {}).get("item", [])]
+        except Exception as e:
+            logger.warning("Could not list exhibits for 6-K %s: %s", primary_url, e)
+            return []
+
+        exhibits = [
+            n for n in names
+            if n.lower().endswith((".htm", ".html"))
+            and n.lower() != primary_name
+            and "index" not in n.lower()
+        ]
+        return [base_url + n for n in sorted(exhibits)[:_MAX_6K_EXHIBITS]]
+
     async def convert_url_to_pdf(self, url: str, output_path: str, form: Optional[str] = None):
-        """Render a SEC HTML filing page to PDF.
+        """Render a SEC filing to PDF (a 6-K is rendered together with its exhibits)."""
+        if form == "6-K":
+            exhibit_urls = await self._list_6k_exhibit_urls(url)
+            if exhibit_urls:
+                import fitz
+                parts = []
+                try:
+                    for i, part_url in enumerate([url] + exhibit_urls):
+                        part_path = f"{output_path}.part{i}"
+                        await self._render_html_to_pdf(part_url, part_path)
+                        parts.append(part_path)
+                    merged = fitz.open()
+                    for part_path in parts:
+                        with fitz.open(part_path) as part_doc:
+                            merged.insert_pdf(part_doc)
+                    merged.save(output_path)
+                    merged.close()
+                finally:
+                    for part_path in parts:
+                        if os.path.exists(part_path):
+                            os.remove(part_path)
+            else:
+                await self._render_html_to_pdf(url, output_path)
+        else:
+            await self._render_html_to_pdf(url, output_path)
+
+        # A render that got interrupted partway (killed process, network drop
+        # mid-fetch of html_content, etc.) can still leave a syntactically
+        # valid, non-empty PDF on disk — just a truncated one (e.g. an 8-page
+        # file for a filing that should be 100+ pages). Every later run then
+        # sees the file already exists and skips re-rendering forever,
+        # silently ingesting (or failing to ingest) garbage. Validate the
+        # output immediately and delete+raise rather than leaving a bad file
+        # behind for a future run to trip over.
+        if not _is_valid_filing_pdf(output_path, form):
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise RuntimeError(
+                f"Rendered PDF for {output_path} looks incomplete/corrupt "
+                f"(failed page-count sanity check for form type {form!r}) — deleted, not left on disk."
+            )
+
+    async def _render_html_to_pdf(self, url: str, output_path: str):
+        """Render one SEC HTML document to PDF.
 
         SEC.gov's WAF flags headless Chromium *navigating directly* to
         sec.gov as an "undeclared automated tool" and serves a block page —
@@ -194,26 +276,10 @@ class SecEdgarFetcher:
             finally:
                 await browser.close()
 
-        # A render that got interrupted partway (killed process, network drop
-        # mid-fetch of html_content, etc.) can still leave a syntactically
-        # valid, non-empty PDF on disk — just a truncated one (e.g. an 8-page
-        # file for a filing that should be 100+ pages). Every later run then
-        # sees the file already exists and skips re-rendering forever,
-        # silently ingesting (or failing to ingest) garbage. Validate the
-        # output immediately and delete+raise rather than leaving a bad file
-        # behind for a future run to trip over.
-        if not _is_valid_filing_pdf(output_path, form):
-            if os.path.exists(output_path):
-                os.remove(output_path)
-            raise RuntimeError(
-                f"Rendered PDF for {output_path} looks incomplete/corrupt "
-                f"(failed page-count sanity check for form type {form!r}) — deleted, not left on disk."
-            )
-
     async def list_filings(
         self,
         ticker: str,
-        form_types: Sequence[str] = VALID_FORM_TYPES,
+        form_types: Sequence[str] = DEFAULT_FORM_TYPES,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         output_dir: str = "sec_filings",
@@ -227,7 +293,7 @@ class SecEdgarFetcher:
 
         Args:
             ticker: Stock ticker symbol.
-            form_types: SEC form types to include (subset of "10-K", "10-Q", "8-K").
+            form_types: SEC form types to include (subset of VALID_FORM_TYPES).
             start_date: Only include filings on/after this date. Defaults to no lower bound.
             end_date: Only include filings on/before this date. Defaults to today.
             output_dir: Directory that would hold rendered PDFs (used to build pdf_path).
@@ -268,12 +334,21 @@ class SecEdgarFetcher:
                 primary_doc = filings["primaryDocument"][i]
 
                 # EDGAR's `reportDate` is the actual period this filing covers (fiscal
-                # year end for a 10-K, fiscal quarter end for a 10-Q, event date for an
-                # 8-K) — distinct from `filingDate` (when it was submitted, typically
+                # year end for a 10-K/20-F, fiscal quarter end for a 10-Q, event date for an
+                # 8-K/6-K) — distinct from `filingDate` (when it was submitted, typically
                 # weeks later). This is SEC ground truth, so it's passed to ingest_pdf()
                 # as an explicit override — it always wins over cover-page/filename
                 # detection rather than being re-derived.
                 report_date_str = filings.get("reportDate", [None] * len(filings["form"]))[i] or None
+
+                # 6-K's `reportDate` is filer-entered and unreliable: often blank, and
+                # sometimes a date AFTER the filing itself (e.g. a quarter-end still in
+                # the future), which would tag the chunks with the wrong year. An
+                # interim/event report can't cover a period that hasn't happened, so
+                # fall back to the filing date. (10-K/10-Q/20-F report dates are
+                # validated by the SEC and left as-is.)
+                if form == "6-K" and (not report_date_str or report_date_str > filing_date_str):
+                    report_date_str = filing_date_str
 
                 filing_url = (
                     f"https://www.sec.gov/Archives/edgar/data/"
@@ -294,11 +369,11 @@ class SecEdgarFetcher:
         available = _parse_block(data["filings"]["recent"])
 
         # The "recent" block above is capped at ~1000 entries total across
-        # EVERY form type (10-K/10-Q/8-K plus Form 4/144/13F/etc.) — for a
+        # EVERY form type (10-K/10-Q/8-K/20-F/6-K plus Form 4/144/13F/etc.) — for a
         # ticker with heavy insider-transaction filing volume (e.g. a
         # megacap with frequent Form 4/144s), that cap can be exhausted by
-        # non-10-K/10-Q/8-K noise within just the last 1-2 years, silently
-        # pushing OLDER 10-Ks/10-Qs/8-Ks out of view even though they still
+        # non-requested-form noise within just the last 1-2 years, silently
+        # pushing OLDER filings out of view even though they still
         # exist on EDGAR. Older history lives in separate paginated files
         # listed under filings.files — fetch whichever of those overlap the
         # requested date range (all of them, when start_date is None, since
@@ -325,7 +400,7 @@ class SecEdgarFetcher:
     async def fetch_filings(
         self,
         ticker: str,
-        form_types: Sequence[str] = VALID_FORM_TYPES,
+        form_types: Sequence[str] = DEFAULT_FORM_TYPES,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         output_dir: str = "sec_filings",
@@ -338,7 +413,7 @@ class SecEdgarFetcher:
 
         Args:
             ticker: Stock ticker symbol.
-            form_types: SEC form types to fetch (subset of "10-K", "10-Q", "8-K").
+            form_types: SEC form types to fetch (subset of VALID_FORM_TYPES).
             start_date: Only include filings on/after this date. Defaults to no lower bound.
             end_date: Only include filings on/before this date. Defaults to today.
             output_dir: Directory to save rendered PDFs under (one subfolder per ticker).
@@ -422,7 +497,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Fetch and ingest SEC filings for a ticker.")
     parser.add_argument("ticker")
-    parser.add_argument("--form-types", nargs="+", default=list(VALID_FORM_TYPES), choices=VALID_FORM_TYPES)
+    parser.add_argument("--form-types", nargs="+", default=list(DEFAULT_FORM_TYPES), choices=VALID_FORM_TYPES)
     parser.add_argument("--start-date", type=date.fromisoformat, default=None)
     parser.add_argument("--end-date", type=date.fromisoformat, default=None)
     parser.add_argument("--no-ingest", action="store_true", help="Download PDFs only, skip vector ingestion.")

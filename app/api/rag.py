@@ -812,6 +812,7 @@ async def get_capabilities():
             "Financial documents (PDF, DOCX)",
             "10-K annual reports",
             "10-Q quarterly reports",
+            "20-F annual reports and 6-K interim reports (foreign private issuers)",
             "Earnings call transcripts",
             "Annual reports",
             "Web search results (fallback)",

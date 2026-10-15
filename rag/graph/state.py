@@ -78,7 +78,7 @@ class GraphState(TypedDict):
     macro_report: str                      # Step 3 output: LLM-formatted final answer
     qdrant_error: Optional[str]            # Set when Qdrant connection fails (not collection-not-found)
     # Filing-type-aware retrieval fields (RAG multi-filing-type support)
-    filing_types: List[str]                # Inferred/resolved filing type filter(s): any of "10-K"/"10-Q"/"8-K", empty list = search all
+    filing_types: List[str]                # Inferred/resolved filing type filter(s): any of "10-K"/"20-F"/"10-Q"/"8-K"/"6-K", empty list = search all
     comparison_spans_multiple_filings: bool  # True when a requested year range required querying more than one filing/year window
     comparison_span_details: Optional[str]   # Human-readable note on which years/filing types were combined, threaded to the generation prompt
     requested_fiscal_quarters: List[int]    # Fiscal quarter(s) (1-4) explicitly requested in the question (e.g. "Q1 vs Q3"), empty list if not quarter-specific

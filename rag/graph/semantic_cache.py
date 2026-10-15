@@ -95,6 +95,8 @@ class SemanticCache:
             parts.append(f"ticker={ticker.lower()}")
         if requested_years:
             parts.append(f"years={','.join(str(y) for y in sorted(requested_years))}")
+        if isinstance(filing_type, (list, tuple)):
+            filing_type = ",".join(sorted(filing_type))
         parts.append(f"filing_type={filing_type or 'any'}")
         return " | ".join(parts)
 
@@ -110,7 +112,7 @@ class SemanticCache:
                 cache key so answers for different companies never collide.
             requested_years: Resolved year filter for this query, if any.
             filing_type: Resolved filing_type filter for this query, if any
-                ("10-K"/"10-Q"/"8-K"/None). Folded into the cache key so a
+                ("10-K"/"20-F"/"10-Q"/"8-K"/"6-K"/None, or a list of them). Folded into the cache key so a
                 cached answer scoped to one filing type is never served for
                 a query that resolves to a different filing type.
 

@@ -2,7 +2,7 @@
 """
 Resumable batch PDF ingestion into Qdrant.
 
-Ingests many PDFs (10-K / 10-Q / 8-K) in one run with a persistent progress
+Ingests many PDFs (10-K / 10-Q / 8-K / 20-F / 6-K) in one run with a persistent progress
 file, so a crash or an error on one file never loses progress on the rest —
 re-running the same command skips everything already marked "success" and
 picks up exactly where it left off.
@@ -51,6 +51,7 @@ sys.path.insert(0, current_dir)
 
 from tqdm import tqdm
 from ingestion.ingest_pdf import ingest_pdf
+from app.utils.filing_types import VALID_FILING_TYPES
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,7 +60,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ingestion.batch_ingest")
 
-VALID_FILING_TYPES = ("10-K", "10-Q", "8-K")
 
 
 def load_manifest(manifest_path: str) -> list:

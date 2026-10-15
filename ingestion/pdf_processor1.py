@@ -29,6 +29,7 @@ if project_root not in sys.path:
 
 from app.utils.company_mapping import TICKER_TO_COMPANY, get_company_name, get_ticker
 from app.utils.usage_tracker import track_usage, record_usage
+from app.utils.filing_types import VALID_FILING_TYPES
 
 load_dotenv()
 
@@ -175,7 +176,6 @@ def extract_company_name(file_name: str) -> str:
     
     return company
 
-VALID_FILING_TYPES = ("10-K", "10-Q", "8-K")
 
 
 def extract_filing_type_from_filename(file_name: str):
@@ -198,6 +198,10 @@ def extract_filing_type_from_filename(file_name: str):
         return "10-Q"
     if re.search(r'\b8\s?k\b', normalized, flags=re.IGNORECASE):
         return "8-K"
+    if re.search(r'\b20\s?f\b', normalized, flags=re.IGNORECASE):
+        return "20-F"
+    if re.search(r'\b6\s?k\b', normalized, flags=re.IGNORECASE):
+        return "6-K"
     return None
 
 
@@ -209,6 +213,8 @@ def extract_cover_page_info(pdf_document, max_pages: int = 3) -> dict:
       - 10-K:  "FORM 10-K" ... "for the fiscal year ended <date>"
       - 10-Q:  "FORM 10-Q" ... "for the quarterly period ended <date>"
       - 8-K:   "FORM 8-K"  ... "Date of Report (Date of earliest event reported): <date>"
+      - 20-F:  "FORM 20-F" ... "for the fiscal year ended <date>"
+      - 6-K:   "FORM 6-K"  ... "For the month of <Month YYYY>"
 
     Returns:
         dict: {"filing_type": Optional[str], "period_end_date": Optional[str] (ISO date)}
@@ -231,12 +237,24 @@ def extract_cover_page_info(pdf_document, max_pages: int = 3) -> dict:
     if not cover_text.strip():
         return result
 
-    if re.search(r'\bform\s*10[-\s]?k\b', cover_text, re.IGNORECASE):
-        result["filing_type"] = "10-K"
-    elif re.search(r'\bform\s*10[-\s]?q\b', cover_text, re.IGNORECASE):
-        result["filing_type"] = "10-Q"
-    elif re.search(r'\bform\s*8[-\s]?k\b', cover_text, re.IGNORECASE):
-        result["filing_type"] = "8-K"
+    # The form's own title ("FORM 6-K") is the first form reference on a cover page,
+    # but other form names can appear later on the same page — a 6-K cover carries a
+    # "Form 20-F ☒ Form 40-F ☐" check-box line, and 10-Qs routinely cite "our Form
+    # 10-K". So take the EARLIEST match rather than testing types in a fixed order.
+    form_patterns = (
+        ("10-K", r'\bform\s*10[-\s]?k\b'),
+        ("10-Q", r'\bform\s*10[-\s]?q\b'),
+        ("8-K", r'\bform\s*8[-\s]?k\b'),
+        ("20-F", r'\bform\s*20[-\s]?f\b'),
+        ("6-K", r'\bform\s*6[-\s]?k\b'),
+    )
+    earliest = None
+    for form_name, pattern in form_patterns:
+        m = re.search(pattern, cover_text, re.IGNORECASE)
+        if m and (earliest is None or m.start() < earliest[0]):
+            earliest = (m.start(), form_name)
+    if earliest:
+        result["filing_type"] = earliest[1]
 
     date_capture = r'([A-Za-z]+\s+\d{1,2},?\s+\d{4})'
     date_match = (
@@ -254,6 +272,20 @@ def extract_cover_page_info(pdf_document, max_pages: int = 3) -> dict:
             result["period_end_date"] = parsed_date.date().isoformat()
         except Exception as e:
             logger.warning("Found a period-end date phrase but couldn't parse '%s': %s", date_match.group(1), e)
+    elif result["filing_type"] == "6-K":
+        # 6-K covers state only a month ("For the month of March 2025"). Use that
+        # month's last day — parsing "March 2025" alone would silently borrow
+        # today's day-of-month.
+        month_match = re.search(r'for\s+the\s+month\s+of\s+([A-Za-z]+)\s*,?\s+(\d{4})', cover_text, re.IGNORECASE)
+        if month_match:
+            try:
+                import calendar
+                from dateutil import parser as date_parser
+                month = date_parser.parse(f"1 {month_match.group(1)} {month_match.group(2)}").date()
+                last_day = calendar.monthrange(month.year, month.month)[1]
+                result["period_end_date"] = month.replace(day=last_day).isoformat()
+            except Exception as e:
+                logger.warning("Found a 6-K 'month of' phrase but couldn't parse it: %s", e)
 
     return result
 
@@ -517,13 +549,13 @@ async def process_pdf_and_get_result(uploaded_pdf_path: str, ticker: str = None,
     Args:
         uploaded_pdf_path: Path to the PDF file
         ticker: Ticker symbol (optional)
-        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional). Resolution
+        filing_type: SEC filing type - one of VALID_FILING_TYPES: "10-K", "10-Q", "8-K", "20-F", "6-K" (optional). Resolution
             order: this explicit value > detected from the document's own cover-page
             text > detected from the filename. Falls back to "10-K" with a loud
             warning only if none of the three resolve — never a silent guess.
         period_end_date: ISO date (YYYY-MM-DD) of the exact period this filing covers
-            (fiscal year end for a 10-K, fiscal quarter end for a 10-Q, event date for
-            an 8-K) — optional; pass this when the caller has an authoritative value
+            (fiscal year end for a 10-K/20-F, fiscal quarter end for a 10-Q, event date
+            for an 8-K, month end for a 6-K) — optional; pass this when the caller has an authoritative value
             (e.g. SEC EDGAR's reportDate). Otherwise detected from cover-page text.
         year: Fiscal/Report year (optional; explicit year override for metadata tagging).
 
@@ -621,7 +653,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
     Args:
         uploaded_pdf_path: Path to the PDF file
         ticker: Ticker symbol (optional)
-        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional). Resolution
+        filing_type: SEC filing type - one of VALID_FILING_TYPES: "10-K", "10-Q", "8-K", "20-F", "6-K" (optional). Resolution
             order: this explicit value > document cover-page text > filename. Falls
             back to "10-K" with a loud warning only if all three are inconclusive.
         period_end_date: ISO date (YYYY-MM-DD) this filing covers (optional, explicit

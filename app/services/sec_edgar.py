@@ -9,7 +9,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'ingestion'))
-from ingestion.edgar_fetcher import SecEdgarFetcher, VALID_FORM_TYPES
+from ingestion.edgar_fetcher import SecEdgarFetcher, DEFAULT_FORM_TYPES, VALID_FORM_TYPES
 
 class SecEdgarService:
     """Service for interacting with SEC EDGAR filings"""
@@ -17,7 +17,7 @@ class SecEdgarService:
     @staticmethod
     async def list_filings(
         ticker: str,
-        form_types: Sequence[str] = VALID_FORM_TYPES,
+        form_types: Sequence[str] = DEFAULT_FORM_TYPES,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         output_dir: str = "sec_filings"
@@ -37,7 +37,7 @@ class SecEdgarService:
     @staticmethod
     async def fetch_filings_stream(
         ticker: str,
-        form_types: Sequence[str] = VALID_FORM_TYPES,
+        form_types: Sequence[str] = DEFAULT_FORM_TYPES,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         output_dir: str = "sec_filings",

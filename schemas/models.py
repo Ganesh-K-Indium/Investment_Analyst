@@ -125,12 +125,16 @@ class UniversalSubQueryAnalysis(BaseModel):
     requested_years: list[int] = Field(
         description="Specific years mentioned in the query (e.g. 2023, 2024). Empty list if no years are specified."
     )
-    filing_type_hints: list[Literal["10-K", "10-Q", "8-K"]] = Field(
+    filing_type_hints: list[Literal["10-K", "10-Q", "8-K", "20-F", "6-K"]] = Field(
         default_factory=list,
         description=(
             "SEC filing type(s) the query implies: '10-K' for annual/full-year/comparative "
             "requests, '10-Q' for quarterly/latest-quarter requests, '8-K' for a specific "
             "material event (executive change, M&A, guidance update, press release). "
+            "Foreign private issuers file '20-F' (annual, the 10-K equivalent) and '6-K' "
+            "(interim/half-year results and events, the 8-K/10-Q equivalent): use '20-F' only "
+            "when the question names it, and '6-K' for half-year/interim results or when it "
+            "names 6-K; for a generic annual request return both '10-K' and '20-F'. "
             "Return MORE THAN ONE value ONLY when the question explicitly asks to combine or "
             "compare across filing types (e.g. 'compare the quarterly numbers to the annual "
             "filing', '10-K and 10-Q both') — otherwise return the single clearly-implied type. "

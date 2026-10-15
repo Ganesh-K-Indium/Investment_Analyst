@@ -2,6 +2,8 @@
 Mapping of stock tickers to company names and utility functions.
 """
 
+import re
+
 TICKER_TO_COMPANY = {
     # Tech companies
     'aapl': 'apple',
@@ -100,6 +102,38 @@ TICKER_TO_COMPANY = {
     'vno': 'vornado realty trust',
     'spg': 'simon property group',
     'pld': 'prologis',
+
+    # Foreign private issuers (file 20-F / 6-K instead of 10-K / 10-Q / 8-K).
+    # Tickers are the US-listed ADS/ordinary tickers EDGAR knows them by (e.g.
+    # Embraer is EMBJ, not its old ERJ). tsm / sap / asml / shel / bp / spot above
+    # are also foreign issuers — see FOREIGN_PRIVATE_ISSUER_TICKERS below.
+    # Deliberately NOT added: very short/common-word names (nio, vale, ...) —
+    # get_ticker() substring-matches names, so e.g. 'vale' would capture
+    # "Valero Energy".
+    'sny': 'sanofi',
+    'embj': 'embraer',
+    'tm': 'toyota',
+    'infy': 'infosys',
+    'baba': 'alibaba',
+    'sony': 'sony',
+    'hmc': 'honda',
+    'wit': 'wipro',
+    'hdb': 'hdfc bank',
+    'ibn': 'icici bank',
+    'nvo': 'novo nordisk',
+    'nvs': 'novartis',
+    'azn': 'astrazeneca',
+    'gsk': 'gsk',
+    'tte': 'totalenergies',
+    'deo': 'diageo',
+    'bti': 'british american tobacco',
+    'rio': 'rio tinto',
+    'bhp': 'bhp',
+    'pbr': 'petrobras',
+    'itub': 'itau unibanco',
+    'pdd': 'pdd holdings',
+    'bidu': 'baidu',
+    'jd': 'jd.com',
 }
 
 # Reverse mapping for looking up ticker by company name
@@ -112,6 +146,12 @@ COMPANY_TO_TICKER = {v: k for k, v in TICKER_TO_COMPANY.items()}
 # entirely (Python keeps only the last literal key), so "Alphabet" as a
 # company name resolved to no ticker at all.
 COMPANY_TO_TICKER['alphabet'] = 'googl'
+COMPANY_TO_TICKER['glaxosmithkline'] = 'gsk'
+COMPANY_TO_TICKER['taiwan semiconductor'] = 'tsm'
+COMPANY_TO_TICKER['tsmc'] = 'tsm'
+COMPANY_TO_TICKER['toyota motor'] = 'tm'
+COMPANY_TO_TICKER['embraer s.a.'] = 'embj'
+COMPANY_TO_TICKER['shell plc'] = 'shel'
 
 def get_company_name(ticker: str) -> str:
     """Get company name from ticker symbol."""
@@ -291,9 +331,59 @@ TICKER_TO_FISCAL_YEAR_END_MONTH = {
     # --- Real estate / other ---
     'pld': 12,    # Prologis
     'amt': 12,    # American Tower
+
+    # --- Foreign private issuers (20-F / 6-K filers) ---
+    # Months below come from EDGAR's `fiscalYearEnd` (verified) except where
+    # EDGAR leaves it blank (baba, gsk, bti, embj) — those are from each
+    # company's own reporting calendar. Japanese and Indian issuers mostly
+    # report on an April-March year, which is exactly the case where falling
+    # back to 12 would make "most recent filed year" one year stale.
+    'sap': 12,    # SAP (tsm / asml are listed with the tech names above)
+    'shel': 12,   # Shell
+    'bp': 12,     # BP
+    'spot': 12,   # Spotify
+    'sny': 12,    # Sanofi
+    'embj': 12,   # Embraer (EDGAR blank; calendar year)
+    'tm': 3,      # Toyota — March 31
+    'sony': 3,    # Sony Group — March 31
+    'hmc': 3,     # Honda — March 31
+    'infy': 3,    # Infosys — March 31
+    'wit': 3,     # Wipro — March 31
+    'hdb': 3,     # HDFC Bank — March 31
+    'ibn': 3,     # ICICI Bank — March 31
+    'baba': 3,    # Alibaba — March 31 (EDGAR blank)
+    'nvo': 12,    # Novo Nordisk
+    'nvs': 12,    # Novartis
+    'azn': 12,    # AstraZeneca
+    'gsk': 12,    # GSK (EDGAR blank; calendar year)
+    'tte': 12,    # TotalEnergies
+    'deo': 6,     # Diageo — June 30
+    'bti': 12,    # British American Tobacco (EDGAR blank; calendar year)
+    'rio': 12,    # Rio Tinto
+    'bhp': 6,     # BHP — June 30
+    'pbr': 12,    # Petrobras
+    'itub': 12,   # Itau Unibanco
+    'pdd': 12,    # PDD Holdings
+    'bidu': 12,   # Baidu
+    'jd': 12,     # JD.com
 }
 
 DEFAULT_FISCAL_YEAR_END_MONTH = 12  # calendar year end — fallback for tickers not in the table above
+
+# Tickers whose annual report is a 20-F (interim/event reports on 6-K) rather
+# than a 10-K. A 20-F is due 4 months after fiscal year end (vs 60-90 days for a
+# 10-K), so even a calendar-year foreign issuer has no filed annual report for
+# the year just ended until ~April — see get_most_recent_filed_fiscal_year().
+FOREIGN_PRIVATE_ISSUER_TICKERS = frozenset({
+    'tsm', 'sap', 'asml', 'shel', 'bp', 'spot', 'sny', 'embj', 'tm', 'sony', 'hmc',
+    'infy', 'wit', 'hdb', 'ibn', 'baba', 'nvo', 'nvs', 'azn', 'gsk', 'tte', 'deo',
+    'bti', 'rio', 'bhp', 'pbr', 'itub', 'pdd', 'bidu', 'jd',
+})
+
+
+def is_foreign_private_issuer(ticker: str) -> bool:
+    """True if the ticker files 20-F/6-K (foreign private issuer) rather than 10-K/10-Q/8-K."""
+    return bool(ticker) and ticker.lower().split('_')[0] in FOREIGN_PRIVATE_ISSUER_TICKERS
 
 
 def get_fiscal_year_end_month(ticker: str) -> int:
@@ -311,8 +401,8 @@ def get_fiscal_year_end_month(ticker: str) -> int:
 
 def get_most_recent_filed_fiscal_year(ticker: str, as_of: "datetime.date" = None) -> int:
     """
-    Return the most recent fiscal year for which a 10-K is likely to already
-    be filed, given the company's fiscal-year-end month.
+    Return the most recent fiscal year for which an annual report (10-K, or
+    20-F for foreign private issuers) is likely to already be filed, given the company's fiscal-year-end month.
 
     Replaces the blanket `current_calendar_year - 1` assumption: a company
     whose fiscal year ends in a month that has already passed this calendar
@@ -325,9 +415,12 @@ def get_most_recent_filed_fiscal_year(ticker: str, as_of: "datetime.date" = None
     today = as_of or _date.today()
     fye_month = get_fiscal_year_end_month(ticker)
 
-    if fye_month == 12:
+    if fye_month == 12 and not is_foreign_private_issuer(ticker):
         # Calendar-year filer: this year's 10-K isn't filed until ~Feb-Mar
         # of next year, so "most recent filed" is always last calendar year.
+        # (Foreign private issuers fall through to the lag-aware path below: a
+        # 20-F is due 4 months after year end, so in Jan-Mar the year just
+        # ended usually has no annual report yet.)
         return today.year - 1
 
     # Non-calendar filer: figure out which fiscal year most recently *ended*.
@@ -429,12 +522,21 @@ def get_ticker(company_name: str) -> str:
         # Clean up internal aliases like 'xom_alias' -> 'xom'
         return ticker.split('_')[0]
         
-    # 2. Partial match: search all company names
+    # 2. The input is already a known ticker. Portfolios store tickers (e.g. "HD"),
+    # not names, and without this a short ticker falls through to the substring
+    # match below and gets captured by an unrelated company whose name merely
+    # contains it ("hd" in "hdfc bank").
+    if name_lower in TICKER_TO_COMPANY:
+        return name_lower
+
+    # 3. Partial match: search all company names
     for ticker, company in TICKER_TO_COMPANY.items():
         comp_lower = company.lower()
-        # If the input name is in the full company name (e.g. "Exxon Mobil" in "Exxon Mobil Corporation")
-        # Or if the full company name is in the input name
-        if name_lower in comp_lower or comp_lower in name_lower:
+        # If the input name is in the full company name (e.g. "Exxon Mobil" in "Exxon Mobil Corporation"),
+        # matched on whole words only so a short input can't hit the middle of a
+        # word ("gs" in "gsk", "dis" in "nordisk", "bac" in "tobacco").
+        # Or if the full company name is in the input name.
+        if re.search(r'\b' + re.escape(name_lower) + r'\b', comp_lower) or comp_lower in name_lower:
             return ticker.split('_')[0]
-            
+
     return ""

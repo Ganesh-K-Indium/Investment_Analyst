@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Interactive SEC filing ingestion — pick a ticker, see what's available on
-EDGAR (10-K / 10-Q / 8-K), choose exactly which filings to pull in, and
+EDGAR (10-K / 10-Q / 8-K, plus 20-F / 6-K for foreign private issuers), choose exactly which filings to pull in, and
 ingest them into the RAG vector store.
 
 Usage:
@@ -15,6 +15,8 @@ When run interactively without --form-types, you first choose what to view:
     2) 10-K only
     3) 10-Q only
     4) 8-K only
+    5) 20-F only (foreign private issuer annual report)
+    6) 6-K only (foreign private issuer interim results / events)
     b) Back / q) Quit
 Picking a single type re-shows the table filtered to just that type. At the
 selection prompt below it, 'b' (or 'back') returns to this menu instead of
@@ -23,7 +25,7 @@ quitting outright, so you can switch filing types without restarting.
 At the selection prompt, mix and match any of:
     1,3,5           by row number
     1-4             by row range
-    FY2023,FY2024   by fiscal year — selects that year's 10-K(s)
+    FY2023,FY2024   by fiscal year — selects that year's 10-K/20-F(s)
     2025Q1,2025Q3   by fiscal quarter — selects that quarter's 10-Q(s)
                     (quarter is the TICKER's OWN fiscal quarter, e.g. Apple's
                     Q1 covers Oct-Dec — see the "Available fiscal quarters"
@@ -51,16 +53,17 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 from ingestion.edgar_fetcher import SecEdgarFetcher, VALID_FORM_TYPES  # noqa: E402
 from app.utils.company_mapping import get_fiscal_quarter  # noqa: E402
+from app.utils.filing_types import ANNUAL_FILING_TYPES  # noqa: E402
 
 
 def _label_filing(f: dict, ticker: str) -> str:
     """
     Human-facing period label for a filing:
-      - 10-K -> "FY2025" (fiscal year = period_end_date's calendar year, same
+      - 10-K / 20-F -> "FY2025" (fiscal year = period_end_date's calendar year, same
         convention used for the ingested `year` metadata field)
       - 10-Q -> "2025Q3" (fiscal quarter derived from period_end_date + the
         ticker's OWN fiscal calendar — ground truth, not a guess)
-      - 8-K  -> "" (a single event has no year/quarter grouping concept)
+      - 8-K / 6-K -> "" (a single event/interim release has no year/quarter grouping concept)
     """
     period_end_date = f.get("period_end_date")
     if not period_end_date:
@@ -68,7 +71,7 @@ def _label_filing(f: dict, ticker: str) -> str:
 
     year = int(period_end_date[:4])
 
-    if f["form"] == "10-K":
+    if f["form"] in ANNUAL_FILING_TYPES:
         return f"FY{year}"
     if f["form"] == "10-Q":
         quarter = get_fiscal_quarter(period_end_date, ticker)
@@ -131,6 +134,8 @@ def _prompt_filing_type_menu() -> list | str | None:
     print("  2) 10-K only")
     print("  3) 10-Q only")
     print("  4) 8-K only")
+    print("  5) 20-F only")
+    print("  6) 6-K only")
     print("  b) Back (choose a different ticker)")
     print("  q) Quit")
 
@@ -145,6 +150,10 @@ def _prompt_filing_type_menu() -> list | str | None:
         return ["10-Q"]
     if choice in ("4", "8-k", "8k"):
         return ["8-K"]
+    if choice in ("5", "20-f", "20f"):
+        return ["20-F"]
+    if choice in ("6", "6-k", "6k"):
+        return ["6-K"]
     # "1", "all", empty input, or anything unrecognized -> show everything
     return None
 
@@ -157,11 +166,11 @@ def _print_filing_table(filings: list, labels: list):
         print(f"{i:>3}  {f['form']:<6} {label:<8} {f['filing_date']:<12} {period_end:<12} {f['accession']}")
     print()
 
-    fiscal_years = sorted({label for f, label in zip(filings, labels) if f["form"] == "10-K" and label}, reverse=True)
+    fiscal_years = sorted({label for f, label in zip(filings, labels) if f["form"] in ANNUAL_FILING_TYPES and label}, reverse=True)
     fiscal_quarters = sorted({label for f, label in zip(filings, labels) if f["form"] == "10-Q" and label}, reverse=True)
 
     if fiscal_years:
-        print(f"Available fiscal years (10-K): {', '.join(fiscal_years)}")
+        print(f"Available fiscal years (10-K/20-F): {', '.join(fiscal_years)}")
     if fiscal_quarters:
         print(f"Available fiscal quarters (10-Q): {', '.join(fiscal_quarters)}")
     if fiscal_years or fiscal_quarters:
@@ -172,7 +181,7 @@ async def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("ticker", nargs="?", help="Ticker symbol (prompted if omitted)")
     parser.add_argument("--form-types", nargs="+", default=None, choices=VALID_FORM_TYPES,
-                         help="Which filing types to list (default: prompt interactively for all three)")
+                         help="Which filing types to list (default: prompt interactively)")
     parser.add_argument("--limit", type=int, default=25,
                          help="Max filings to list, most recent first (default: 25)")
     parser.add_argument("--all", action="store_true",
@@ -260,7 +269,9 @@ async def main():
                         change_ticker = True
                         break
 
-                    chosen_types = menu_choice or fetch_types
+                    # "All together" leaves out 6-K: a foreign issuer files them in
+                    # bulk and they'd crowd the capped table — pick option 6 for those.
+                    chosen_types = menu_choice or [t for t in fetch_types if t != "6-K"]
                     filtered = [f for f in available_all if f["form"] in chosen_types]
                     if not filtered:
                         print(f"No {'/'.join(chosen_types)} filings found for {ticker}.")

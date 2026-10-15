@@ -41,7 +41,7 @@ class FileImportService:
             integration_id: Integration ID to import from
             file_paths: List of file paths to import
             ticker: Ticker symbol for these files (e.g., AAPL, GOOGL)
-            filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional). Resolution
+            filing_type: SEC filing type - "10-K", "10-Q", "8-K", "20-F" or "6-K" (optional). Resolution
                 order if omitted: each file's own cover-page text > filename token >
                 "10-K" default with a loud warning — never a silent guess. Note this
                 explicit value, if passed, applies to ALL files in this batch; leave it

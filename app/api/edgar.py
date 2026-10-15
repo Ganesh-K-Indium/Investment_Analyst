@@ -1,7 +1,7 @@
 """
 SEC EDGAR Filing Ingestion Endpoints
 
-POST /edgar/list — fetch list of 10-K/10-Q/8-K filings for a ticker directly from SEC EDGAR.
+POST /edgar/list — fetch list of 10-K/10-Q/8-K/20-F/6-K filings for a ticker directly from SEC EDGAR.
 POST /edgar/ingest — fetch and ingest SEC filings (via SSE streaming).
 GET /edgar/file/{file_path} — serve SEC filing PDF file
 """
@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from app.database.models import User
 from app.auth.deps import get_current_user
 from app.services.sec_edgar import SecEdgarService
+from ingestion.edgar_fetcher import DEFAULT_FORM_TYPES, VALID_FORM_TYPES
 from app.utils.log_capture import sse_log_context
 
 logger = logging.getLogger(__name__)
@@ -43,13 +44,13 @@ def _validate_ticker(raw: str) -> str:
 
 class EdgarListRequest(BaseModel):
     ticker: str = Field(..., description="Stock ticker symbol (e.g. AAPL). Must be 1–5 uppercase letters.")
-    form_types: Optional[List[str]] = Field(["10-K", "10-Q", "8-K"], description="SEC form types to fetch.")
+    form_types: Optional[List[str]] = Field(list(DEFAULT_FORM_TYPES), description=f"SEC form types to fetch. One or more of {list(VALID_FORM_TYPES)}. 6-K (foreign issuer interim/event reports) is opt-in.")
     start_date: Optional[date] = Field(None, description="Only include filings on/after this date (YYYY-MM-DD).")
     end_date: Optional[date] = Field(None, description="Only include filings on/before this date (YYYY-MM-DD).")
 
 class EdgarIngestRequest(BaseModel):
     ticker: str = Field(..., description="Stock ticker symbol (e.g. AAPL). Must be 1–5 uppercase letters.")
-    form_types: Optional[List[str]] = Field(["10-K", "10-Q", "8-K"], description="SEC form types to fetch.")
+    form_types: Optional[List[str]] = Field(list(DEFAULT_FORM_TYPES), description=f"SEC form types to fetch. One or more of {list(VALID_FORM_TYPES)}. 6-K (foreign issuer interim/event reports) is opt-in.")
     accessions: Optional[List[str]] = Field(None, description="Specific accession numbers to ingest. If None, ingests all matching filters.")
     start_date: Optional[date] = Field(None, description="Only include filings on/after this date (YYYY-MM-DD).")
     end_date: Optional[date] = Field(None, description="Only include filings on/before this date (YYYY-MM-DD).")
@@ -60,7 +61,7 @@ class EdgarIngestRequest(BaseModel):
 
 @router.post(
     "/list",
-    summary="List SEC filings (10-K/10-Q/8-K) for a ticker",
+    summary="List SEC filings (10-K/10-Q/8-K/20-F/6-K) for a ticker",
 )
 async def list_edgar_filings(
     request: EdgarListRequest,
@@ -70,7 +71,7 @@ async def list_edgar_filings(
     try:
         filings = await SecEdgarService.list_filings(
             ticker=ticker,
-            form_types=request.form_types or ["10-K", "10-Q", "8-K"],
+            form_types=request.form_types or list(DEFAULT_FORM_TYPES),
             start_date=request.start_date,
             end_date=request.end_date
         )
@@ -86,7 +87,7 @@ async def list_edgar_filings(
 
 @router.post(
     "/ingest",
-    summary="Fetch and ingest SEC filings (10-K/10-Q/8-K) for a ticker via SSE",
+    summary="Fetch and ingest SEC filings (10-K/10-Q/8-K/20-F/6-K) for a ticker via SSE",
 )
 async def ingest_edgar_filings(
     request: EdgarIngestRequest,
@@ -104,7 +105,7 @@ async def ingest_edgar_filings(
             try:
                 async for event in SecEdgarService.fetch_filings_stream(
                     ticker=ticker,
-                    form_types=request.form_types or ["10-K", "10-Q", "8-K"],
+                    form_types=request.form_types or list(DEFAULT_FORM_TYPES),
                     start_date=request.start_date,
                     end_date=request.end_date,
                     accession_filter=set(request.accessions) if request.accessions else None,

@@ -1,6 +1,6 @@
 # Investment Analyst
 
-An AI-native investment research platform combining **document-grounded RAG over SEC filings** (10-K/10-Q/8-K), a **multi-agent quant system** for live market/technical/options analysis, an **insider-trading (Form 4) advisory pipeline**, **macroeconomic data (FRED + BLS)**, **external document/file integrations** (S3, SharePoint, Google Drive, Azure Blob, OneDrive, SFTP, Confluence), a **Redis/Arq background job system** for long-running analysis runs, and full **portfolio, chat-history, and analyst-report** management — all behind one FastAPI backend.
+An AI-native investment research platform combining **document-grounded RAG over SEC filings** (10-K/10-Q/8-K, plus 20-F/6-K for foreign private issuers), a **multi-agent quant system** for live market/technical/options analysis, an **insider-trading (Form 4) advisory pipeline**, **macroeconomic data (FRED + BLS)**, **external document/file integrations** (S3, SharePoint, Google Drive, Azure Blob, OneDrive, SFTP, Confluence), a **Redis/Arq background job system** for long-running analysis runs, and full **portfolio, chat-history, and analyst-report** management — all behind one FastAPI backend.
 
 For the full architectural deep-dive (every subsystem, every file, known gaps), see **[docs/TECHNICAL_GUIDE.md](docs/TECHNICAL_GUIDE.md)**. See **[BACKGROUND_ANALYSIS_GUIDE.md](BACKGROUND_ANALYSIS_GUIDE.md)** for the interactive-vs-batch job queue specifically. This README is the quick-start entry point.
 
@@ -8,7 +8,7 @@ For the full architectural deep-dive (every subsystem, every file, known gaps), 
 
 ## What it does
 
-- **RAG over SEC filings** — Ask questions across a portfolio's 10-K/10-Q/8-K filings, with filing-type-aware retrieval (a "latest quarter" question routes to 10-Qs, not 10-Ks), fiscal-calendar-aware period resolution (Apple's fiscal Q1 ≠ a calendar-year filer's Q1), hybrid dense+BM25 Qdrant search, and cross-period anti-hallucination guardrails when a comparison spans mismatched fiscal calendars or filing types.
+- **RAG over SEC filings** — Ask questions across a portfolio's 10-K/10-Q/8-K filings (and 20-F/6-K for foreign private issuers), with filing-type-aware retrieval (a "latest quarter" question routes to 10-Qs, not 10-Ks; a generic "annual report" question searches 10-K and 20-F together), fiscal-calendar-aware period resolution (Apple's fiscal Q1 ≠ a calendar-year filer's Q1), hybrid dense+BM25 Qdrant search, and cross-period anti-hallucination guardrails when a comparison spans mismatched fiscal calendars or filing types.
 - **SEC EDGAR ingestion** — Pull any ticker's filings directly from EDGAR, render to PDF, and ingest — either programmatically or via an interactive CLI (`scripts/ingest_ticker.py`) that lists available filings by fiscal year/quarter and lets you pick exactly which ones to bring in.
 - **ALPHA framework** — A 5-dimension equity research report per ticker (Alignment/insider activity, Liquidity, Performance, Horizon, Action) combining vector search, web research, and Form 4 data.
 - **Scenario framework (Bull/Bear/Base)** — A separate graph branch layered on the same RAG pipeline that generates bull-case/bear-case/base-case scenario analysis per query.
@@ -141,7 +141,7 @@ docker compose up --build
 
 ```bash
 python scripts/ingest_ticker.py AAPL
-# Lists available 10-K/10-Q/8-K filings with fiscal year/quarter labels
+# Lists available 10-K/10-Q/8-K/20-F/6-K filings with fiscal year/quarter labels
 # (e.g. "FY2024", "2025Q3"), lets you pick which to pull in and ingest.
 ```
 

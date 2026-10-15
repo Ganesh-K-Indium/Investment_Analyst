@@ -23,6 +23,7 @@ sys.path.insert(0, project_root)
 sys.path.insert(0, current_dir)
 
 from ingestion.pdf_processor1 import process_pdf_and_get_result
+from app.utils.filing_types import VALID_FILING_TYPES
 
 logger = logging.getLogger("ingestion.ingest_pdf")
 
@@ -72,11 +73,12 @@ async def ingest_pdf(pdf_path: str, ticker: str = None, filing_type: str = None,
     Args:
         pdf_path: Path to the PDF file
         ticker: Ticker symbol (optional)
-        filing_type: SEC filing type - "10-K", "10-Q", or "8-K" (optional). Resolution
+        filing_type: SEC filing type - "10-K", "10-Q", "8-K", "20-F" or "6-K" (optional). Resolution
             order if omitted: document cover-page text > filename token > "10-K"
             default with a loud warning (never a silent guess).
         period_end_date: ISO date (YYYY-MM-DD) this filing covers — fiscal year end
-            for a 10-K, fiscal quarter end for a 10-Q, event date for an 8-K
+            for a 10-K/20-F, fiscal quarter end for a 10-Q, event date for an 8-K,
+            month end for a 6-K
             (optional; pass this when the caller has an authoritative value, e.g.
             SEC EDGAR's reportDate — otherwise detected from cover-page text)
         year: Fiscal/Report year (optional; explicit year override for metadata tagging)
@@ -126,7 +128,7 @@ async def main():
     parser.add_argument("ticker", nargs="?", help="Ticker symbol (optional)", default=None)
     parser.add_argument(
         "--filing-type",
-        choices=["10-K", "10-Q", "8-K"],
+        choices=list(VALID_FILING_TYPES),
         default=None,
         help="SEC filing type (optional; detected from the document's cover page, then filename, if omitted)",
     )

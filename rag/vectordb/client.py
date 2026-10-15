@@ -5,6 +5,7 @@ this module is used for loading the unified RAG database with hybrid search capa
 import asyncio
 import logging
 import time
+from typing import Sequence, Union
 import tiktoken
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
@@ -193,7 +194,7 @@ class load_vector_database():
         return vectorstore
     
     async def hybrid_search(self, query: str, content_type: str = None, company: str = None,
-                     years: list = None, filing_type: str = None, period_end_date: str = None,
+                     years: list = None, filing_type: Union[str, Sequence[str]] = None, period_end_date: str = None,
                      fiscal_quarter: int = None,
                      limit: int = 10, dense_limit: int = 100, sparse_limit: int = 100):
         """
@@ -204,9 +205,11 @@ class load_vector_database():
             content_type: Filter by content type ("text" or "image"), None for both
             company: Filter by company name
             years: Filter by list of years
-            filing_type: Filter by SEC filing type ("10-K", "10-Q", "8-K"), None to search
-                all filing types in the collection (default — safe for collections that
-                predate filing_type tagging, and for queries where filing type wasn't inferred)
+            filing_type: Filter by SEC filing type ("10-K", "10-Q", "8-K", "20-F", "6-K"), or a
+                list of types to match any of them (e.g. ["10-K", "20-F"] for "annual report"),
+                None to search all filing types in the collection (default — safe for
+                collections that predate filing_type tagging, and for queries where filing
+                type wasn't inferred)
             period_end_date: Filter by exact period-end date (ISO "YYYY-MM-DD" — fiscal
                 year end for a 10-K, fiscal quarter end for a 10-Q). None to search all
                 periods (default — most chunks don't have a caller-resolved exact date to
@@ -283,10 +286,16 @@ class load_vector_database():
                 )
             )
         if filing_type:
+            if isinstance(filing_type, str):
+                filing_type_match = models.MatchValue(value=filing_type)
+            elif len(filing_type) == 1:
+                filing_type_match = models.MatchValue(value=filing_type[0])
+            else:
+                filing_type_match = models.MatchAny(any=list(filing_type))
             filter_conditions.append(
                 models.FieldCondition(
                     key="metadata.filing_type",
-                    match=models.MatchValue(value=filing_type)
+                    match=filing_type_match
                 )
             )
         if period_end_date:

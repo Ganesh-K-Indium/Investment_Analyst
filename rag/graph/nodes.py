@@ -16,6 +16,10 @@ from rag.prompts.prompts import (get_rag_chain,
                                                           MACRO_FEW_SHOT)
 from rag.vectordb.client import load_vector_database
 from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company, get_company_aliases
+from app.utils.filing_types import (
+    ANNUAL_FILING_TYPES, EVENT_FILING_TYPES, group_filing_types,
+    order_filing_types, web_search_form_label,
+)
 
 logger = logging.getLogger("rag.graph.nodes")
 
@@ -236,11 +240,12 @@ def _extract_years_from_question(question: str, ticker: Optional[str] = None) ->
 
 
 # Pure keyword heuristic for filing-type inference — zero LLM/embedding cost.
-# Order matters: check 8-K (event) and 10-Q (quarterly) before falling back to
-# 10-K, since "10-K" mentions are the most common false-positive-free signal
-# but quarterly/event language should win when both could plausibly apply.
-_FILING_TYPE_10K_KEYWORDS = [
-    "10-k", "10k", "annual report", "full year", "full-year", "fiscal year annual",
+# Generic (form-agnostic) language maps to the whole document family — "annual
+# report" implies a 10-K for a domestic issuer but a 20-F for a foreign private
+# issuer, and retrieval is scoped per ticker, so searching both costs nothing
+# extra (see group_filing_types). Only an explicit form name narrows to one form.
+_FILING_TYPE_ANNUAL_KEYWORDS = [
+    "annual report", "full year", "full-year", "fiscal year annual",
     "yearly results", "3-year", "three-year", "comparative financials",
 ]
 _FILING_TYPE_10Q_KEYWORDS = [
@@ -248,41 +253,66 @@ _FILING_TYPE_10Q_KEYWORDS = [
     "latest quarter", "most recent quarter", "this quarter", "last quarter",
     "sequential", "qoq", "quarter-over-quarter",
 ]
-_FILING_TYPE_8K_KEYWORDS = [
-    "8-k", "8k", "material event", "press release", "announced", "announcement",
+_FILING_TYPE_EVENT_KEYWORDS = [
+    "material event", "press release", "announced", "announcement",
     "departure", "resignation", "appointed", "appointment", "acquisition of",
     "merger agreement", "guidance update", "restructuring announcement",
     "executive change", "ceo change", "cfo change",
+]
+# Foreign private issuers report interim results via 6-K (no 10-Q equivalent).
+_FILING_TYPE_6K_KEYWORDS = [
+    "half-year", "half year", "interim results", "semi-annual", "semiannual",
+    "foreign private issuer",
 ]
 
 
 def detect_filing_types_in_query(question: str) -> list:
     """
-    Infer which SEC filing type(s) (10-K / 10-Q / 8-K) a query implies, using
-    pure keyword heuristics — no LLM call. Returns an empty list when the
-    query doesn't clearly imply a specific filing type, which means "search
-    all filing types" (the safe default that preserves pre-existing behavior
-    for collections/queries where filing type isn't a meaningful signal).
+    Infer which SEC filing type(s) (10-K / 20-F / 10-Q / 8-K / 6-K) a query
+    implies, using pure keyword heuristics — no LLM call. Returns an empty list
+    when the query doesn't clearly imply a specific filing type, which means
+    "search all filing types" (the safe default that preserves pre-existing
+    behavior for collections/queries where filing type isn't a meaningful signal).
 
     Collects ALL distinct signals present (not just the first, in priority
     order) so a question that explicitly references more than one filing
     type (e.g. "combine the 10-K and 10-Q figures") resolves to both, while
-    a question with only one signal still resolves to a single-element list
-    — identical behavior to before this function became plural.
+    a question with only one signal still resolves to a single-element list.
+
+    Explicit form names win over generic language within a family: "10-K" alone
+    resolves to ["10-K"], "20-F" to ["20-F"], while "annual report" resolves to
+    ["10-K", "20-F"]. Likewise "8-K"/"6-K" are explicit, while generic event
+    language ("announced", "press release") resolves to both event forms.
     """
     if not question:
         return []
     q = question.lower()
     found = set()
 
-    if re.search(r'\b10-?k\b', q) or any(kw in q for kw in _FILING_TYPE_10K_KEYWORDS):
+    explicit_annual = False
+    if re.search(r'\b10-?k\b', q):
         found.add("10-K")
+        explicit_annual = True
+    if re.search(r'\b20-?f\b', q):
+        found.add("20-F")
+        explicit_annual = True
+    if not explicit_annual and any(kw in q for kw in _FILING_TYPE_ANNUAL_KEYWORDS):
+        found.update(ANNUAL_FILING_TYPES)
+
     if re.search(r'\b10-?q\b', q) or any(kw in q for kw in _FILING_TYPE_10Q_KEYWORDS):
         found.add("10-Q")
-    if re.search(r'\b8-?k\b', q) or any(kw in q for kw in _FILING_TYPE_8K_KEYWORDS):
-        found.add("8-K")
 
-    return [ft for ft in ("10-K", "10-Q", "8-K") if ft in found]
+    explicit_event = False
+    if re.search(r'\b8-?k\b', q):
+        found.add("8-K")
+        explicit_event = True
+    if re.search(r'\b6-?k\b', q) or any(kw in q for kw in _FILING_TYPE_6K_KEYWORDS):
+        found.add("6-K")
+        explicit_event = True
+    if not explicit_event and any(kw in q for kw in _FILING_TYPE_EVENT_KEYWORDS):
+        found.update(EVENT_FILING_TYPES)
+
+    return order_filing_types(found)
 
 
 _QUARTER_WORDS = {
@@ -445,7 +475,7 @@ def preprocess_and_analyze_query(state):
     is_comparison_mode = state.get("is_comparison_mode", False)
 
     if is_comparison_mode:
-        logger.info(" COMPARISON MODE DETECTED - Using pre-optimized 10-K queries")
+        logger.info(" COMPARISON MODE DETECTED - Using pre-optimized annual-report (10-K/20-F) queries")
 
         # Extract companies from state
         comparison_companies = []
@@ -473,7 +503,7 @@ def preprocess_and_analyze_query(state):
             "sub_query_analysis": sub_query_analysis,
             "requested_years": sub_query_analysis["requested_years"],
             "sub_query_results": {},
-            "filing_types": ["10-K"],
+            "filing_types": list(ANNUAL_FILING_TYPES),
             "requested_fiscal_quarters": [],
             "chart_url": None,
             "chart_filename": None
@@ -508,7 +538,7 @@ def preprocess_and_analyze_query(state):
                 "sub_query_analysis": sub_query_analysis,
                 "requested_years": sub_query_analysis["requested_years"],
                 "sub_query_results": {},
-                "filing_types": ["10-K"],
+                "filing_types": list(ANNUAL_FILING_TYPES),
                 "requested_fiscal_quarters": [],
                 "chart_url": None,
                 "chart_filename": None
@@ -532,11 +562,11 @@ def preprocess_and_analyze_query(state):
     
     # filing_types: union the LLM's structured hints (free — rides the existing
     # call) with the keyword heuristic, so a signal either method catches alone
-    # isn't lost. Preserves order (10-K, 10-Q, 8-K) for readability.
+    # isn't lost. Preserves canonical order (10-K, 20-F, 10-Q, 8-K, 6-K) for readability.
     _llm_filing_types = getattr(analysis, "filing_type_hints", None) or []
     _heuristic_filing_types = detect_filing_types_in_query(question)
     _filing_types_union = set(_llm_filing_types) | set(_heuristic_filing_types)
-    filing_types = [ft for ft in ("10-K", "10-Q", "8-K") if ft in _filing_types_union]
+    filing_types = order_filing_types(_filing_types_union)
 
     # Convert to dict for state storage
     sub_query_analysis = {
@@ -642,20 +672,30 @@ def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
 
 async def _hybrid_search_with_quarter_fallback(db_instance, fiscal_quarter: Optional[int], **kwargs):
     """
-    Wrap hybrid_search with a safe fallback for the fiscal_quarter filter:
-    try WITH the quarter filter first (precise), but if it returns nothing,
-    retry WITHOUT it. This protects against the exact scenario where a
-    collection has real 10-Q data that predates fiscal_quarter tagging (or
-    the ingested doc's fiscal_quarter didn't resolve at ingestion time) — a
-    hard filter on an untagged field would otherwise silently return zero
-    results for data that's actually there and relevant.
+    Wrap hybrid_search with safe fallbacks:
+
+    1. fiscal_quarter filter: try WITH it first (precise), but if it returns nothing,
+       retry WITHOUT it. This protects against the exact scenario where a
+       collection has real 10-Q data that predates fiscal_quarter tagging (or
+       the ingested doc's fiscal_quarter didn't resolve at ingestion time) — a
+       hard filter on an untagged field would otherwise silently return zero
+       results for data that's actually there and relevant.
+    2. 10-Q -> 6-K: foreign private issuers have no 10-Q; their quarterly/interim
+       results are filed on Form 6-K. When a 10-Q-scoped pass finds nothing at
+       all, retry against 6-K so "latest quarter" questions about a foreign
+       issuer's ticker still retrieve its interim filings (a domestic ticker with
+       no 10-Q for that year just gets another empty result).
     """
     if fiscal_quarter:
         results = await db_instance.hybrid_search(fiscal_quarter=fiscal_quarter, **kwargs)
         if results:
             return results
         logger.info(f"    No results with fiscal_quarter={fiscal_quarter} filter (likely un-tagged older data) — retrying without it")
-    return await db_instance.hybrid_search(**kwargs)
+    results = await db_instance.hybrid_search(**kwargs)
+    if not results and kwargs.get("filing_type") == "10-Q":
+        logger.info("    No 10-Q results — retrying as 6-K (foreign private issuer interim reports)")
+        results = await db_instance.hybrid_search(**{**kwargs, "filing_type": "6-K"})
+    return results
 
 
 def _build_type_quarter_passes(filing_types: list, requested_fiscal_quarters: list) -> list:
@@ -667,15 +707,18 @@ def _build_type_quarter_passes(filing_types: list, requested_fiscal_quarters: li
     scoring higher in a single combined query.
 
     The quarter filter is only ever applied on the "10-Q" pass — it's only
-    meaningful (and only ever tagged) on 10-Q chunks, so applying it to a
-    10-K/8-K pass would incorrectly exclude chunks that never carry that field.
+    meaningful (and only ever tagged) on 10-Q chunks, so applying it to an
+    annual/event pass would incorrectly exclude chunks that never carry that field.
 
     Degenerates to a single (filing_type, None) pass per requested type when
     no quarters are requested, and a single (None, None) pass when neither
     dimension is requested — identical query count to before this function
     existed for the common case.
     """
-    types_to_try = filing_types or [None]
+    # Equivalent forms (10-K/20-F, 8-K/6-K) are grouped into ONE pass with a
+    # multi-value filter — a ticker's collection holds one or the other, so this
+    # keeps the pass count (and embedding calls) identical to the 3-type setup.
+    types_to_try = group_filing_types(filing_types) or [None]
     passes = []
     for ft in types_to_try:
         if ft == "10-Q" and requested_fiscal_quarters:
@@ -785,8 +828,9 @@ async def retrieve(state, config):
     comparison_span_details = None
 
     # SEGMENT / GEOGRAPHIC OPTIMISATION:
-    # A 10-K covers the filing year + 2 prior years (3-year comparative). This
-    # collapse ONLY applies to 10-K-sourced data — 10-Qs are single-quarter
+    # A 10-K (or 20-F, which also carries 3 years of income statement data)
+    # covers the filing year + 2 prior years (3-year comparative). This
+    # collapse ONLY applies to annual-report-sourced data — 10-Qs are single-quarter
     # (no 3-year comparative table) and 8-Ks are single-event (no multi-year
     # structure at all). Evaluated independently per requested filing type,
     # then the resulting year sets are unioned — when only one type is
@@ -799,11 +843,11 @@ async def retrieve(state, config):
     if query_type in ("segment", "geographic") and len(requested_years) > 1:
         _years_by_type = []
         for ft in (filing_types or [None]):
-            if ft in (None, "10-K"):
+            if ft in (None, *ANNUAL_FILING_TYPES):
                 year_span = requested_years[-1] - requested_years[0]
                 if year_span == 2:
                     _years_by_type.append([requested_years[-1]])
-                    logger.info(f" [{ft or 'unresolved'}] Span=2y → querying only [{requested_years[-1]}] (single 10-K covers all 3 years)")
+                    logger.info(f" [{ft or 'unresolved'}] Span=2y → querying only [{requested_years[-1]}] (single annual report covers all 3 years)")
                 elif year_span > 2:
                     comparison_spans_multiple_filings = True
                     comparison_span_details = (
@@ -827,10 +871,10 @@ async def retrieve(state, config):
                         f"quarter, not directly comparable to a 10-K's audited annual figures)."
                     )
                     comparison_span_details = f"{comparison_span_details} {note}" if comparison_span_details else note
-            elif ft == "8-K":
+            elif ft in EVENT_FILING_TYPES:
                 # Single point-in-time event — a multi-year span is a no-op here,
                 # just keep the requested years as-is (no comparative structure to collapse).
-                logger.info(f" filing_type=8-K → single-event filing, no window collapse applied: {requested_years}")
+                logger.info(f" filing_type={ft} → single-event filing, no window collapse applied: {requested_years}")
                 _years_by_type.append(list(requested_years))
         requested_years = sorted(set(y for years in _years_by_type for y in years))
 
@@ -1432,7 +1476,7 @@ def web_search(state):
     search_query = enriched_query if enriched_query != question else question
     question_lower = question.lower()
     is_sec_filing_query = any(kw in question_lower for kw in
-        ['10-k', '10k', '10-q', '10q', '8-k', '8k', 'annual report', 'md&a', 'mda',
+        ['10-k', '10k', '10-q', '10q', '8-k', '8k', '20-f', '20f', '6-k', '6k', 'annual report', 'md&a', 'mda',
          'management discussion', 'sec filing', 'edgar'])
 
     target_company = companies_detected[0] if companies_detected else None
@@ -1449,7 +1493,7 @@ def web_search(state):
         # type when multiple were combined (still far better than always
         # assuming 10-K).
         _detected_filing_types = state.get("filing_types") or detect_filing_types_in_query(question)
-        detected_filing_type = _detected_filing_types[0] if _detected_filing_types else "10-K"
+        detected_filing_type = web_search_form_label(_detected_filing_types)
 
         if 'md&a' in question_lower or 'management discussion' in question_lower:
             search_query = f"{target_company} MD&A Management Discussion Analysis {' '.join(years) if years else ''} SEC {detected_filing_type} site:sec.gov"

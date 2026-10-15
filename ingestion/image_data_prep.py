@@ -41,7 +41,7 @@ class ImageDescription:
         This constructor is used to initialize the path of the pdf.
         Args:
             pdf_path : The path of the pdf.
-            filing_type: SEC filing type ("10-K", "10-Q", "8-K"), if known — used to
+            filing_type: SEC filing type ("10-K", "10-Q", "8-K", "20-F", "6-K"), if known — used to
                 frame the vision-analysis prompt accurately instead of assuming 10-K.
         """
         self.pdf_path = pdf_path
@@ -516,7 +516,7 @@ class ImageDescription:
                 messages=[
                     {
                         "role": "system",
-                        "content": f"""You are a financial data extraction specialist for SEC filings (10-K, 10-Q, 8-K) optimized for RAG retrieval systems. This image is from a {filing_label}.
+                        "content": f"""You are a financial data extraction specialist for SEC filings (10-K, 10-Q, 8-K, 20-F, 6-K) optimized for RAG retrieval systems. This image is from a {filing_label}.
                         Your SOLE PURPOSE is to extract EVERY SINGLE piece of data from financial images in a format that enables precise semantic search.
                         
                         MANDATORY EXTRACTION RULES:

@@ -3,6 +3,7 @@ import logging
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from rag.vectordb.client import load_vector_database
+from app.utils.filing_types import is_annual_only
 
 logger = logging.getLogger("rag.graph.edges")
 
@@ -153,16 +154,17 @@ def _is_direct_vectordb_mode(state) -> bool:
 
     Applies to: comparison mode, segment queries, geographic queries — but
     ONLY when the resolved filing_types is empty (unresolved), or contains
-    only "10-K". The "10-K is the authoritative source, web search only adds
-    noise" rationale does not hold for 10-Q/8-K data: those are thinner, less
+    only annual-report forms ("10-K"/"20-F"). The "annual report is the
+    authoritative source, web search only adds noise" rationale does not hold
+    for 10-Q/8-K/6-K data: those are thinner, less
     comprehensive per-document, so bypassing the grading/web-fallback safety
     net for them risks silently generating from weak retrieval with nothing
-    to catch it. When filing_types includes 10-Q or 8-K (alone or combined
-    with 10-K), these query types fall through to the normal
+    to catch it. When filing_types includes 10-Q, 8-K or 6-K (alone or combined
+    with an annual form), these query types fall through to the normal
     grade_documents → web-fallback path instead.
     """
     filing_types = state.get("filing_types") or []
-    if any(ft != "10-K" for ft in filing_types):
+    if not is_annual_only(filing_types):
         return False
     if state.get("is_comparison_mode", False):
         return True
