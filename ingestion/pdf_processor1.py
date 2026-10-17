@@ -10,7 +10,9 @@ import traceback
 from datetime import datetime
 import fitz  # PyMuPDF
 from tqdm import tqdm
+import httpx
 from qdrant_client import models
+from qdrant_client.http.exceptions import ResponseHandlingException
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
@@ -76,6 +78,9 @@ def _banner(tag: str, message: str):
     logger.info("[%s] %s", tag, message)
 
 
+QDRANT_UPSERT_BATCH_SIZE = 50
+QDRANT_UPSERT_MAX_ATTEMPTS = 4
+
 async def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids, label: str = "documents"):
     """
     Ingest documents with hybrid vectors (dense + sparse).
@@ -115,12 +120,29 @@ async def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids, la
         )
         points.append(point)
     
-    # Upload to Qdrant using the async client directly
+    # Upload to Qdrant in small batches with retries. A single large upsert
+    # (568 points x 3072-dim dense vectors) can be dropped mid-request if the
+    # Qdrant server restarts or closes the connection, which previously failed
+    # the whole filing with no retry.
     logger.info("Uploading %d %s to collection '%s'...", len(points), label, db_loader.collection_name)
-    await db_loader.async_qdrant_client.upsert(
-        collection_name=db_loader.collection_name,
-        points=points
-    )
+    for start in range(0, len(points), QDRANT_UPSERT_BATCH_SIZE):
+        batch = points[start:start + QDRANT_UPSERT_BATCH_SIZE]
+        for attempt in range(1, QDRANT_UPSERT_MAX_ATTEMPTS + 1):
+            try:
+                await db_loader.async_qdrant_client.upsert(
+                    collection_name=db_loader.collection_name,
+                    points=batch
+                )
+                break
+            except (httpx.TransportError, ResponseHandlingException) as e:
+                if attempt == QDRANT_UPSERT_MAX_ATTEMPTS:
+                    raise
+                wait = 2 ** attempt
+                logger.warning(
+                    "Qdrant upsert batch %d-%d failed (attempt %d/%d: %s). Retrying in %ds...",
+                    start, start + len(batch), attempt, QDRANT_UPSERT_MAX_ATTEMPTS, type(e).__name__, wait,
+                )
+                await asyncio.sleep(wait)
 
     return len(points)
 
@@ -899,7 +921,13 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                     # not a no-op, so this must be a distinct guarded branch.
                     yield "All candidate images were classified as decorative/invalid — no image captions added."
             else:
-                yield "No images found in PDF."
+                dropped = img_processor.filter_stats
+                if dropped:
+                    reasons = ", ".join(f"{k}={v}" for k, v in sorted(dropped.items()))
+                    yield (f"No chart/table images to analyze — {sum(dropped.values())} decorative "
+                           f"image(s) filtered before any LLM call ({reasons}).")
+                else:
+                    yield "No images found in PDF."
 
         # Final completion status
         if text_already_exists and image_already_exists:

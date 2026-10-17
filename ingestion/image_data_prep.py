@@ -7,6 +7,7 @@ import json
 import openai
 import base64
 import hashlib
+from collections import Counter
 from datetime import datetime
 from tqdm import tqdm
 from PIL import Image, ImageEnhance
@@ -29,6 +30,30 @@ load_dotenv()
 
 logger = logging.getLogger("ingestion.image_data_prep")
 
+# --- Pre-LLM image filtering -------------------------------------------------
+# Heavily designed PDFs (e.g. Sanofi's 20-F) embed hundreds of decorative
+# elements: nav sidebars repeated on every page, icons, transparent overlays,
+# portraits. Every image that reaches GPT-4o costs ~2.5K tokens, so these are
+# rejected deterministically (free) before any vision call is made.
+REPEAT_PAGE_THRESHOLD = 3    # same image on >= N pages -> header/sidebar/logo
+MIN_DISPLAY_PT = 40          # rendered smaller than this (points) on the page -> icon
+MAX_ASPECT_RATIO = 12        # thinner than this -> rule/strip, not a chart or table
+MIN_INK_FRACTION = 0.005     # < 0.5% of pixels differ from the background -> blank/overlay
+# OCR gate: a chart/table has many words Tesseract reads with high confidence
+# (measured 30-57 per image on real 10-K charts); photos and ornaments have 0-1
+# (garbage characters, low confidence). Raw character counts do NOT separate
+# them — Tesseract emits noise on photos. 0 disables the gate.
+MIN_OCR_WORDS = int(os.getenv("IMAGE_MIN_OCR_WORDS", "3"))
+OCR_WORD_CONFIDENCE = 70
+
+# Refusals the vision model returns for photos/blank images. They are not
+# captions and must never be stored or embedded.
+_REFUSAL_MARKERS = (
+    "i'm sorry", "i am sorry", "i can't", "i cannot", "i'm unable", "i am unable",
+    "unable to process", "unable to extract", "unable to assist", "can't assist",
+    "cannot assist", "can't extract", "cannot extract", "portrait photograph",
+)
+
 # Use the explicit binary path if set (required for Docker/ECS environments)
 _tesseract_cmd = os.environ.get("TESSERACT_CMD")
 if _tesseract_cmd:
@@ -47,6 +72,8 @@ class ImageDescription:
         self.pdf_path = pdf_path
         self.filing_type = filing_type
         self.openai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        # Why images were dropped before/after analysis, logged as a summary.
+        self.filter_stats = Counter()
     
     def extract_text_from_image_ocr(self, image_path):
         """
@@ -88,6 +115,25 @@ class ImageDescription:
             logger.error("     OCR extraction failed for %s: %s", os.path.basename(image_path), e)
             return ""
     
+    def count_confident_ocr_words(self, image_path):
+        """
+        Number of words Tesseract reads with confidence >= OCR_WORD_CONFIDENCE.
+        Returns None when OCR is unavailable or fails, so callers fail open
+        (never discard an image just because the gate could not run).
+        """
+        try:
+            img = Image.open(image_path).convert('RGB')
+            data = pytesseract.image_to_data(
+                img, output_type=pytesseract.Output.DICT, config=r'--oem 3 --psm 6')
+            return sum(
+                1 for text, conf in zip(data["text"], data["conf"])
+                if len(text.strip()) >= 2 and float(conf) >= OCR_WORD_CONFIDENCE
+            )
+        except Exception as e:
+            logger.warning("     OCR gate unavailable for %s (%s) — sending to vision",
+                           os.path.basename(image_path), type(e).__name__)
+            return None
+
     def calculate_image_content_hash(self, image_data: bytes) -> str:
         """Calculate a deterministic hash of individual image content."""
         try:
@@ -107,32 +153,86 @@ class ImageDescription:
         pdf_document = fitz.open(self.pdf_path)
         return pdf_document
     
+    def _flatten_on_white(self, original_img, smask_xref, pdf_document):
+        """
+        Composite an extracted image onto a white background using its
+        transparency, so it looks the way it does on the rendered page.
+
+        PDFs store transparency separately from the colour data: an image with
+        an /SMask has its alpha in a second image object, and extract_image()
+        returns only the colour layer. Converting that straight to RGB turns
+        every transparent pixel black, so icons, charts and overlays on
+        designed pages come out as black rectangles.
+        """
+        rgb = original_img.convert('RGB')
+        mask = None
+        try:
+            if smask_xref:
+                mask_data = pdf_document.extract_image(smask_xref)
+                if mask_data:
+                    mask = Image.open(io.BytesIO(mask_data["image"])).convert('L')
+                    if mask.size != rgb.size:
+                        mask = mask.resize(rgb.size, Image.Resampling.LANCZOS)
+            elif original_img.mode in ('RGBA', 'LA') or (
+                    original_img.mode == 'P' and 'transparency' in original_img.info):
+                mask = original_img.convert('RGBA').getchannel('A')
+        except Exception as e:
+            logger.warning("Could not apply transparency mask (smask=%s): %s", smask_xref, e)
+            mask = None
+
+        if mask is None:
+            return rgb
+        background = Image.new('RGB', rgb.size, (255, 255, 255))
+        background.paste(rgb, mask=mask)
+        return background
+
+    @staticmethod
+    def _ink_fraction(img):
+        """Fraction of pixels that differ noticeably from the dominant background."""
+        gray = img.convert('L')
+        gray.thumbnail((256, 256), Image.Resampling.BOX)  # BOX keeps thin lines from vanishing entirely
+        hist = gray.histogram()
+        total = sum(hist)
+        if not total:
+            return 0.0
+        # Background = most common grey level; ink = anything meaningfully different.
+        bg = max(range(256), key=lambda i: hist[i])
+        ink = sum(hist[i] for i in range(256) if abs(i - bg) > 12)
+        return ink / total
+
     def save_images(self,img_info,page_num,pdf_document,output_dir):
         """
         Enhanced image preprocessing optimized for financial data extraction with better detail preservation.
         """
         try:
             xref = img_info[0]
+            smask_xref = img_info[1] if len(img_info) > 1 else 0
             base_image = pdf_document.extract_image(xref)
             if not base_image:
                 return None, None
-                
+
             image_bytes = base_image["image"]
             original_img = Image.open(io.BytesIO(image_bytes))
-            
-            # Convert to RGB for consistent processing
-            if original_img.mode != 'RGB':
-                img = original_img.convert('RGB')
-            else:
-                img = original_img.copy()
-            
+
+            # Flatten onto white using the image's transparency (see _flatten_on_white)
+            img = self._flatten_on_white(original_img, smask_xref, pdf_document)
+
             original_size = img.size
             min_dimension = min(img.size)
             max_dimension = max(img.size)
-            
+
             # Skip tiny images (likely decorative)
             if min_dimension < 50 or max_dimension < 50:
                 logger.warning("Skipping very small image: %s", original_size)
+                self.filter_stats["tiny"] += 1
+                return None, None
+
+            # Skip blank/near-blank images: overlays, spacers, a single rule line.
+            # Checked on the flattened image, before the enhancement steps below
+            # amplify noise.
+            if self._ink_fraction(img) < MIN_INK_FRACTION:
+                logger.info("Skipping blank/overlay image xref=%s on page %d", xref, page_num + 1)
+                self.filter_stats["blank"] += 1
                 return None, None
             
             # Multi-stage enhancement for financial documents
@@ -284,6 +384,27 @@ class ImageDescription:
         """Get clean context text around image for efficient RAG retrieval."""
         return self.get_comprehensive_image_context(xref, page, text_blocks)
     
+    def _prefilter_reason(self, img_info, page, pages_per_xref):
+        """
+        Return why an image is decorative, or None if it deserves a closer look.
+        Uses only metadata already in the PDF (no pixel decoding).
+        """
+        xref, width, height = img_info[0], img_info[2], img_info[3]
+
+        if pages_per_xref[xref] >= REPEAT_PAGE_THRESHOLD:
+            return "repeated"  # logo / sidebar / header strip
+
+        if width and height and max(width, height) / max(1, min(width, height)) > MAX_ASPECT_RATIO:
+            return "thin"      # rule or strip, not a chart/table
+
+        try:
+            rects = page.get_image_rects(xref)
+        except Exception:
+            rects = []
+        if rects and min(rects[0].width, rects[0].height) < MIN_DISPLAY_PT:
+            return "small"     # icon: rendered tiny on the page regardless of pixel size
+        return None
+
     def get_image_information(self):
         """
         Simplified image extraction with clean context text and image hashing for efficient RAG retrieval.
@@ -297,25 +418,56 @@ class ImageDescription:
         pdf_document = self.get_pdf_data()
         total_images = 0
         processed_images = 0
-        
+        self.filter_stats = Counter()
+        seen_hashes = set()
+
         try:
             logger.info("\n  Processing PDF: %s", os.path.basename(self.pdf_path))
-            
+
+            # Pre-scan: on how many pages does each image object appear? A logo,
+            # nav sidebar or header strip repeats on many pages; real charts and
+            # tables appear once.
+            pages_per_xref = Counter()
+            for _pn in range(len(pdf_document)):
+                for _xref in {info[0] for info in pdf_document[_pn].get_images(full=True)}:
+                    pages_per_xref[_xref] += 1
+
             # Process each page with progress bar
             for page_num in tqdm(range(len(pdf_document)), desc="Scanning pages for images", unit="page"):
                 page = pdf_document[page_num]
                 text_blocks = page.get_text("blocks")
                 images = page.get_images(full=True)
-                
+
                 if not images:
                     continue
-                
+
                 total_images += len(images)
-                
+
                 # Process each image on the page
                 for img_index, img_info in enumerate(images):
+                    xref = img_info[0]
+
+                    # Cheap, free rejections first — nothing is extracted, saved or sent to an LLM.
+                    skip_reason = self._prefilter_reason(img_info, page, pages_per_xref)
+                    if skip_reason:
+                        self.filter_stats[skip_reason] += 1
+                        continue
+
+                    # Same bytes already handled (e.g. one photo placed on two pages,
+                    # or re-embedded under a different object number).
+                    try:
+                        _base = pdf_document.extract_image(xref)
+                        _digest = hashlib.sha256(_base["image"]).hexdigest() if _base else None
+                    except Exception:
+                        _digest = None
+                    if _digest and _digest in seen_hashes:
+                        self.filter_stats["duplicate"] += 1
+                        continue
+
                     img_path, xref = self.save_images(img_info, page_num, pdf_document, output_path)
-                    
+                    if img_path and _digest:
+                        seen_hashes.add(_digest)
+
                     if img_path and xref:
                         # Calculate hash for this image during extraction
                         try:
@@ -324,7 +476,7 @@ class ImageDescription:
                             if base_image:
                                 image_bytes = base_image["image"]
                                 img_hash = self.calculate_image_content_hash(image_bytes)
-                                
+
                                 # Store hash with unique identifier
                                 img_id = f"page{page_num + 1}_img{img_index}"
                                 image_hashes[img_id] = {
@@ -345,6 +497,12 @@ class ImageDescription:
                     
             logger.info("Successfully processed %d/%d images", processed_images, total_images)
             logger.info("Generated %d image hashes", len(image_hashes))
+            if self.filter_stats:
+                logger.info(
+                    "Image pre-filter: %d found -> %d kept for analysis | dropped before any LLM call: %s",
+                    total_images, processed_images,
+                    ", ".join(f"{k}={v}" for k, v in sorted(self.filter_stats.items())),
+                )
             return image_details, image_hashes  # Return both details and hashes
 
         except Exception as e:
@@ -389,8 +547,18 @@ class ImageDescription:
         """
         if not os.path.exists(image_path):
             return "Error: Image file not found"
-            
+
         try:
+            # Step 0: free local gate before the paid vision call. A chart or table
+            # always contains words Tesseract reads confidently; photos, icons and
+            # ornaments do not. This is the last deterministic filter before GPT-4o.
+            confident_words = self.count_confident_ocr_words(image_path)
+            if MIN_OCR_WORDS and confident_words is not None and confident_words < MIN_OCR_WORDS:
+                logger.info("    Skipping %s: %d confident OCR word(s) (< %d) — no data to extract",
+                            os.path.basename(image_path), confident_words, MIN_OCR_WORDS)
+                self.filter_stats["no_text"] += 1
+                return None
+
             # Step 1: Extract ALL text using OCR
             logger.info("    Running OCR on %s...", os.path.basename(image_path))
             _ocr_start = time.perf_counter()
@@ -405,7 +573,7 @@ class ImageDescription:
                 logger.info("    OCR extracted %d characters", len(ocr_text))
             else:
                 logger.warning("     OCR found no text")
-            
+
             # Step 2: Encode image for GPT-4o
             image_base64 = self.encode_image(image_path)
             if not image_base64:
@@ -430,8 +598,11 @@ class ImageDescription:
             4. Include units (millions, billions, %, $, etc.)
             5. Preserve exact values - DO NOT round or summarize
             6. If OCR text contains numbers, USE THEM - don't guess from visual
-            7. Financial images are NEVER decorative - always extract data
-            8. START with searchable summary for optimal retrieval
+            7. Describe ONLY what is visibly in the image or in the OCR text. The surrounding PDF text is
+               context for naming things, NEVER a source of values — do not invent a chart or table
+               that is not in the image
+            8. If the image has no readable data (icon, logo, photo, ornament, blank), respond with exactly INVALID_IMAGE
+            9. START with searchable summary for optimal retrieval
             
             REQUIRED OUTPUT FORMAT (RETRIEVAL-OPTIMIZED):
             =============================================
@@ -507,7 +678,9 @@ class ImageDescription:
              BAD: "Data Series 1 [Stock A]: Data points not numerically specified"
              GOOD: "Data Series 1 [Stock A]: 12/19=$100, 3/20=$95, 6/20=$110, 9/20=$130..."
             
-            Only respond "INVALID_IMAGE" if this is purely decorative (logo, border, background) with ZERO data.
+            Respond with exactly "INVALID_IMAGE" (nothing else) if the image is an icon, logo, photo, border,
+            background or any graphic with no data. The rules above about estimating chart values apply
+            ONLY to images that really contain a chart.
             """
 
             _vision_start = time.perf_counter()
@@ -553,6 +726,10 @@ class ImageDescription:
                         - Rounding numbers is acceptable for line chart estimates
                         - Summarizing data is FAILURE
                         
+                        NO-DATA RULE (overrides everything above): the extraction rules apply only to images that
+                        actually contain a table or chart. If the image is an icon, logo, photo, ornament or blank,
+                        reply with exactly INVALID_IMAGE. Never fabricate data that is not visible in the image.
+
                         This is SEC filing data. Accuracy is legally critical. Be exhaustive."""
                     },
                     {
@@ -587,8 +764,16 @@ class ImageDescription:
             
             # Only skip if explicitly marked invalid (and only if it's truly a logo/decoration)
             if "INVALID_IMAGE" in result and len(result) < 50:
+                self.filter_stats["model_invalid"] += 1
                 return None
-            
+
+            # A refusal ("I'm sorry, I can't...", "portrait photograph") is not a
+            # caption — storing it would embed junk into the vector DB.
+            if len(result) < 600 and any(m in result.lower()[:250] for m in _REFUSAL_MARKERS):
+                logger.warning("  Dropping refusal-style response for %s", os.path.basename(image_path))
+                self.filter_stats["refusal"] += 1
+                return None
+
             # If result is empty or too short, this is likely an error - return a placeholder
             if not result or len(result) < 10:
                 return f"[Image analysis failed or returned empty - {os.path.basename(image_path)}]"
