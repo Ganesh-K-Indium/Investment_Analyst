@@ -559,7 +559,15 @@ def preprocess_and_analyze_query(state):
     
     # Analyze the question
     analysis = sub_query_analyzer.invoke({"question": question})
-    
+
+    # Years come ONLY from the explicit years in the question text. The LLM
+    # was filling in years it was never given (e.g. "2022" for an undated
+    # "latest annual report"), which scoped retrieval to a year with no filings
+    # and fell through to web search. An empty list lets retrieve() resolve
+    # the ticker's latest filed fiscal year (get_most_recent_filed_fiscal_year).
+    explicit_years = sorted(set(int(y) for y in re.findall(r'\b(20[0-2][0-9])\b', question)))
+    analysis.requested_years = explicit_years
+
     # filing_types: union the LLM's structured hints (free — rides the existing
     # call) with the keyword heuristic, so a signal either method catches alone
     # isn't lost. Preserves canonical order (10-K, 20-F, 10-Q, 8-K, 6-K) for readability.

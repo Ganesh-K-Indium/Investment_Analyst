@@ -97,6 +97,7 @@ def _build_citation_info(result: dict) -> list:
                     "source_file": sf,
                     "page_num": pg,
                     "company": meta.get("company"),
+                    "ticker": meta.get("ticker"),
                     "filing_type": meta.get("filing_type"),
                     "period_end_date": meta.get("period_end_date"),
                     "year": meta.get("year")
