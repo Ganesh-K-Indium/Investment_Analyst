@@ -2560,6 +2560,11 @@ async def alpha_dimension_retrieve(state):
                 f"{ticker} share ownership of directors and senior management major shareholders "
                 f"Item 6 Item 7 related party transactions latest {_cur_yr}"
             )
+            # A 20-F has no "MD&A" heading; its MD&A is Item 5 (Operating and Financial Review).
+            alignment_queries.append(
+                f"{ticker} operating and financial review and prospects Item 5 management tone "
+                f"outlook risks latest {_cur_yr}"
+            )
 
         alignment_docs = []
         for query in alignment_queries:
@@ -2617,10 +2622,10 @@ async def alpha_dimension_retrieve(state):
 
         alpha_dimensions['alignment'] = {
             'source': 'vectordb+form4',
-            'documents': alignment_docs[:5],  # Form4 doc at [0], then vectordb docs
+            'documents': alignment_docs[:8],  # Form4/exemption doc at [0], then vectordb docs (MD&A/Item 5 last)
             'query_count': len(alignment_queries)
         }
-        logger.info(f"    Total alignment docs: {len(alignment_docs[:5])}")
+        logger.info(f"    Total alignment docs: {len(alignment_docs[:8])}")
 
     except Exception as e:
         logger.error(f"    Error: {e}")
@@ -2687,7 +2692,11 @@ async def alpha_dimension_retrieve(state):
         performance_queries = [
             f"{ticker} revenue net income annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2} financial results comparison",
             f"{ticker} operating cash flow free cash flow income statement annual {_cur_yr} {_prior_yr} {_prior_yr2}",
-            f"{ticker} EBITDA margins ROE profitability metrics annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2}"
+            f"{ticker} EBITDA margins ROE profitability metrics annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2}",
+            # MD&A: the drivers behind the numbers. Foreign private issuers (20-F) call it
+            # "Item 5. Operating and Financial Review and Prospects", not MD&A.
+            f"{ticker} management discussion analysis results of operations drivers of revenue and net income {_cur_yr} {_prior_yr} {_prior_yr2}",
+            f"{ticker} operating and financial review and prospects Item 5 results of operations {_cur_yr} {_prior_yr} {_prior_yr2}"
         ]
 
         performance_docs = []
@@ -2704,10 +2713,10 @@ async def alpha_dimension_retrieve(state):
 
         alpha_dimensions['performance'] = {
             'source': 'vectordb',
-            'documents': performance_docs[:9],
+            'documents': performance_docs[:12],  # MD&A queries come last; keep them in the slice
             'query_count': len(performance_queries)
         }
-        logger.info(f"    Retrieved {len(performance_docs[:9])} chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
+        logger.info(f"    Retrieved {len(performance_docs[:12])} chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
 
     except Exception as e:
         logger.error(f"    Error: {e}")

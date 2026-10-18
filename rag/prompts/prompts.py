@@ -927,7 +927,10 @@ Concise assessment of MD&A tone (confident vs. defensive, forward-looking langua
 disclosures) and any governance concerns (board independence, compensation, related-party
 transactions) from the retrieved documents.
 IMPORTANT — recency: base this paragraph strictly on the LATEST available MD&A/governance
-filing (most recent 10-K or proxy statement). If the retrieved documents span multiple filing
+filing (most recent 10-K or 20-F, or proxy statement). For a foreign private issuer (20-F filer),
+the MD&A is "Item 5. Operating and Financial Review and Prospects" — use that section for tone and
+forward-looking language, and do not write that MD&A is unavailable when Item 5 text is present.
+If the retrieved documents span multiple filing
 years, use only the most recent one and ignore older filings — do not blend commentary across
 years. If documents are sparse, note that briefly.
 
@@ -1034,9 +1037,16 @@ most recent fiscal year for which a 10-K actually exists. Do not assume a more r
    - POSITIVE: Operating Cash Flow exceeding Net Income → strong cash conversion quality (NEVER flag this as a concern)
 4. **Non-Recurring Items**: Flag one-time charges, restructuring, goodwill impairment that distort underlying performance in any of the compared years
 5. **Trend Direction**: Across the 3 years compared, are margins expanding or contracting? Is growth accelerating or decelerating?
+6. **MD&A Drivers**: Explain WHY the numbers moved, using the management discussion (MD&A). For a 10-K this is "Item 7"; for a 20-F (foreign private issuer) it is "Item 5. Operating and Financial Review and Prospects". If the retrieved documents contain no MD&A/Item 5 commentary, say so explicitly rather than inferring drivers.
+
+**Arithmetic and Direction Rules (MANDATORY — apply before writing any sentence about change)**:
+- Percent change = (later value ÷ earlier value) − 1. Use "increased" only when the change is positive, "decreased" only when it is negative, and "essentially flat" when |change| < 2%. Never describe a rise as a decline or a decline as a rise.
+- Quote the two values exactly as they appear in the documents, then the change, e.g. "net income rose from $354.6M (2024) to $359.0M (2025), +1.3%."
+- CAGR = (end ÷ start)^(1 ÷ n) − 1, where n = end year − start year (a 2023→2025 span is n = 2, not 3). Show the years used. If you cannot compute it from the figures in the documents, omit it.
+- Use the reporting currency stated in the documents for every figure.
 
 **Output Requirements**:
-- Maximum 100 words — lead with the most important year-over-year fundamental signal
+- Maximum 130 words — lead with the most important year-over-year fundamental signal
 - Include at least 2 specific numerical metrics with their year-over-year comparison from the documents
 - Tone: Quantitative, investment-grade precision
 """
