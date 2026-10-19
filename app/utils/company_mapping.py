@@ -414,6 +414,23 @@ def get_fiscal_year_end_month(ticker: str) -> int:
     return TICKER_TO_FISCAL_YEAR_END_MONTH.get(ticker.lower(), DEFAULT_FISCAL_YEAR_END_MONTH)
 
 
+def get_fiscal_period_end(ticker: str, fiscal_year: int) -> "datetime.date":
+    """
+    Approximate balance-sheet date for a company's fiscal year.
+
+    Uses the last calendar day of the fiscal-year-end month, following the
+    convention that FY{Y} ends in that month of Y (Sanofi FY2025 -> 31 Dec 2025,
+    Microsoft FY2025 -> 30 Jun 2025). Exact 52/53-week year-end days (e.g. Apple's
+    last Saturday of September) differ by a few days; FX rates move little over
+    that, so the month-end is used.
+    """
+    import calendar
+    from datetime import date as _date
+    month = get_fiscal_year_end_month(ticker)
+    last_day = calendar.monthrange(fiscal_year, month)[1]
+    return _date(fiscal_year, month, last_day)
+
+
 def get_most_recent_filed_fiscal_year(ticker: str, as_of: "datetime.date" = None) -> int:
     """
     Return the most recent fiscal year for which an annual report (10-K, or

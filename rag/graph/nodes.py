@@ -91,6 +91,7 @@ def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
     # Template structure optimized for 10-K reports
     # Using multiple search terms and specific document sections
 
+    year_given = year is not None
     year_int = int(year) if isinstance(year, str) else year
     prior_year = year_int - 1
 
@@ -165,7 +166,8 @@ def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
         "query_type": "multi_company",
         "companies_detected": companies,
         "sub_queries": sub_queries,
-        "requested_years": [year_int],
+        # No year in the request: leave empty so retrieve() resolves each company's own latest filed year.
+        "requested_years": [year_int] if year_given else [],
         "reasoning": f"Pre-optimized 10-K queries for {', '.join(companies)} (no LLM needed)",
         "generation_method": "template"  # vs "llm"
     }
@@ -819,11 +821,17 @@ async def retrieve(state, config):
     # fallback resolves to the most recent fiscal year likely to actually
     # have a filed 10-K (per the resolved ticker's fiscal calendar) rather
     # than a hardcoded literal year, which goes stale the moment it's wrong.
-    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years")
-    if not requested_years:
+    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or []
+    # When the question names no year, each ticker is searched for its OWN latest
+    # filed fiscal year (see _years_for_ticker), not one year shared by all companies:
+    # e.g. Microsoft's FY2026 (June year end) does not exist for Sanofi's FY2026 (Dec year end).
+    years_explicit = bool(requested_years)
+
+    def _years_for_ticker(ticker):
+        if years_explicit:
+            return requested_years
         from app.utils.company_mapping import get_most_recent_filed_fiscal_year
-        _year_ticker = primary_ticker or (company_filter[0] if company_filter else None)
-        requested_years = [get_most_recent_filed_fiscal_year(_year_ticker)]
+        return [get_most_recent_filed_fiscal_year(ticker)]
 
     # filing_types: resolved by preprocess_and_analyze_query via keyword heuristic
     # (+ free LLM structured-output field). Empty list means "unresolved — search
@@ -1019,7 +1027,7 @@ async def retrieve(state, config):
                     # requested dimension (degenerates to one pass per year in
                     # the common single-type, no-quarter case).
                     docs_from_ticker = 0
-                    for year_filter in requested_years:
+                    for year_filter in _years_for_ticker(t_ticker):
                         for ft, q in _build_type_quarter_passes(filing_types, sq_quarters):
                             search_results = await _hybrid_search_with_quarter_fallback(
                                 db_instance,
@@ -1107,7 +1115,7 @@ async def retrieve(state, config):
                     db_instance = vectordb_mgr.get_instance(target_ticker, create_if_missing=False)
                     
                     current_collection_docs = 0
-                    for year_filter in requested_years:
+                    for year_filter in _years_for_ticker(target_ticker):
                         for ft, q in _build_type_quarter_passes(filing_types, requested_fiscal_quarters):
                             search_results = await _hybrid_search_with_quarter_fallback(
                                 db_instance,
@@ -2047,12 +2055,28 @@ def extract_numeric_value(value_str):
         return None
 
 
-def prepare_chart_data(metrics_data, company1_name, company2_name, company3_name=None, max_metrics=8):
+def prepare_chart_data(metrics_data, company1_name, company2_name, company3_name=None, max_metrics=8, company_periods=None):
     """
     Prepare data for chart generation.
     Supports both 2 and 3 company comparisons.
     Only includes metrics that have valid numeric values for at least one company.
+
+    Monetary cells are converted to USD billions (see rag/utils/money.py) using
+    the (fiscal year, period-end date) in company_periods[i] (1-based), so a € cell from a 20-F filer
+    is never plotted next to a $ cell, and "millions" is never plotted as billions.
+    Monetary cells that can't be converted are excluded (None), not guessed.
     """
+    from rag.utils.money import parse_money, monetary_usd_billions, basis_for_metric
+    company_periods = company_periods or {}
+
+    def _value(cell, idx, metric):
+        if parse_money(cell) is not None:
+            period = company_periods.get(idx)
+            if period is None:
+                return None
+            fy, period_end = period
+            return monetary_usd_billions(cell, fy, basis_for_metric(metric), period_end)
+        return extract_numeric_value(cell)
     chart_data = {
         'metrics': [],
         'company1_values': [],
@@ -2066,9 +2090,9 @@ def prepare_chart_data(metrics_data, company1_name, company2_name, company3_name
         if count >= max_metrics:
             break
         
-        val1 = extract_numeric_value(values['company1'])
-        val2 = extract_numeric_value(values['company2'])
-        val3 = extract_numeric_value(values.get('company3')) if company3_name else None
+        val1 = _value(values['company1'], 1, metric_name)
+        val2 = _value(values['company2'], 2, metric_name)
+        val3 = _value(values.get('company3'), 3, metric_name) if company3_name else None
         
         # Include metric if at least one value is valid
         if val1 is not None or val2 is not None or val3 is not None:
@@ -2125,7 +2149,47 @@ def _save_and_upload_chart(fig, filename_prefix: str, width: int = 800, height: 
     return {"chart_url": chart_url, "chart_filename": filename}
 
 
+def _comparison_company_periods(state) -> dict:
+    """
+    {column_index: (fiscal_year, period_end_date)} per company column (1-based), for FX
+    conversion. The fiscal year is the requested year if given, else the company's
+    most recent filed fiscal year. The period-end date is that company's own fiscal
+    year end, so balance-sheet rows use the rate on the right date for each company.
+    """
+    from app.utils.company_mapping import get_most_recent_filed_fiscal_year, get_fiscal_period_end
+    _req_year = state.get("year_start") or state.get("year_end")
+    periods = {}
+    for idx, name in enumerate(
+        [state.get("comparison_company1", ""), state.get("comparison_company2", ""), state.get("comparison_company3", "")], 1
+    ):
+        if not name:
+            continue
+        ticker = get_ticker(name.lower()) or name
+        fy = int(_req_year) if _req_year else get_most_recent_filed_fiscal_year(ticker)
+        periods[idx] = (fy, get_fiscal_period_end(ticker, fy))
+    return periods
+
+
 def generate_comparison_chart(state):
+    """
+    Chart node for company comparison. Also rewrites the answer's monetary
+    cells to USD billions (rag/utils/money.py) so the displayed table matches
+    the chart. Returns the chart fields, plus Intermediate_message when the table
+    was rewritten.
+    """
+    result = _generate_comparison_chart_impl(state)
+    answer = state.get("Intermediate_message", "")
+    company_periods = _comparison_company_periods(state)
+    if answer and company_periods:
+        from rag.utils.money import normalize_comparison_table
+        normalized = normalize_comparison_table(answer, company_periods)
+        if normalized != answer:
+            logger.info(" Normalized monetary cells in comparison table to USD billions")
+            result = {**result, "Intermediate_message": normalized}
+    return result
+
+
+def _generate_comparison_chart_impl(state):
     """
     SYNCHRONOUS chart generation node for company comparison.
     Supports both 2 and 3 company comparisons.
@@ -2171,7 +2235,8 @@ def generate_comparison_chart(state):
         logger.info(f"✓ Parsed {len(metrics_data)} metrics from table")
         
         # Step 2: Prepare chart data
-        chart_data = prepare_chart_data(metrics_data, company1, company2, company3, max_metrics=8)
+        company_periods = _comparison_company_periods(state)
+        chart_data = prepare_chart_data(metrics_data, company1, company2, company3, max_metrics=8, company_periods=company_periods)
         if not chart_data['metrics']:
             logger.info("No valid numeric metrics for charting")
             return {"chart_url": None, "chart_filename": None}

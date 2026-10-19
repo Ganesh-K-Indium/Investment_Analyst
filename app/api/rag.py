@@ -453,7 +453,9 @@ async def compare_core(
         verify_owner(chat_session.user_id, current_user)
 
         # Build year string for the query
-        year_str = str(payload.year) if payload.year else "2024"
+        # No hard-coded year here: a literal year would be read as an explicit year
+        # in the question and override each company's latest filed fiscal year.
+        year_str = str(payload.year) if payload.year else "(most recent fiscal year)"
         
         # Predefined comparison prompt
         query = f"""

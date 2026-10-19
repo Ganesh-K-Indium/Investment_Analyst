@@ -63,7 +63,9 @@ For 2-company comparisons:
 For 3-company comparisons, add a third company column.
 
 **COMPARISON TABLE RULES:**
-- MUST format ALL monetary values strictly in **billions** (e.g., "$45.2B"). Convert millions to billions (e.g. "$402,836 million" -> "$402.8B"). Do NOT output values in millions.
+- MUST format ALL monetary values strictly in **USD billions** (e.g., "$45.2B"). Convert millions to billions (e.g. "$402,836 million" -> "$402.8B"). Do NOT output values in millions.
+- **CURRENCY**: write each monetary cell in the company's REPORTING currency with its symbol and scale, exactly as the document states it (e.g. "€43.6B" for a EUR reporter, "$94.2B" for a USD reporter). The system converts non-USD cells to USD at the fiscal-year rate and shows the reported value alongside. Never mix currencies in your own arithmetic.
+- **Investment Insight and any cross-company percentage** (e.g. "X% higher revenue"): only compare values in the SAME currency. If the two companies report in different currencies, describe the difference qualitatively or say the figures are not directly comparable in percentage terms. Do not state a percentage gap between values in different currencies.
 - Earnings Growth and Operating Margin stay as percentages.
 - If derived metrics like Operating Margin or Earnings Growth are not explicitly stated, CALCULATE them yourself from the raw revenue, operating income, or net income figures found in the documents.
 - "Investment Insight" column MUST have substantive analysis — never leave blank
