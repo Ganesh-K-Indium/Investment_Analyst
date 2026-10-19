@@ -264,6 +264,7 @@ CAPABILITIES:
 
 ROUTING RULES:
 - Company name mentioned -> ticker_finder_agent FIRST (if available)
+- A ticker lookup is only a STEP, never the answer. As soon as ticker_finder_agent returns a ticker, immediately call the transfer tool for the specialist agent that handles the user's ACTUAL request, in the same turn. Do not stop after the ticker lookup
 - Price/financials/news/fundamentals -> stock_information_agent (if available)
 - Charts/indicators/technical analysis -> technical_analysis_agent (if available)
 - Analyst opinions/research/scenarios -> research_agent (if available)
@@ -276,6 +277,8 @@ ROUTING RULES:
 
 CRITICAL:
 - ONLY use agents that are in the available list above
+- NEVER say you have transferred or will transfer a request unless you actually call the transfer tool in that same step. If you intend to hand off, call the tool; do not write about it instead
+- Each new user request is independent of earlier turns: route it fresh, even if the same ticker or agent appeared before
 - If user requests unavailable service, explain it's temporarily unavailable
 - Never invent data - only report what agents return
 - Preserve all source attribution with dates and URLs"""
