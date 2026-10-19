@@ -2696,27 +2696,37 @@ async def alpha_dimension_retrieve(state):
             # MD&A: the drivers behind the numbers. Foreign private issuers (20-F) call it
             # "Item 5. Operating and Financial Review and Prospects", not MD&A.
             f"{ticker} management discussion analysis results of operations drivers of revenue and net income {_cur_yr} {_prior_yr} {_prior_yr2}",
-            f"{ticker} operating and financial review and prospects Item 5 results of operations {_cur_yr} {_prior_yr} {_prior_yr2}"
+            f"{ticker} operating and financial review and prospects Item 5 results of operations {_cur_yr} {_prior_yr} {_prior_yr2}",
+            # Specific MD&A passages the broad queries above miss: operating income before
+            # the financial result, the financial result, income tax, and the cash-flow table.
+            f"{ticker} operating income before financial result operating margin decreased increased {_cur_yr} {_prior_yr}",
+            f"{ticker} financial result financial income financial expenses income before income tax {_cur_yr} {_prior_yr}",
+            f"{ticker} income tax expense benefit income for the year attributable to controlling interests {_cur_yr} {_prior_yr}",
+            f"{ticker} net cash provided by operating activities cash flow data {_cur_yr} {_prior_yr} {_prior_yr2}",
         ]
 
         performance_docs = []
+        _seen_perf = set()
         for query in performance_queries:
             results = await db_instance.hybrid_search(query=query, content_type="text", limit=4)
             for point in results:
                 if hasattr(point, 'payload'):
                     from langchain_core.documents import Document
-                    doc = Document(
-                        page_content=point.payload.get('page_content', ''),
-                        metadata=point.payload.get('metadata', {})
-                    )
-                    performance_docs.append(doc)
+                    meta = point.payload.get('metadata', {})
+                    content = point.payload.get('page_content', '')
+                    # Several queries hit the same page; keep each page once.
+                    _key = (meta.get('source_file'), meta.get('page_num'), content[:80])
+                    if _key in _seen_perf:
+                        continue
+                    _seen_perf.add(_key)
+                    performance_docs.append(Document(page_content=content, metadata=meta))
 
         alpha_dimensions['performance'] = {
             'source': 'vectordb',
-            'documents': performance_docs[:12],  # MD&A queries come last; keep them in the slice
+            'documents': performance_docs[:16],
             'query_count': len(performance_queries)
         }
-        logger.info(f"    Retrieved {len(performance_docs[:12])} chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
+        logger.info(f"    Retrieved {len(performance_docs[:16])} unique chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
 
     except Exception as e:
         logger.error(f"    Error: {e}")
@@ -2940,7 +2950,7 @@ def alpha_generate_report(state):
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
     # Helper to format documents
-    def format_docs(docs):
+    def format_docs(docs, text_char_limit=500):
         if not docs:
             return "No documents available."
         parts = []
@@ -2952,7 +2962,8 @@ def alpha_generate_report(state):
                 if is_form4
                 else d.metadata.get('source_file', d.metadata.get('title', d.metadata.get('source', 'Unknown')))
             )
-            char_limit = 1500 if is_form4 else 500
+            # Filing pages are long; a 500-char cut dropped the figures that sit mid-page.
+            char_limit = 1500 if is_form4 else text_char_limit
             parts.append(f"Source: {source_label}\n{d.page_content[:char_limit]}")
         return "\n\n---\n\n".join(parts)
     
@@ -2999,7 +3010,11 @@ def alpha_generate_report(state):
                 "company": ticker,
                 "ticker": ticker,
                 "documents": format_docs(
-                    [d for d in docs if d.metadata.get('content_type') != 'insider_trading']
+                    [d for d in docs if d.metadata.get('content_type') != 'insider_trading'],
+                    # Performance needs the figures mid-page: allow much more text per chunk.
+                    # Filing pages run ~4-5k chars and the key figures sit mid-page (e.g. EMBJ
+                    # p78 operating-income drop starts at char ~3.2k).
+                    text_char_limit=5000 if dim_key == 'performance' else 500,
                 )
             }
             if dim_key == 'alignment':

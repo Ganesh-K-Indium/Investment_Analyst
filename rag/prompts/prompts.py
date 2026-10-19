@@ -1044,10 +1044,11 @@ most recent fiscal year for which a 10-K actually exists. Do not assume a more r
 - Quote the two values exactly as they appear in the documents, then the change, e.g. "net income rose from $354.6M (2024) to $359.0M (2025), +1.3%."
 - CAGR = (end ÷ start)^(1 ÷ n) − 1, where n = end year − start year (a 2023→2025 span is n = 2, not 3). Show the years used. If you cannot compute it from the figures in the documents, omit it.
 - Use the reporting currency stated in the documents for every figure.
+- Every trend claim needs its figures. Do not write "EBITDA margin is stable" or "operating cash flow exceeded net income" unless both years' values are quoted from the documents; otherwise omit the claim or say the figure is not in the documents.
+- If operating income, pre-tax income or margins fell, state the decline with its figures and name it as a concern. If one profit line falls while net income rises, look for the reconciling item in the documents: the income tax line (expense vs. benefit), and any one-off or discontinued item. State that item and its figures. If the documents do not contain it, say the reconciliation is not in the documents rather than presenting both lines as clean signals. A net income rise driven by a tax benefit or a one-off gain is a quality-of-earnings concern, not an operating improvement.
 
 **Output Requirements**:
-- Maximum 130 words — lead with the most important year-over-year fundamental signal
-- Include at least 2 specific numerical metrics with their year-over-year comparison from the documents
+- Maximum 130 words — lead with the most important year-over-year fundamental signal- Include at least 2 specific numerical metrics with their year-over-year comparison from the documents
 - Tone: Quantitative, investment-grade precision
 """
 
@@ -1208,7 +1209,7 @@ never skip a sentence that does contain a concrete number/fact — every one mus
 
 ---
 ## Indium's ALPHA Summary — Overall Investment Stance
-[Write 4-5 sentences synthesising all five dimension signals into a clear investment thesis. Reference each dimension's Recommendation signal explicitly. Conclude with an overall stance: **Bullish**, **Cautiously Bullish**, **Neutral**, **Cautiously Bearish**, or **Bearish** — with a one-sentence rationale. Use {cur_year} context for recency framing. Apply the Sentiment Tagging rule above to this section too.]
+[Write 4-5 sentences (about 90-110 words) synthesising all five dimension signals into a clear investment thesis. Reference each dimension's Recommendation signal explicitly. Name the single most important risk across the dimensions: if the Performance section reports a decline in operating income, pre-tax income or margins, state that decline by name and figure as the main concern, and do not describe performance as "strong" or "improving" while omitting it. Where the Performance section reports a decline in one profit line alongside growth in another, say so and note it needs reconciling. Conclude with an overall stance: **Bullish**, **Cautiously Bullish**, **Neutral**, **Cautiously Bearish**, or **Bearish** — with a one-sentence rationale that weighs that risk against the growth signals. Use {cur_year} context for recency framing. Apply the Sentiment Tagging rule above to this section too.]
 
 ---
 *Analysis based on SEC filings, publicly available financial data, and web-sourced market information. For informational purposes only — does not constitute investment advice or a solicitation to trade.*
