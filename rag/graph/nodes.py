@@ -578,6 +578,18 @@ def preprocess_and_analyze_query(state):
     _filing_types_union = set(_llm_filing_types) | set(_heuristic_filing_types)
     filing_types = order_filing_types(_filing_types_union)
 
+    # Foreign private issuers file 20-F (not 10-K) and 6-K (not 8-K). A 10-K filter
+    # on a 20-F filer matches zero chunks, so map the annual/event form to the
+    # foreign equivalent for every company the question names.
+    from app.utils.company_mapping import is_foreign_private_issuer
+    _named_tickers = [get_ticker(c) or c for c in (analysis.companies_detected or []) if c]
+    if any(is_foreign_private_issuer(t) for t in _named_tickers if t):
+        _fpi_map = {"10-K": "20-F", "8-K": "6-K"}
+        _mapped = {_fpi_map.get(ft, ft) for ft in filing_types}
+        if _mapped != set(filing_types):
+            logger.info(f"[FILING TYPES] Foreign issuer named → {filing_types} mapped to {order_filing_types(_mapped)}")
+            filing_types = order_filing_types(_mapped)
+
     # Convert to dict for state storage
     sub_query_analysis = {
         "needs_sub_queries": analysis.needs_sub_queries,
