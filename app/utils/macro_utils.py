@@ -495,3 +495,54 @@ def build_source_attribution_context(calc_results: list) -> str:
             )
 
     return "\n--- Source Attribution ---\n" + "\n".join(source_lines) + "\n"
+
+
+# (indicator key, display name, how to report it)
+_SNAPSHOT_SERIES = [
+    ("FEDFUNDS", "Federal Funds Effective Rate", "level"),
+    ("GS2", "2-Year Treasury Constant Maturity Rate", "level"),
+    ("GS10", "10-Year Treasury Constant Maturity Rate", "level"),
+    ("CPI", "CPI-U inflation, year over year", "yoy"),
+    ("U3", "Unemployment rate (U-3)", "level"),
+]
+
+
+def get_macro_snapshot_text() -> str:
+    """
+    A small, dated snapshot of the headline macro figures, read straight from the
+    local FRED/BLS store — no network call and no background re-ingestion.
+
+    Exists so analysis that needs "the current policy rate / yields / inflation"
+    quotes a figure that carries its own as-of month, instead of whatever a web
+    excerpt happens to say (which has no date and can be years stale). Returns ""
+    when the store is missing so callers can simply omit the block.
+    """
+    lines = []
+    for key, name, mode in _SNAPSHOT_SERIES:
+        try:
+            df = load_indicator_data(key)
+            if df is None or df.empty:
+                continue
+            df = df.sort_values("date")
+            latest = df.iloc[-1]
+            as_of = latest["date"].strftime("%b %Y")
+            if mode == "yoy":
+                prior = df[df["date"] == latest["date"] - pd.DateOffset(years=1)]
+                if prior.empty:
+                    continue
+                value = (latest["value"] / prior.iloc[0]["value"] - 1) * 100
+                lines.append(f"- {name}: {value:.2f}% (as of {as_of})")
+            else:
+                prev = df.iloc[-2]["value"] if len(df) > 1 else None
+                tail = f"; prior month {prev:.2f}%" if prev is not None else ""
+                lines.append(f"- {name}: {latest['value']:.2f}% (as of {as_of}{tail})")
+        except Exception:
+            continue
+
+    if not lines:
+        return ""
+    synced = (get_metadata() or {}).get("last_sync", "unknown")[:10]
+    return (
+        "U.S. MACRO SNAPSHOT — FRED / BLS (U.S. data only; authoritative and dated; data last synced "
+        f"{synced})\n" + "\n".join(lines)
+    )

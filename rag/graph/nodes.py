@@ -1,6 +1,9 @@
 "This module contains all info about about the nodes in the graph"
+import asyncio
+import hashlib
 import logging
 import re
+from functools import lru_cache
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from dotenv import load_dotenv
@@ -780,6 +783,82 @@ def _classify_qdrant_error(e: Exception, ticker: str) -> Optional[dict]:
     }
 
 
+# Source-text budget (in tokens) for any single LLM call over retrieved chunks.
+# gpt-4o has a 128k-token window; 70k leaves room for the system prompt, the
+# question and the answer. Over budget, whole low-priority chunks are dropped —
+# a chunk is NEVER cut mid-text, because the figure that answers the question
+# can sit anywhere inside it (a prefix cut hides it and the model reports the
+# data as missing).
+_CONTEXT_TOKEN_BUDGET = 70_000
+
+# Per data bucket in the Bull / Bear / Base scenario prompts (three buckets feed each case).
+_SCENARIO_BUCKET_TOKENS = 12_000
+
+# Max concurrent Qdrant searches per retrieve() call (each also does one
+# embedding call), so wide multi-company/multi-year questions don't flood the
+# embedding API or Qdrant.
+_RETRIEVAL_CONCURRENCY = 8
+
+
+@lru_cache(maxsize=1)
+def _token_encoder():
+    try:
+        import tiktoken
+        try:
+            return tiktoken.encoding_for_model("gpt-4o")
+        except KeyError:
+            return tiktoken.get_encoding("o200k_base")
+    except Exception as e:
+        logger.warning(f"tiktoken unavailable ({e}) — falling back to a conservative chars/3 token estimate")
+        return None
+
+
+def _count_tokens(text: str) -> int:
+    enc = _token_encoder()
+    if enc is not None:
+        try:
+            return len(enc.encode(text, disallowed_special=()))
+        except Exception:
+            pass
+    return len(text) // 3 + 1
+
+
+def _fit_texts_to_token_budget(texts: list, budget: int = _CONTEXT_TOKEN_BUDGET, priority: list = None):
+    """
+    Choose which texts to send so the total stays within `budget` tokens, keeping
+    every chosen text WHOLE. Lower `priority` numbers are kept first (ties keep
+    input order, which for retrieval results is relevance order); when everything
+    fits nothing is dropped and the original order is untouched. Always keeps at
+    least one text. Returns (kept_indices_in_original_order, dropped_count, tokens_used).
+    """
+    counts = [_count_tokens(t) for t in texts]
+    total = sum(counts)
+    if total <= budget:
+        return list(range(len(texts))), 0, total
+    order = sorted(range(len(texts)), key=lambda i: ((priority[i] if priority else 0), i))
+    kept, used = set(), 0
+    for i in order:
+        if used + counts[i] <= budget:
+            kept.add(i)
+            used += counts[i]
+    if not kept and order:
+        kept.add(order[0])
+        used = counts[order[0]]
+    return sorted(kept), len(texts) - len(kept), used
+
+
+def _doc_key(metadata: dict, content: str, default_company: str = "") -> str:
+    """
+    Dedup key for a retrieved chunk. Hashes the FULL text: a short prefix is not
+    unique — financial-statement pages repeat the same running header ("Table of
+    Contents / Embraer S.A. / Notes to the Consolidated Financial Statements…")
+    at the top of every chunk on the page, so a prefix key silently dropped real
+    chunks and the figures in them.
+    """
+    digest = hashlib.sha1((content or "").encode("utf-8")).hexdigest()
+    return f"{metadata.get('company') or default_company}_{metadata.get('source_file', '')}_{metadata.get('page_num', '')}_{digest}"
+
+
 async def retrieve(state, config):
     """
     Retrieve documents relevant to the question using ticker-based collections.
@@ -999,10 +1078,58 @@ async def retrieve(state, config):
     sub_query_results = {}
     seen_doc_ids = set()
     
+    search_sem = asyncio.Semaphore(_RETRIEVAL_CONCURRENCY)
+
+    async def _search_ticker(query, tkr, quarters, limit, dense_limit, sparse_limit):
+        """
+        Every (year x filing-type[/quarter]) pass for ONE ticker, run concurrently,
+        one pass per requested dimension so none gets starved by another scoring
+        higher in a single combined query. Returns Documents in pass order; raises
+        on any Qdrant/lookup error (the caller classifies it).
+        """
+        # DO NOT CREATE if missing
+        db_instance = vectordb_mgr.get_instance(tkr, create_if_missing=False)
+
+        async def _one_pass(year_filter, ft, q):
+            async with search_sem:
+                return await _hybrid_search_with_quarter_fallback(
+                    db_instance,
+                    fiscal_quarter=q,
+                    query=query,
+                    content_type=None,
+                    years=[year_filter],
+                    filing_type=ft,
+                    limit=limit,
+                    dense_limit=dense_limit,
+                    sparse_limit=sparse_limit,
+                )
+
+        passes = [
+            (year_filter, ft, q)
+            for year_filter in _years_for_ticker(tkr)
+            for ft, q in _build_type_quarter_passes(filing_types, quarters)
+        ]
+        batches = await asyncio.gather(*[_one_pass(*p) for p in passes])
+
+        docs = []
+        for points in batches:
+            for point in points:
+                if hasattr(point, 'payload'):
+                    metadata = point.payload.get('metadata', {})
+                    # Ensure company metadata is set if missing
+                    if 'company' not in metadata:
+                        metadata['company'] = tkr
+                    docs.append(Document(page_content=point.payload.get('page_content', ''), metadata=metadata))
+        return docs
+
     if needs_sub_queries and sub_queries:
         logger.info(f"\n SUB-QUERY MODE: {len(sub_queries)} data points")
         logger.info("-" * 80)
         
+        # One search task per (sub-query, ticker), run concurrently (bounded by
+        # _RETRIEVAL_CONCURRENCY). Results are consumed below in the original
+        # order, so dedup and sub_query_results behave as in a sequential run.
+        sq_plan = []  # [(sub-query, [tickers], quarters)]
         for i, sq in enumerate(sub_queries, 1):
             logger.info(f"\n {i}/{len(sub_queries)}: {sq}")
 
@@ -1016,83 +1143,50 @@ async def retrieve(state, config):
                 sq_tickers_for_step = target_tickers
             else:
                 logger.info(f"    Detected companies: {list(sq_tickers_for_step)}")
-            
-            if not sq_tickers_for_step:
+
+            # Scope quarter passes to what THIS sub-query itself asks for — when
+            # multiple quarters are requested the analyzer generates one sub-query
+            # per quarter, and applying every requested quarter to every sub-query
+            # would drown the quarter-specific one in the OTHER quarter's chunks.
+            sq_quarters = extract_fiscal_quarters_from_question(sq) or requested_fiscal_quarters
+            sq_plan.append((sq, sorted(sq_tickers_for_step), sq_quarters))
+
+        search_jobs = [(sq, tkr) for sq, tickers, _q in sq_plan for tkr in tickers]
+        quarters_by_sq = {sq: q for sq, _t, q in sq_plan}
+        search_outcomes = await asyncio.gather(
+            *[_search_ticker(sq, tkr, quarters_by_sq[sq], 5, 50, 50) for sq, tkr in search_jobs],
+            return_exceptions=True,
+        )
+        outcome_by_job = dict(zip(search_jobs, search_outcomes))
+
+        for sq, tickers, _q in sq_plan:
+            if not tickers:
                 logger.warning(f"    No allowed tickers found. Skipping vector search.")
                 sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
                 continue
-            
-            # Query each relevant ticker collection for this sub-query
+
             step_docs = []
-            for t_ticker in sq_tickers_for_step:
-                try:
-                    company_name = map_ticker_to_company(t_ticker.lower())
-                    logger.info(f"    Querying ticker_{t_ticker.lower()} ({company_name})...")
-
-                    # Get instance for this ticker (DO NOT CREATE if missing)
-                    db_instance = vectordb_mgr.get_instance(t_ticker, create_if_missing=False)
-
-                    # Scope quarter passes to what THIS sub-query itself asks
-                    # for (mirrors detect_tickers_in_query's per-sub-query
-                    # scoping above) — when multiple quarters are requested,
-                    # the analyzer generates one sub-query per quarter (e.g.
-                    # "...Q1 2026..." / "...Q2 2026..."), and applying every
-                    # requested quarter to every sub-query would dilute a
-                    # quarter-specific sub-query with the OTHER quarter's
-                    # chunks, drowning out the one actually being asked about.
-                    sq_quarters = extract_fiscal_quarters_from_question(sq) or requested_fiscal_quarters
-
-                    # Perform search per requested year × filing_type × quarter
-                    # combination to ensure representation of every explicitly
-                    # requested dimension (degenerates to one pass per year in
-                    # the common single-type, no-quarter case).
-                    docs_from_ticker = 0
-                    for year_filter in _years_for_ticker(t_ticker):
-                        for ft, q in _build_type_quarter_passes(filing_types, sq_quarters):
-                            search_results = await _hybrid_search_with_quarter_fallback(
-                                db_instance,
-                                fiscal_quarter=q,
-                                query=sq,
-                                content_type=None,
-                                years=[year_filter],
-                                filing_type=ft,
-                                limit=5, # Reduced limit per ticker/sub-query
-                                dense_limit=50,
-                                sparse_limit=50
-                            )
-
-                            # Convert to Document objects
-                            for point in search_results:
-                                if hasattr(point, 'payload'):
-                                    content = point.payload.get('page_content', '')
-                                    metadata = point.payload.get('metadata', {})
-                                    # Ensure company metadata is set if missing
-                                    if 'company' not in metadata: metadata['company'] = t_ticker
-                                    doc = Document(page_content=content, metadata=metadata)
-                                    step_docs.append(doc)
-                                    docs_from_ticker += 1
-
-                    if docs_from_ticker > 0:
-                        logger.info(f"       Found {docs_from_ticker} chunks")
-                    else:
-                        logger.info(f"        No chunks found")
-
-                except Exception as e:
-                    err_result = _classify_qdrant_error(e, t_ticker)
+            for t_ticker in tickers:
+                outcome = outcome_by_job[(sq, t_ticker)]
+                if isinstance(outcome, Exception):
+                    err_result = _classify_qdrant_error(outcome, t_ticker)
                     if err_result is not None:
                         return err_result
+                    continue
+                logger.info(f"    ticker_{t_ticker.lower()} ({map_ticker_to_company(t_ticker.lower())}): {len(outcome)} chunks")
+                step_docs.extend(outcome)
 
             # Deduplicate and Collect results for this sub-query
             companies_found = set()
             content_types = {'text': 0, 'image': 0}
-            
+
             for doc in step_docs:
-                doc_id = f"{doc.metadata.get('company','')}_{doc.metadata.get('source_file','')}_{doc.metadata.get('page_num','')}_{doc.page_content[:50]}"
-                
+                doc_id = _doc_key(doc.metadata, doc.page_content)
+
                 if doc_id not in seen_doc_ids:
                     seen_doc_ids.add(doc_id)
                     all_documents.append(doc)
-                
+
                 # Update stats for sub-query result
                 companies_found.add(doc.metadata.get('company', 'Unknown'))
                 ctype = doc.metadata.get('content_type', 'text')
@@ -1127,51 +1221,31 @@ async def retrieve(state, config):
             if direct_mode_query != question:
                 logger.info(f" Using retrieval-optimized query: '{direct_mode_query}'")
 
-            # Iterate through all identified tickers and merge results
-            for target_ticker in target_tickers:
-                try:
-                    logger.info(f"    Querying collection: ticker_{target_ticker}")
-                    # DO NOT CREATE if missing
-                    db_instance = vectordb_mgr.get_instance(target_ticker, create_if_missing=False)
-                    
-                    current_collection_docs = 0
-                    for year_filter in _years_for_ticker(target_ticker):
-                        for ft, q in _build_type_quarter_passes(filing_types, requested_fiscal_quarters):
-                            search_results = await _hybrid_search_with_quarter_fallback(
-                                db_instance,
-                                fiscal_quarter=q,
-                                query=direct_mode_query,
-                                content_type=None,
-                                years=[year_filter],
-                                filing_type=ft,
-                                limit=10,
-                                dense_limit=100,
-                                sparse_limit=100
-                            )
+            # Search every ticker concurrently, then merge in a stable order
+            direct_tickers = sorted(target_tickers)
+            direct_outcomes = await asyncio.gather(
+                *[_search_ticker(direct_mode_query, t, requested_fiscal_quarters, 10, 100, 100) for t in direct_tickers],
+                return_exceptions=True,
+            )
 
-                            # Convert to Documents and Deduplicate
-                            for point in search_results:
-                                if hasattr(point, 'payload'):
-                                    content = point.payload.get('page_content', '')
-                                    metadata = point.payload.get('metadata', {})
-
-                                    # Create a unique ID for deduplication
-                                    # Use source_file + page_num + content hash equivalent
-                                    doc_id = f"{metadata.get('company', target_ticker)}_{metadata.get('source_file','')}_{metadata.get('page_num','')}_{content[:50]}"
-
-                                    if doc_id not in seen_doc_ids:
-                                        seen_doc_ids.add(doc_id)
-                                        doc = Document(page_content=content, metadata=metadata)
-                                        all_documents.append(doc)
-                                        current_collection_docs += 1
-                                    
-                    logger.info(f"       Found {current_collection_docs} unique chunks across requested years")
-                    
-                except Exception as e:
-                    err_result = _classify_qdrant_error(e, target_ticker)
+            for target_ticker, outcome in zip(direct_tickers, direct_outcomes):
+                logger.info(f"    Collection: ticker_{target_ticker}")
+                if isinstance(outcome, Exception):
+                    err_result = _classify_qdrant_error(outcome, target_ticker)
                     if err_result is not None:
                         return err_result
-            
+                    continue
+
+                current_collection_docs = 0
+                for doc in outcome:
+                    doc_id = _doc_key(doc.metadata, doc.page_content, target_ticker)
+                    if doc_id not in seen_doc_ids:
+                        seen_doc_ids.add(doc_id)
+                        all_documents.append(doc)
+                        current_collection_docs += 1
+
+                logger.info(f"       Found {current_collection_docs} unique chunks across requested years")
+
             # Final stats
             content_types = {'text': 0, 'image': 0}
             companies_found = set()
@@ -1234,55 +1308,22 @@ def generate(state):
     
     logger.info("---USING STANDARD GENERATION---")
     
-    # CRITICAL: Smart truncate documents to prevent context overflow
-    # GPT-4o has 128k token limit (~96k chars safe limit)
-    total_chars = sum(len(doc.page_content) for doc in documents)
-    MAX_TOTAL_CHARS = 150000  # Safe limit for generation
-    
-    if total_chars > MAX_TOTAL_CHARS:
-        logger.info(f"[DOC SIZE] {total_chars:,} chars exceeds limit ({MAX_TOTAL_CHARS:,}). Truncating ONLY web search documents.")
-        
-        # separate docs by source
-        vector_docs = []
-        web_docs = []
-        for doc in documents:
-            source = doc.metadata.get("source", "")
-            if source in ["web_search", "integrate_web_search"]:
-                web_docs.append(doc)
-            else:
-                vector_docs.append(doc)
-                
-        vector_chars = sum(len(d.page_content) for d in vector_docs)
-        remaining_budget = MAX_TOTAL_CHARS - vector_chars
-        
-        if remaining_budget <= 0:
-            # If vector docs alone exceed budget (very rare), we have to proportionally truncate everything
-            logger.warning(f"[DOC SIZE] WARNING: Vectorstore docs exceed total budget ({vector_chars:,} chars). Absolute truncation required.")
-            budget_per_doc = MAX_TOTAL_CHARS // max(len(vector_docs), 1)
-            documents = [Document(page_content=d.page_content[:budget_per_doc], metadata=d.metadata) for d in vector_docs]
-        elif web_docs:
-            logger.info(f"[DOC SIZE] Vectorstore docs take {vector_chars:,} chars. Truncating {len(web_docs)} web chunks into remaining {remaining_budget:,} chars.")
-            budget_per_web_doc = remaining_budget // len(web_docs)
-            truncated_web = []
-            for doc in web_docs:
-                if len(doc.page_content) <= budget_per_web_doc:
-                    truncated_web.append(doc)
-                else:
-                    truncated_web.append(Document(
-                        page_content=doc.page_content[:budget_per_web_doc] + "...[TRUNCATED]",
-                        metadata=doc.metadata
-                    ))
-            documents = vector_docs + truncated_web
-            
-        total_chars = sum(len(doc.page_content) for doc in documents)
-        logger.info(f"[DOC SIZE] After truncation: {total_chars:,} chars")
+    # Keep the model's context from overflowing by DROPPING whole low-priority
+    # chunks — never by cutting inside one (see _CONTEXT_TOKEN_BUDGET). Filing
+    # chunks outrank web results; within each group, retrieval order is kept.
+    _web_sources = ("web_search", "integrate_web_search")
+    priority = [1 if d.metadata.get("source", "") in _web_sources else 0 for d in documents]
+    kept_idx, dropped, used_tokens = _fit_texts_to_token_budget([d.page_content for d in documents], priority=priority)
+    if dropped:
+        logger.warning(f"[DOC SIZE] Over the {_CONTEXT_TOKEN_BUDGET:,}-token budget — dropped {dropped} whole low-priority chunk(s), kept {len(kept_idx)} ({used_tokens:,} tokens)")
+        documents = [documents[k] for k in kept_idx]
     else:
-        logger.info(f"[DOC SIZE] {total_chars:,} chars (limit: {MAX_TOTAL_CHARS:,})")
-    
+        logger.info(f"[DOC SIZE] {used_tokens:,} tokens across {len(documents)} chunks (budget: {_CONTEXT_TOKEN_BUDGET:,})")
+
     llm = ChatOpenAI(
         model="gpt-4o",
-        temperature=0.3,
-        timeout=30,  # Set timeout to prevent hanging
+        temperature=0,  # filing Q&A: same question, same answer
+        timeout=60,  # Set timeout to prevent hanging
         request_timeout=30,
         max_retries=2
     )
@@ -1302,7 +1343,15 @@ def generate(state):
         "question": enriched_question
     }
     
-    Intermediate_message = rag_chain.invoke(generation_input)
+    try:
+        Intermediate_message = rag_chain.invoke(generation_input)
+    except Exception as e:
+        # A provider outage/timeout must degrade to a clear message, not crash the run.
+        logger.error(f" GENERATION FAILED: {type(e).__name__}: {e}")
+        return {
+            "Intermediate_message": "I couldn't generate an answer just now because the language model service didn't respond. Please try again in a moment.",
+            "retry_count": state.get("retry_count", 0) + 1,
+        }
 
     retry_count = state.get("retry_count", 0)
 
@@ -1367,15 +1416,12 @@ def grade_documents(state):
         }
     
     # Initialize financial analyst grader with gpt-4o
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    llm = ChatOpenAI(model="gpt-4o", temperature=0, timeout=60, max_retries=2)
     analyst_grader = get_financial_analyst_grader_chain(llm)
 
     # Concatenate all documents into a single massive context window
     # gpt-4o has a 128k context window, allowing us to pass up to ~80k-100k chars easily
-    doc_previews = []
-    total_chars = 0
-    MAX_CHARS = 100000 
-    
+    all_previews = []
     for i, doc in enumerate(documents, 1):
         if hasattr(doc, 'page_content'):
             content = doc.page_content
@@ -1393,27 +1439,26 @@ def grade_documents(state):
             fq = meta.get("fiscal_quarter", "")
             period_end = meta.get("period_end_date", "")
             source_file = meta.get("source_file", meta.get("source", "Unknown"))
-            
+
             meta_parts = [f"Company: {company}"]
             if filing_type: meta_parts.append(f"Filing: {filing_type}")
             if year: meta_parts.append(f"Year: {year}")
             if fq: meta_parts.append(f"Fiscal Quarter: Q{fq}")
             if period_end: meta_parts.append(f"Period End: {period_end}")
             if source_file: meta_parts.append(f"File: {source_file}")
-            
+
             metadata_str = f" [{ ' | '.join(meta_parts) }]"
-            
-        preview = f"--- Document {i} ---{metadata_str}\n{content}\n"
-        
-        if total_chars + len(preview) > MAX_CHARS:
-            # Add a truncated version of the last document that fits
-            remaining = MAX_CHARS - total_chars
-            if remaining > 100:
-                doc_previews.append(preview[:remaining] + "...[TRUNCATED TO FIT CONTEXT]")
-            break
-            
-        doc_previews.append(preview)
-        total_chars += len(preview)
+
+        all_previews.append(f"--- Document {i} ---{metadata_str}\n{content}\n")
+
+    # Whole chunks only: a half-cut chunk can hide the very figure being graded for,
+    # and a grader that never saw the data answers "insufficient" and triggers a
+    # needless web search.
+    kept_idx, dropped, total_tokens = _fit_texts_to_token_budget(all_previews)
+    if dropped:
+        logger.warning(f"  Over the {_CONTEXT_TOKEN_BUDGET:,}-token budget — grading {len(kept_idx)} of {len(all_previews)} chunks ({dropped} lowest-priority dropped whole)")
+    doc_previews = [all_previews[k] for k in kept_idx]
+    total_chars = sum(len(p) for p in doc_previews)
 
     doc_preview_text = "\n".join(doc_previews)
     logger.info(f"  Sending {len(doc_previews)} documents ({total_chars} chars) to gpt-4o grader...")
@@ -1476,12 +1521,15 @@ def grade_documents(state):
 
     except Exception as e:
         logger.error(f" Financial analyst grading failed: {e}")
-        logger.error("  Falling back to keeping all chunks")
+        logger.error("  Falling back to keeping all chunks and skipping grading")
 
-        # Fallback: keep all chunks
+        # A grader outage says nothing about the chunks. Return no grade so
+        # decide_to_generate falls back to its chunk-count rule (generate from the
+        # filing chunks when there are enough) instead of marking the retrieval
+        # "partial" and pulling in web results the filings didn't need.
         return {
             "documents": documents,
-            "financial_grading": {"overall_grade": "partial", "can_answer": False, "error": str(e)}
+            "financial_grading": {"error": str(e)}
     }
 
 
@@ -1565,7 +1613,7 @@ def web_search(state):
                 doc_content += source['content']
                 
                 # Deduplicate by URL
-                doc_id = source['url'] if source['url'] else doc_content[:100]
+                doc_id = source['url'] if source['url'] else _doc_key({}, doc_content)
                 if doc_id not in seen_doc_ids:
                     seen_doc_ids.add(doc_id)
                     doc = Document(
@@ -1831,7 +1879,7 @@ def integrate_web_search(state):
         logger.info(f"  Found {len(sources)} sources")
 
         for source in sources:
-            doc_id = source["url"] if source["url"] else source["content"][:100]
+            doc_id = source["url"] if source["url"] else _doc_key({}, source["content"])
             if doc_id in seen_doc_ids:
                 continue
             seen_doc_ids.add(doc_id)
@@ -2426,6 +2474,66 @@ def detect_alpha_query(state):
     }
 
 
+async def _alpha_vdb_search(db_instance, query: str, limit: int, fiscal_year: int):
+    """
+    ALPHA vector search scoped to the LATEST annual report (10-K / 20-F).
+
+    Without a year/filing-type filter the only thing steering a search toward the
+    latest filing was the word "latest" inside the query text, so chunks from older
+    annual reports and from 10-Qs mixed in and the analysis blended periods. Falls
+    back to the prior fiscal year, then (last resort, logged) to no filter, so a
+    ticker whose newest filing isn't indexed still gets data rather than an empty
+    dimension — the chunk labels carry their real fiscal year either way.
+    """
+    for years in ([fiscal_year], [fiscal_year - 1]):
+        results = await db_instance.hybrid_search(
+            query=query, content_type="text", years=years,
+            filing_type=list(ANNUAL_FILING_TYPES), limit=limit,
+        )
+        if results:
+            if years[0] != fiscal_year:
+                logger.warning(f"    ALPHA search: no FY{fiscal_year} annual-report chunks — using FY{years[0]}")
+            return results
+    logger.warning(f"    ALPHA search: no FY{fiscal_year}/{fiscal_year - 1} annual-report chunks — searching without year/type filter")
+    return await db_instance.hybrid_search(query=query, content_type="text", limit=limit)
+
+
+def _alpha_source_label(doc, ticker: str) -> str:
+    """
+    Label for a document shown to an ALPHA chain. Built from metadata — NOT the file
+    name: a 20-F for the year ended 31 Dec 2025 is filed (and named) in 2026, and the
+    model read that as "the 2026 Form 20-F".
+    """
+    m = doc.metadata or {}
+    if m.get('content_type') == 'insider_trading':
+        return "SEC Form 4 — Insider Trading Analysis"
+    ft, yr = m.get('filing_type'), m.get('year')
+    if ft and yr:
+        label = f"{ticker} FY{yr} {ft}"
+        if m.get('period_end_date'):
+            label += f" (period ended {m['period_end_date']})"
+        if m.get('page_num') is not None:
+            label += f", page {m['page_num']}"
+        return label
+    title = m.get('title') or m.get('source_file') or m.get('source') or 'Unknown'
+    if m.get('source') in ('seekingalpha', 'govt_source', 'home_market_source'):
+        return f"Web excerpt ({m['source']}, undated) — {title}"
+    return title
+
+
+def _format_alpha_docs(docs, ticker: str) -> str:
+    if not docs:
+        return "No documents available."
+    parts = [f"Source: {_alpha_source_label(d, ticker)}\n{d.page_content}" for d in docs]
+    # Whole chunks only: filing pages run ~4-5k chars and the key figures can sit
+    # anywhere in them, so a per-chunk character cut hides data. Over budget, the
+    # lowest-ranked whole chunks are dropped instead.
+    kept_idx, dropped, _ = _fit_texts_to_token_budget(parts)
+    if dropped:
+        logger.warning(f"    format_docs: over the {_CONTEXT_TOKEN_BUDGET:,}-token budget — dropped {dropped} whole low-ranked chunk(s)")
+    return "\n\n---\n\n".join(parts[k] for k in kept_idx)
+
+
 async def alpha_dimension_retrieve(state):
     """
     Retrieve dimension-specific data for ALPHA Framework.
@@ -2563,16 +2671,18 @@ async def alpha_dimension_retrieve(state):
             )
 
         alignment_docs = []
+        _seen_align = set()
         for query in alignment_queries:
-            results = await db_instance.hybrid_search(query=query, content_type="text", limit=3)
+            results = await _alpha_vdb_search(db_instance, query, 3, _cur_yr)
             for point in results:
                 if hasattr(point, 'payload'):
-                    from langchain_core.documents import Document
-                    doc = Document(
-                        page_content=point.payload.get('page_content', ''),
-                        metadata=point.payload.get('metadata', {})
-                    )
-                    alignment_docs.append(doc)
+                    meta = point.payload.get('metadata', {})
+                    content = point.payload.get('page_content', '')
+                    _k = _doc_key(meta, content)
+                    if _k in _seen_align:
+                        continue
+                    _seen_align.add(_k)
+                    alignment_docs.append(Document(page_content=content, metadata=meta))
 
         # ── Form 4 insider trading advisory data ──────────────────────────────
         logger.info("    Fetching Form 4 insider trading data…")
@@ -2584,7 +2694,6 @@ async def alpha_dimension_retrieve(state):
             form4_report = None if _foreign_issuer else await get_advisory_report(ticker)
 
             if _foreign_issuer:
-                from langchain_core.documents import Document
                 alignment_docs.insert(0, Document(
                     page_content=(
                         f"INSIDER TRADING DATA — {ticker}\n\n{form4_exemption_message(ticker)} "
@@ -2602,7 +2711,6 @@ async def alpha_dimension_retrieve(state):
                         continue
                     lines.append(f"\nAnalyst Insight:\n{detail.get('Reason', 'No analysis available')}\n")
 
-                from langchain_core.documents import Document
                 insider_doc = Document(
                     page_content="\n".join(lines),
                     metadata={"source": "form4_insider_trading", "company": ticker, "content_type": "insider_trading"}
@@ -2618,10 +2726,10 @@ async def alpha_dimension_retrieve(state):
 
         alpha_dimensions['alignment'] = {
             'source': 'vectordb+form4',
-            'documents': alignment_docs[:8],  # Form4/exemption doc at [0], then vectordb docs (MD&A/Item 5 last)
+            'documents': alignment_docs,  # Form4/exemption doc at [0]; no count cap — a [:N] slice dropped the last query (Item 5)
             'query_count': len(alignment_queries)
         }
-        logger.info(f"    Total alignment docs: {len(alignment_docs[:8])}")
+        logger.info(f"    Total alignment docs: {len(alignment_docs)}")
 
     except Exception as e:
         logger.error(f"    Error: {e}")
@@ -2639,39 +2747,69 @@ async def alpha_dimension_retrieve(state):
             f"{ticker} commodity input cost exposure raw materials"
         ]
 
+        _seen_liq = set()
         for query in vdb_queries:
-            results = await db_instance.hybrid_search(query=query, content_type="text", limit=2)
+            results = await _alpha_vdb_search(db_instance, query, 2, _cur_yr)
             for point in results:
                 if hasattr(point, 'payload'):
-                    from langchain_core.documents import Document
-                    doc = Document(
-                        page_content=point.payload.get('page_content', ''),
-                        metadata=point.payload.get('metadata', {})
-                    )
-                    liquidity_docs.append(doc)
+                    meta = point.payload.get('metadata', {})
+                    content = point.payload.get('page_content', '')
+                    _k = _doc_key(meta, content)
+                    if _k in _seen_liq:
+                        continue
+                    _seen_liq.add(_k)
+                    liquidity_docs.append(Document(page_content=content, metadata=meta))
 
-        # Web: Latest macro/liquidity conditions straight from FDIC and other govt sources
-        web_queries = [
-            f"latest FDIC bank liquidity deposit risk data affecting {ticker} sector",
-            f"latest Federal Reserve interest rate policy debt structure impact on {ticker}"
-        ]
+        # Macro context depends on where the issuer is based. FRED/BLS is U.S.-only, so a
+        # domestic filer gets the dated U.S. snapshot and govt-site searches. A foreign
+        # issuer gets its HOME-MARKET policy rate and inflation from its own central bank
+        # and statistics office, and the U.S. snapshot is left out.
+        from app.utils.company_mapping import get_fpi_home_market
+        _home = get_fpi_home_market(ticker)
+        if _home is None:
+            # Dated, authoritative U.S. figures from the local FRED/BLS store. The web
+            # excerpts below carry no date, so they must never be the source of a rate.
+            from app.utils.macro_utils import get_macro_snapshot_text
+            _macro_snapshot = get_macro_snapshot_text()
+            if _macro_snapshot:
+                liquidity_docs.insert(0, Document(
+                    page_content=_macro_snapshot,
+                    metadata={'source': 'macro_snapshot', 'title': 'MACRO SNAPSHOT — FRED / BLS (dated, authoritative)'}
+                ))
+            # Web: Latest macro/liquidity conditions straight from FDIC and other govt sources
+            web_jobs = [
+                (f"{ticker} industry sector credit availability and financing conditions outlook", web_search_govt, 'govt_source'),
+                (f"{ticker} industry supply chain input costs trade policy tariffs outlook", web_search_govt, 'govt_source'),
+            ]
+        else:
+            market = _home['market'] or "home country"
+            rate_label = _home.get('rate') or "central bank policy rate"
+            inflation_label = _home.get('inflation') or "inflation rate"
+            if _home['domains']:
+                home_search = TavilySearch(max_results=3, include_domains=_home['domains'], time_range="year")
+            else:
+                home_search = TavilySearch(max_results=3, time_range="year")
+            web_jobs = [
+                (f"{ticker} {market} {rate_label} latest {_cur_yr}", home_search, 'home_market_source'),
+                (f"{market} {inflation_label} latest official statistics {_cur_yr}", home_search, 'home_market_source'),
+            ]
+            logger.info(f"    {ticker} is a foreign private issuer — home-market macro from {market}; U.S. snapshot omitted")
 
-        for query in web_queries:
-            web_results = web_search_govt.invoke({"query": query})
+        for query, search_tool, source_label in web_jobs:
+            web_results = search_tool.invoke({"query": query})
             # Parse Tavily response using helper
             sources = _parse_tavily_response(web_results, query)
             for source in sources:
-                from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
-                    metadata={'source': 'govt_source', 'url': source['url'], 'title': source['title']}
+                    metadata={'source': source_label, 'url': source['url'], 'title': source['title']}
                 )
                 liquidity_docs.append(doc)
 
         alpha_dimensions['liquidity'] = {
-            'source': 'vectordb+govt',
+            'source': 'vectordb+govt' if _home is None else 'vectordb+home_market',
             'documents': liquidity_docs,
-            'query_count': len(vdb_queries) + len(web_queries)
+            'query_count': len(vdb_queries) + len(web_jobs)
         }
         logger.info(f"    Retrieved {len(liquidity_docs)} chunks (vectordb + govt sources)")
 
@@ -2704,14 +2842,13 @@ async def alpha_dimension_retrieve(state):
         performance_docs = []
         _seen_perf = set()
         for query in performance_queries:
-            results = await db_instance.hybrid_search(query=query, content_type="text", limit=4)
+            results = await _alpha_vdb_search(db_instance, query, 4, _cur_yr)
             for point in results:
                 if hasattr(point, 'payload'):
-                    from langchain_core.documents import Document
                     meta = point.payload.get('metadata', {})
                     content = point.payload.get('page_content', '')
                     # Several queries hit the same page; keep each page once.
-                    _key = (meta.get('source_file'), meta.get('page_num'), content[:80])
+                    _key = _doc_key(meta, content)
                     if _key in _seen_perf:
                         continue
                     _seen_perf.add(_key)
@@ -2719,10 +2856,10 @@ async def alpha_dimension_retrieve(state):
 
         alpha_dimensions['performance'] = {
             'source': 'vectordb',
-            'documents': performance_docs[:16],
+            'documents': performance_docs,
             'query_count': len(performance_queries)
         }
-        logger.info(f"    Retrieved {len(performance_docs[:16])} unique chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
+        logger.info(f"    Retrieved {len(performance_docs)} unique chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
 
     except Exception as e:
         logger.error(f"    Error: {e}")
@@ -2746,19 +2883,43 @@ async def alpha_dimension_retrieve(state):
             web_results = web_search_seekingalpha.invoke({"query": query})
             sources = _parse_tavily_response(web_results, query)
             for source in sources:
-                from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
                     metadata={'source': 'seekingalpha', 'url': source['url'], 'title': source['title']}
                 )
                 horizon_docs.append(doc)
 
+        # Web commentary alone let this dimension assert margin/R&D trends no source
+        # backed (and contradict the Performance section). Anchor it in the company's
+        # own latest annual report: business/competition, R&D, and the operating result.
+        horizon_filing_queries = [
+            f"{ticker} competition competitive position market share customers business overview",
+            f"{ticker} research and development expenditure innovation investment",
+            f"{ticker} operating income operating margin results of operations {_cur_yr} {_cur_yr - 1}",
+        ]
+        horizon_filing_docs = []
+        _seen_hz = set()
+        try:
+            for query in horizon_filing_queries:
+                for point in await _alpha_vdb_search(db_instance, query, 3, _cur_yr):
+                    if hasattr(point, 'payload'):
+                        meta = point.payload.get('metadata', {})
+                        content = point.payload.get('page_content', '')
+                        _k = _doc_key(meta, content)
+                        if _k in _seen_hz:
+                            continue
+                        _seen_hz.add(_k)
+                        horizon_filing_docs.append(Document(page_content=content, metadata=meta))
+        except Exception as hz_err:
+            logger.error(f"    Horizon filing retrieval error (non-fatal): {hz_err}")
+        horizon_docs = horizon_filing_docs + horizon_docs
+
         alpha_dimensions['horizon'] = {
-            'source': 'seekingalpha',
+            'source': 'filing+seekingalpha',
             'documents': horizon_docs,
-            'query_count': len(horizon_queries)
+            'query_count': len(horizon_queries) + len(horizon_filing_queries)
         }
-        logger.info(f"    Retrieved {len(horizon_docs)} chunks (SeekingAlpha)")
+        logger.info(f"    Retrieved {len(horizon_docs)} chunks ({len(horizon_filing_docs)} filing + {len(horizon_docs) - len(horizon_filing_docs)} SeekingAlpha)")
 
     except Exception as e:
         logger.error(f"    Error: {e}")
@@ -2791,7 +2952,6 @@ async def alpha_dimension_retrieve(state):
             rsi_results = web_search_technical.invoke({"query": rsi_query})
             rsi_sources = _parse_tavily_response(rsi_results, rsi_query)
             for source in rsi_sources:
-                from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
                     metadata={
@@ -2813,7 +2973,6 @@ async def alpha_dimension_retrieve(state):
             sma_results = web_search_technical.invoke({"query": sma_query})
             sma_sources = _parse_tavily_response(sma_results, sma_query)
             for source in sma_sources:
-                from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
                     metadata={
@@ -2835,7 +2994,6 @@ async def alpha_dimension_retrieve(state):
             sma_results = web_search_technical_stock_price.invoke({"query": sma_query})
             sma_sources = _parse_tavily_response(sma_results, sma_query)
             for source in sma_sources:
-                from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
                     metadata={
@@ -2857,7 +3015,6 @@ async def alpha_dimension_retrieve(state):
             ebitda_results = web_search.invoke({"query": ebitda_query})
             ebitda_sources = _parse_tavily_response(ebitda_results, ebitda_query)
             for source in ebitda_sources:
-                from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
                     metadata={
@@ -2879,7 +3036,6 @@ async def alpha_dimension_retrieve(state):
             pe_results = web_search.invoke({"query": pe_query})
             pe_sources = _parse_tavily_response(pe_results, pe_query)
             for source in pe_sources:
-                from langchain_core.documents import Document
                 doc = Document(
                     page_content=source['content'],
                     metadata={
@@ -2943,26 +3099,12 @@ def alpha_generate_report(state):
         get_alpha_report_combiner_chain
     )
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = ChatOpenAI(model="gpt-4o", temperature=0, timeout=90, max_retries=2)
     
     # Helper to format documents
-    def format_docs(docs, text_char_limit=500):
-        if not docs:
-            return "No documents available."
-        parts = []
-        # Allow up to 20 docs for dimensions like 'action' that aggregate many small web queries
-        for d in docs[:20]:
-            is_form4 = d.metadata.get('content_type') == 'insider_trading'
-            source_label = (
-                "SEC Form 4 — Insider Trading Analysis"
-                if is_form4
-                else d.metadata.get('source_file', d.metadata.get('title', d.metadata.get('source', 'Unknown')))
-            )
-            # Filing pages are long; a 500-char cut dropped the figures that sit mid-page.
-            char_limit = 1500 if is_form4 else text_char_limit
-            parts.append(f"Source: {source_label}\n{d.page_content[:char_limit]}")
-        return "\n\n---\n\n".join(parts)
-    
+    def format_docs(docs):
+        return _format_alpha_docs(docs, ticker)
+
     dimension_outputs = {}
     
     # Generate each dimension
@@ -3007,12 +3149,14 @@ def alpha_generate_report(state):
                 "ticker": ticker,
                 "documents": format_docs(
                     [d for d in docs if d.metadata.get('content_type') != 'insider_trading'],
-                    # Performance needs the figures mid-page: allow much more text per chunk.
-                    # Filing pages run ~4-5k chars and the key figures sit mid-page (e.g. EMBJ
-                    # p78 operating-income drop starts at char ~3.2k).
-                    text_char_limit=5000 if dim_key == 'performance' else 500,
                 )
             }
+            if dim_key == 'horizon':
+                # Horizon must not contradict what the Performance analysis reported.
+                invoke_kwargs['reported_fundamentals'] = (
+                    dimension_outputs.get('performance', {}).get('analysis')
+                    or "Not available."
+                )
             if dim_key == 'alignment':
                 form4_doc = next(
                     (d for d in docs if d.metadata.get('content_type') == 'insider_trading'),
@@ -3029,7 +3173,7 @@ def alpha_generate_report(state):
             with get_openai_callback() as cb:
                 result = chain.invoke(invoke_kwargs)
             record_usage(
-                stage=f"alpha.{dim_key}", model="gpt-4o-mini",
+                stage=f"alpha.{dim_key}", model="gpt-4o",
                 prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
                 total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - _dim_start,
                 detail=f"ticker={ticker}",
@@ -3069,7 +3213,7 @@ def alpha_generate_report(state):
                 "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
             })
         record_usage(
-            stage="alpha.combiner", model="gpt-4o-mini",
+            stage="alpha.combiner", model="gpt-4o",
             prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
             total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - _combiner_start,
             detail=f"ticker={ticker}",
@@ -3267,7 +3411,7 @@ def scenario_data_retrieve(state):
                 scenario_data["analyst_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500]
+                    "content": s["content"]
     })
         except Exception as e:
             logger.error(f"    Warning: {e}")
@@ -3289,7 +3433,7 @@ def scenario_data_retrieve(state):
                 scenario_data["valuation_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500]
+                    "content": s["content"]
     })
         except Exception as e:
             logger.error(f"    Warning: {e}")
@@ -3312,7 +3456,7 @@ def scenario_data_retrieve(state):
                 scenario_data["catalyst_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500]
+                    "content": s["content"]
     })
         except Exception as e:
             logger.error(f"    Warning: {e}")
@@ -3335,7 +3479,7 @@ def scenario_data_retrieve(state):
                 scenario_data["risk_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500]
+                    "content": s["content"]
     })
         except Exception as e:
             logger.error(f"    Warning: {e}")
@@ -3357,7 +3501,7 @@ def scenario_data_retrieve(state):
                 scenario_data["credit_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500]
+                    "content": s["content"]
     })
         except Exception as e:
             logger.error(f"    Warning: {e}")
@@ -3379,7 +3523,7 @@ def scenario_data_retrieve(state):
                 scenario_data["macro_data"].append({
                     "title": s["title"],
                     "url": s["url"],
-                    "content": s["content"][:1500]
+                    "content": s["content"]
     })
         except Exception as e:
             logger.error(f"    Warning: {e}")
@@ -3419,18 +3563,31 @@ def scenario_generate_report(state):
 
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
-    def _format_bucket(bucket_key, max_items=6, max_chars=1200):
-        """Format a data bucket into a single readable string."""
+    def _format_bucket(bucket_key, budget=_SCENARIO_BUCKET_TOKENS):
+        """
+        Format a data bucket into one string. The same article often comes back for
+        several queries, so each URL is kept once. Entries are kept whole and the
+        bucket is held to a token budget (lowest-ranked entries dropped first), so no
+        source is cut mid-text and no bucket is silently capped at a fixed item count.
+        """
         items = scenario_data.get(bucket_key, [])
         if not items:
             return "No data available from web search."
-        parts = []
-        for item in items[:max_items]:
-            title = item.get("title", "Source")
-            url = item.get("url", "")
-            content = item.get("content", "")[:max_chars]
-            parts.append(f"**{title}**\n{url}\n{content}")
-        return "\n\n---\n\n".join(parts)
+        seen, unique = set(), []
+        for item in items:
+            key = item.get("url") or item.get("title", "")
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        parts = [
+            f"**{item.get('title', 'Source')}**\n{item.get('url', '')}\n{item.get('content', '')}"
+            for item in unique
+        ]
+        kept, dropped, _ = _fit_texts_to_token_budget(parts, budget=budget)
+        if dropped:
+            logger.info(f"    {bucket_key}: {dropped} lower-ranked source(s) dropped to fit the token budget")
+        return "\n\n---\n\n".join(parts[i] for i in kept)
 
     analyst_text = _format_bucket("analyst_data")
     valuation_text = _format_bucket("valuation_data")
@@ -3579,8 +3736,8 @@ def scenario_generate_report(state):
             "bear_assumptions": _fmt_list(_safe(bear_result, "assumptions", [])),
             "bear_analysis": _safe(bear_result, "analysis"),
             # Summaries
-            "analyst_summary": analyst_text[:2000] if analyst_text else "N/A",
-            "credit_summary": credit_text[:1000] if credit_text else "N/A"
+            "analyst_summary": analyst_text or "N/A",
+            "credit_summary": credit_text or "N/A"
     })
         logger.info(f"    Final report: {len(final_report)} chars")
     except Exception as e:

@@ -846,6 +846,11 @@ forward-looking language, and do not write that MD&A is unavailable when Item 5 
 If the retrieved documents span multiple filing
 years, use only the most recent one and ignore older filings — do not blend commentary across
 years. If documents are sparse, note that briefly.
+Ownership precision: report share ownership for each group exactly as the filing gives it (board
+members, executive officers, fiscal council, named major shareholders), with each group's own
+count and its percentage. NEVER add groups together, merge them into "collectively", or restate a
+count for a different group than the filing attributes it to. Keep a figure's qualifiers (as-of
+date, share class such as common shares vs. ADRs).
 
 """
 
@@ -878,20 +883,26 @@ def get_alpha_liquidity_chain(llm):
 
     SYSTEM_PROMPT = f"""You are a senior macro/industry analyst specializing in assessing the operating environment for public companies.
 
-**Your Task**: Analyze the Liquidity (Macro/Micro Environment) dimension of the Indium's ALPHA Framework — this assesses whether the external environment is a tailwind or headwind for the stock.
+**Your Task**: Analyze the Liquidity (Macro/Micro Environment) dimension of the Indium's ALPHA Framework — whether the external environment is a tailwind or headwind for this stock. Current year context: {cur_year}.
 
-**Data sourcing**: The macro data below is sourced from government/regulatory sources — FDIC (bank
-liquidity, deposit, and risk conditions), the Federal Reserve (interest rate policy, monetary
-conditions), the US Treasury (yields, debt data), BLS (inflation, employment), and BEA (GDP, macro
-indicators) — combined with the company's own risk-factor disclosures. Use only the LATEST
-available data from these sources (most recent ~12 months); do not cite stale, multi-year-old
-macro figures. Current year context: {cur_year}.
+**Sources and how to use them** (every document is labelled):
+1. **Rate and inflation source** — the ONLY permitted source for the policy rate, bond yields, inflation and unemployment:
+   - If a **MACRO SNAPSHOT** (FRED / BLS, U.S., with as-of months) is present, it is the source. Quote the figures exactly as shown, with their month, and call them U.S. figures.
+   - If the documents contain **HOME-MARKET** excerpts (central bank or statistics sites for the company's home country), those are the source for the home-market policy rate and inflation. Quote the figure and name its source. These excerpts carry no reliable date, so do not call the figure "current"; use a date only if the excerpt states one.
+   - Never take a rate, yield, inflation or unemployment figure from any other document, even if one states it.
+   - If neither is present, state that macro rate data was not available, and do not quote one.
+2. **Company risk-factor chunks** (latest annual report) — the company's own disclosed exposures: interest rates and debt, currency, commodities and input costs, supply chain, competition. For a company based outside the U.S., use U.S. figures only where its risk factors or revenue mix tie it to the U.S.
+3. **Web excerpts** (undated) — qualitative sector context only. Use a statement only if it clearly concerns THIS company's sector. Ignore anything about banks, deposits or credit markets unless the company is a financial institution. Do not use any number from them that is not from source 1.
 
 **Focus Areas**:
-1. **Bank Liquidity & Credit Conditions**: What do the latest FDIC/Fed data say about credit availability, deposit conditions, and systemic liquidity relevant to this company's sector?
-2. **Interest Rate Sensitivity**: Current Fed policy rate stance and its effect on this company's debt maturity profile, capital costs, and refinancing risk
-3. **Commodity/Input Cost Exposure**: Raw material prices, supply chain vulnerabilities, pricing power vs. input inflation
-4. **Competitive Pressures**: Market share dynamics, new entrants, pricing pressure from 10-K risk factors
+1. Interest-rate and financing conditions: policy-rate level and direction from the snapshot, linked to this company's debt, refinancing or customer-financing exposure ONLY where its risk factors describe that exposure
+2. Commodity / input-cost and supply-chain exposure, from the risk factors
+3. Competitive pressures, from the risk factors
+4. Currency or trade/tariff exposure, if the documents describe it
+
+**Rules**:
+- Every figure you state must appear in the documents. If a focus area is not covered by them, omit it — do not fill it with generic macro commentary.
+- Never describe a rate or yield as "current" or "currently" without its as-of month.
 
 **Output Requirements**:
 - Maximum 100 words — be precise and quantitative where possible
@@ -904,10 +915,10 @@ macro figures. Current year context: {cur_year}.
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Retrieved Documents (FDIC / Federal Reserve / Treasury / BLS / BEA + company risk factors):
+Documents (MACRO SNAPSHOT or HOME-MARKET excerpts, company risk factors, web excerpts):
 {documents}
 
-Analyze the macro/micro environment (Liquidity dimension) using only the latest available government-source data. Keep response under 100 words.""")
+Analyze the macro/micro environment (Liquidity dimension) following the source rules. Keep response under 100 words.""")
     ])
 
     return prompt | structured_llm
@@ -991,16 +1002,25 @@ def get_alpha_horizon_chain(llm):
 
 **Your Task**: Analyze the Horizon (Structural Opportunity & Moat) dimension of the Indium's ALPHA Framework — this assesses the long-term investment durability of the business.
 
-**Recency requirement**: The retrieved documents are capped to the last 12 months of commentary
-(SeekingAlpha coverage). Base this analysis only on that most recent 1-year window — do not
-reference or infer older, stale competitive-positioning data.
+**Sources** (every document is labelled):
+1. **Company filing excerpts** (latest annual report) — authoritative for the company's own reported figures, business description, competition and R&D.
+2. **Web commentary** (SeekingAlpha, last 12 months, undated) — third-party opinion. It may discuss other companies, ETFs or older periods.
+3. **Reported results** — the financial results this same report's Performance analysis has already stated.
+
+**Evidence rules (MANDATORY)**:
+- State a margin, R&D-intensity or market-share trend ONLY if the figures that support it appear in the documents. Never infer an improvement from tone or from a headline.
+- The Reported results prevail. You must not contradict them: if operating income or margins fell, do not describe margins as improving or strong — name the pressure instead. When web commentary conflicts with the filing or the Reported results, follow the filing and note that commentary differs.
+- Use a web article only if it clearly concerns THIS company. Ignore articles about other companies.
+- A claim of being above or below industry peers needs the peer figures in the documents; otherwise do not make it.
+- Keep every figure's qualifiers: the period it covers, its basis (e.g. "accumulated deliveries since 2004" is not a current-year share) and its source. Never present a cumulative or historical figure as a current one.
+- If a focus area has no support in the documents, omit it. Do not fill space with generic statements.
 
 **Focus Areas**:
-1. **Operating Margins vs. Industry**: Are margins above or below sector peers? Signals pricing power and competitive moat strength.
-2. **R&D Investment**: R&D as % of revenue vs. prior years — is the company investing to sustain or grow its competitive advantage?
-3. **Market Share Dynamics**: Is the company gaining or losing market share? Evidence from revenue growth relative to industry.
-4. **Moat Sources**: Identify the type and durability of competitive advantages — network effects, switching costs, cost advantages, intangible assets (patents, brands, licenses), efficient scale.
-5. **TAM Opportunity**: Size and growth trajectory of addressable markets from business section disclosures.
+1. Margin trajectory, from the filing's reported figures, and any evidence of pricing power
+2. R&D investment — only with figures from the documents
+3. Market position: backlog, customers, programs, share dynamics
+4. Moat sources: network effects, switching costs, cost advantages, intangible assets, efficient scale
+5. Opportunity: addressable-market and program disclosures in the business sections
 
 **Output Requirements**:
 - Maximum 100 words — be specific and analytical
@@ -1013,10 +1033,13 @@ reference or infer older, stale competitive-positioning data.
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Retrieved Documents (last 12 months only):
+Reported results (from this report's Performance analysis — do not contradict):
+{reported_fundamentals}
+
+Documents (filing excerpts and last-12-month web commentary):
 {documents}
 
-Analyze the HORIZON dimension — competitive moat, structural opportunities, and long-term investment durability — using only the last 1 year of data above. Keep response under 100 words.""")
+Analyze the HORIZON dimension following the evidence rules. Keep response under 100 words.""")
     ])
 
     return prompt | structured_llm
@@ -1097,6 +1120,11 @@ untagged, only number/fact-bearing ones get wrapped.)
 
 For the Summary specifically, always tag the final stance sentence: [[+|...]] for
 Bullish/Cautiously Bullish, [[-|...]] for Bearish/Cautiously Bearish, [[~|...]] for Neutral.
+
+Choose the tag by what the sentence means FOR THE STOCK in context, not by the number: a rising
+rate, rising inflation, a falling margin or any figure the sentence itself calls a headwind, pressure or
+risk is [[-|...]]; a figure it calls a tailwind or strength is [[+|...]]; a plain ownership or
+status figure with no stated implication is [[~|...]].
 
 Never tag a partial sentence, never nest tags, never tag more than one sentence per marker, and
 never skip a sentence that does contain a concrete number/fact — every one must be wrapped.

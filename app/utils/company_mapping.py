@@ -386,6 +386,25 @@ def is_foreign_private_issuer(ticker: str) -> bool:
     return bool(ticker) and ticker.lower().split('_')[0] in FOREIGN_PRIVATE_ISSUER_TICKERS
 
 
+# Home-market rate / inflation sources for foreign issuers. The U.S. FRED/BLS store
+# says nothing about these, so the macro context for an FPI is fetched from its home
+# market's central bank and statistics office. Tickers not listed fall back to an
+# unrestricted web search (see get_fpi_home_market).
+FPI_HOME_MARKETS = {
+    'embj': {'market': 'Brazil', 'rate': 'Selic policy rate', 'inflation': 'IPCA inflation',
+             'domains': ['bcb.gov.br', 'ibge.gov.br']},
+    'sny':  {'market': 'euro area (France)', 'rate': 'ECB deposit facility rate', 'inflation': 'euro area HICP inflation',
+             'domains': ['ecb.europa.eu', 'banque-france.fr', 'insee.fr']},
+}
+
+
+def get_fpi_home_market(ticker: str):
+    """Home-market macro sources for a foreign private issuer, or None if the ticker is not one."""
+    if not is_foreign_private_issuer(ticker):
+        return None
+    return FPI_HOME_MARKETS.get(ticker.lower().split('_')[0], {'market': None, 'domains': []})
+
+
 def form4_exemption_message(ticker: str) -> str:
     """
     Why there is no Form 4 data for a foreign private issuer. Their officers,
