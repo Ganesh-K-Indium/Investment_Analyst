@@ -131,9 +131,14 @@ def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
             f"{company} income from operations operating income {year_end_phrase}"
         )
 
-        # 4. EARNINGS GROWTH - Explicit comparison language
+        # 4. EARNINGS GROWTH - Prior-year comparative income statement line, so the
+        # growth base (prior year net income) is retrieved alongside the current year
+        prior_end_phrase = (
+            f"year ended December 31 {prior_year}" if _fye_month == 12
+            else f"fiscal year {prior_year} annual period"
+        )
         sub_queries.append(
-            f"{company} earnings growth increased or decreased from {prior_year} to {year} compared to {prior_year} percentage change"
+            f"{company} net income loss {prior_end_phrase} comparative consolidated statements of operations {year_end_phrase}"
         )
 
         # 5. R&D EXPENSES - Operating cost breakout
@@ -1605,12 +1610,12 @@ def web_search(state):
         if _wants_recent:
             news_tool = TavilySearch(max_results=5, include_raw_content=True,
                                      include_domains=_search_domains, topic="news", time_range="month")
-            found = _parse_tavily_response(news_tool.invoke({"query": q}), q)
+            found = _drop_period_mismatches(question, _parse_tavily_response(news_tool.invoke({"query": q}), q))
             if found:
                 return found
             logger.info("   No news in the last month for this query — falling back to the general search")
         plain_tool = TavilySearch(max_results=5, include_raw_content=True, include_domains=_search_domains)
-        return _parse_tavily_response(plain_tool.invoke({"query": q}), q)
+        return _drop_period_mismatches(question, _parse_tavily_response(plain_tool.invoke({"query": q}), q))
 
     documents = []
     total_chars = 0
@@ -1709,6 +1714,95 @@ def web_search(state):
         "web_searched": True,
         "sub_query_results": sub_query_results
     }
+
+
+_QUARTER_WORDS = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3, "fourth": 4, "4th": 4}
+_QUARTER_PATTERNS = (
+    # "third quarter 2026", "third-quarter of 2026", "3rd quarter 2026"
+    (re.compile(r"\b(first|second|third|fourth|1st|2nd|3rd|4th)[\s-]+quarter(?:\s+of)?(?:\s+fiscal)?(?:\s+year)?\s+(?:fy\s?)?(20\d\d)\b", re.I),
+     lambda m: (_QUARTER_WORDS[m.group(1).lower()], int(m.group(2)))),
+    # "Q3 2026", "Q3 FY2026", "Q3-2026"
+    (re.compile(r"\bq([1-4])[\s-]*(?:fy\s?)?(20\d\d)\b", re.I), lambda m: (int(m.group(1)), int(m.group(2)))),
+    # "3Q 2026", "3Q26" is deliberately not matched (ambiguous)
+    (re.compile(r"\b([1-4])q[\s-]*(?:fy\s?)?(20\d\d)\b", re.I), lambda m: (int(m.group(1)), int(m.group(2)))),
+)
+
+
+def _quarters_mentioned(text: str) -> set:
+    """Every (quarter, year) pair the text labels explicitly, e.g. {(3, 2025)}."""
+    found = set()
+    for pattern, to_pair in _QUARTER_PATTERNS:
+        found.update(to_pair(m) for m in pattern.finditer(text or ""))
+    return found
+
+
+def _period_mismatch(question: str, text: str) -> bool:
+    """
+    True when a web document is about a different year's version of the quarter the
+    question names. Search engines happily return "Q3 earnings" for last year, and the
+    model then relabels those figures as the requested period. Only fires when the
+    question names exactly one quarter and the document labels that same quarter for
+    other years but never for the requested one; documents with no quarter label at
+    all are kept.
+    """
+    asked = _quarters_mentioned(question)
+    if len(asked) > 1:
+        return False
+    if len(asked) == 1:
+        (quarter, year), = asked
+        seen = _quarters_mentioned(text)
+        if (quarter, year) in seen:
+            return False
+        return any(q == quarter and y != year for q, y in seen)
+
+    # No quarter named: a single fiscal/full year ("FY2025 net income"). The document must
+    # label some fiscal year to be judged, and none of its labels may be the requested one.
+    year = _single_requested_year(question)
+    if year is None:
+        return False
+    seen_years = _fiscal_years_mentioned(text)
+    return bool(seen_years) and year not in seen_years
+
+
+# Words that make a lone year a range endpoint or baseline ("since 2020", "2020 to 2025"),
+# where a document for a different year is exactly what the user wants.
+_YEAR_RANGE_HINTS = ("since", "from", "between", "through", "over the", "trend", "compare",
+                     "versus", " vs", "cagr", "history", "historical", "change", "growth")
+
+_FISCAL_YEAR_LABEL = re.compile(
+    r"(?:\bfy\s?|\bfiscal(?:\s+year)?\s+|\bfull[\s-]year\s+|\byear\s+ended\s+\w+\s+\d{1,2},?\s+)(20\d\d)\b", re.I)
+
+
+def _fiscal_years_mentioned(text: str) -> set:
+    """Fiscal / full years the text labels explicitly: 'FY2025', 'fiscal year 2025', 'year ended December 31, 2025'."""
+    return {int(m.group(1)) for m in _FISCAL_YEAR_LABEL.finditer(text or "")}
+
+
+def _single_requested_year(question: str):
+    """The one year a full-year question is about, or None when it is a range, a comparison or has no year."""
+    q = (question or "").lower()
+    years = set(re.findall(r"(?<!\d)(20\d\d)(?!\d)", q))  # not \b: "fy2025" has no boundary before the year
+    if len(years) != 1 or any(h in q for h in _YEAR_RANGE_HINTS):
+        return None
+    return int(next(iter(years)))
+
+
+def _period_label(question: str) -> str:
+    """Explicit period for a search query: 'Q3 2026' or 'fiscal year 2025'; '' when the question names none."""
+    asked = _quarters_mentioned(question)
+    if len(asked) == 1:
+        (quarter, year), = asked
+        return f"Q{quarter} {year}"
+    year = _single_requested_year(question)
+    return f"fiscal year {year}" if year else ""
+
+
+def _drop_period_mismatches(question: str, sources: list) -> list:
+    """Remove web sources that are about another year's version of the quarter asked about."""
+    kept = [s for s in sources if not _period_mismatch(question, s.get("content", ""))]
+    if len(kept) < len(sources):
+        logger.info(f"  Dropped {len(sources) - len(kept)} web source(s) labelled for a different year than the quarter asked")
+    return kept
 
 
 def _parse_tavily_response(docs, query):
@@ -1858,6 +1952,12 @@ def integrate_web_search(state):
         logger.info("  [DEBUG] Using original question for web search fallback.")
         target_str = question
 
+    # The grader's missing-data sentence often drops the period the user asked about, and
+    # the search engine then returns whichever year ranks first. State it explicitly.
+    _period = _period_label(question)
+    if _period and _period.lower() not in target_str.lower() and _period.split()[-1] not in target_str:
+        target_str = f"{target_str} {_period}"
+
     # Only prepend company/ticker if not already named in the target text —
     # both the missing-data summary and the raw question almost always
     # already mention the company, so prepending unconditionally produced
@@ -1891,7 +1991,7 @@ def integrate_web_search(state):
 
     try:
         docs = web_search_tool.invoke({"query": search_query})
-        sources = _parse_tavily_response(docs, search_query)
+        sources = _drop_period_mismatches(question, _parse_tavily_response(docs, search_query))
         logger.info(f"  Found {len(sources)} sources")
 
         for source in sources:
@@ -2045,6 +2145,10 @@ def extract_numeric_value(value_str):
     try:
         # Remove commas and convert to float (preserves negative sign)
         num = float(match.group(1).replace(',', ''))
+        # "-$11.8B", "($11.8B)" and "(16.1)%" are losses or negatives: the sign sits before the digits
+        prefix = value_str[:match.start()]
+        if not match.group(1).startswith('-') and any(ch in prefix for ch in ('-', '−', '(')):
+            num = -abs(num)
         return num
     except (ValueError, AttributeError):
         return None
@@ -2221,7 +2325,10 @@ def _generate_comparison_chart_impl(state):
         else:
             logger.info(f"Generating chart for {company1} vs {company2}")
         
-        # Step 1: Parse table
+        # Step 1: Parse table. Compute Earnings Growth first and drop the Prior-Year helper
+        # row, so the chart plots the computed growth and never the helper values.
+        from rag.utils.money import _apply_computed_growth
+        answer = _apply_computed_growth(answer, 3 if company3 else 2)
         metrics_data = parse_markdown_table(answer)
         if not metrics_data:
             logger.info("No metrics found in answer")
@@ -2246,7 +2353,8 @@ def _generate_comparison_chart_impl(state):
                 y=chart_data['company1_values'],
                 marker_color='#1f77b4',
                 text=[f"{v:.2f}" for v in chart_data['company1_values']],
-                textposition='auto',
+                textposition='outside',
+                cliponaxis=False,
             ),
             go.Bar(
                 name=company2,
@@ -2254,7 +2362,8 @@ def _generate_comparison_chart_impl(state):
                 y=chart_data['company2_values'],
                 marker_color='#ff7f0e',
                 text=[f"{v:.2f}" for v in chart_data['company2_values']],
-                textposition='auto',
+                textposition='outside',
+                cliponaxis=False,
             )
         ]
         
@@ -2267,12 +2376,21 @@ def _generate_comparison_chart_impl(state):
                     y=chart_data['company3_values'],
                     marker_color='#2ca02c',
                     text=[f"{v:.2f}" for v in chart_data['company3_values']],
-                    textposition='auto',
+                    textposition='outside',
+                    cliponaxis=False,
                 )
             )
         
         fig = go.Figure(data=bars)
-        
+
+        # Pad the y-axis so outside labels on tall and negative bars stay inside the plot
+        # and clear of the x-axis tick labels
+        _all_vals = [v for key in ('company1_values', 'company2_values', 'company3_values')
+                     for v in chart_data.get(key, []) if isinstance(v, (int, float))]
+        _y_max, _y_min = max(_all_vals + [0]), min(_all_vals + [0])
+        _pad = (_y_max - _y_min) * 0.12 or 1
+        _y_range = [_y_min - _pad if _y_min < 0 else 0, _y_max + _pad]
+
         # Update layout - with support for negative values
         chart_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
         title = f'Financial Comparison: {company1} vs {company2}'
@@ -2296,8 +2414,9 @@ def _generate_comparison_chart_impl(state):
                 xanchor="right",
                 x=1
             ),
-            xaxis=dict(tickangle=-45),
+            xaxis=dict(tickangle=-45, automargin=True),
             yaxis=dict(
+                range=_y_range,
                 zeroline=True,
                 zerolinewidth=2,
                 zerolinecolor='gray',
@@ -3393,6 +3512,11 @@ def scenario_data_retrieve(state):
     ticker = state.get("ticker", "UNKNOWN").upper()
     logger.info(f" Target: {ticker}\n")
 
+    # The user's own wording is the period reference for the wrong-year guard; the queries
+    # below are built from the ticker and carry no period of their own.
+    _msgs = state.get("messages") or []
+    _user_question = getattr(_msgs[-1], "content", "") if _msgs else ""
+
     web_search_tool = TavilySearch(
         max_results=4,
         include_raw_content=True,
@@ -3422,7 +3546,7 @@ def scenario_data_retrieve(state):
     for q in analyst_queries:
         try:
             results = web_search_tool.invoke({"query": q})
-            sources = _parse_tavily_response(results, q)
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
             for s in sources:
                 scenario_data["analyst_data"].append({
                     "title": s["title"],
@@ -3444,7 +3568,7 @@ def scenario_data_retrieve(state):
     for q in valuation_queries:
         try:
             results = web_search_tool.invoke({"query": q})
-            sources = _parse_tavily_response(results, q)
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
             for s in sources:
                 scenario_data["valuation_data"].append({
                     "title": s["title"],
@@ -3467,7 +3591,7 @@ def scenario_data_retrieve(state):
     for q in catalyst_queries:
         try:
             results = web_search_tool.invoke({"query": q})
-            sources = _parse_tavily_response(results, q)
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
             for s in sources:
                 scenario_data["catalyst_data"].append({
                     "title": s["title"],
@@ -3490,7 +3614,7 @@ def scenario_data_retrieve(state):
     for q in risk_queries:
         try:
             results = web_search_tool.invoke({"query": q})
-            sources = _parse_tavily_response(results, q)
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
             for s in sources:
                 scenario_data["risk_data"].append({
                     "title": s["title"],
@@ -3512,7 +3636,7 @@ def scenario_data_retrieve(state):
     for q in credit_queries:
         try:
             results = web_search_tool.invoke({"query": q})
-            sources = _parse_tavily_response(results, q)
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
             for s in sources:
                 scenario_data["credit_data"].append({
                     "title": s["title"],
@@ -3534,7 +3658,7 @@ def scenario_data_retrieve(state):
     for q in macro_queries:
         try:
             results = web_search_tool.invoke({"query": q})
-            sources = _parse_tavily_response(results, q)
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
             for s in sources:
                 scenario_data["macro_data"].append({
                     "title": s["title"],

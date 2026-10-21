@@ -113,6 +113,11 @@ def detect_currency(text: str) -> Optional[str]:
     return None
 
 
+def _is_negative_prefix(prefix: str) -> bool:
+    """True when the text before the number carries a minus sign or an opening parenthesis."""
+    return any(ch in prefix for ch in ("-", "−", "("))
+
+
 def parse_money(cell: str) -> Optional[Tuple[float, Optional[str]]]:
     """
     Parse a monetary table cell into (value_in_billions_of_reporting_currency, currency).
@@ -140,6 +145,10 @@ def parse_money(cell: str) -> Optional[Tuple[float, Optional[str]]]:
         value = float(m.group(0).replace(",", ""))
     except ValueError:
         return None
+    # A loss can be written as "-$11.8B", "($11.8B)" or "$(11.8)B": the sign sits
+    # before the digits, so read it from the prefix, not from the number itself
+    if _is_negative_prefix(text[:m.start()]):
+        value = -abs(value)
     return value * scale, currency
 
 
@@ -187,6 +196,74 @@ def _basis_label(basis: str, fiscal_year: int, period_end: date, currency: str, 
     return f"{currency}→USD {rate:.4f} (FY{fiscal_year} annual average)"
 
 
+def _format_usd_billions(usd: float) -> str:
+    """
+    Format a USD-billions amount so it stays in billions (charts parse the "B" unit)
+    without losing its size: values under $1B get three decimals ($0.353B, not $0.4B).
+    """
+    decimals = 3 if abs(usd) < 1 else 1
+    sign = "-" if usd < 0 else ""
+    return f"{sign}${abs(usd):,.{decimals}f}B"
+
+
+def _apply_computed_growth(text: str, n_companies: int) -> str:
+    """
+    Recompute the Earnings Growth row from the Net Income and Prior-Year Net Income rows
+    in code, so the sign and value never depend on the model's arithmetic:
+        growth = (current − prior) / |prior| × 100
+    The |prior| denominator keeps the sign meaningful when the base is a loss
+    (Boeing 2023 −$2.2B → 2024 −$11.8B gives −427.6%, i.e. earnings fell).
+    The Prior-Year Net Income helper row is removed from the displayed table.
+    Rows are left untouched when the helper rows are missing.
+    """
+    lines = text.split("\n")
+    prior_i = cur_i = growth_i = None
+    cells_by_line = {}
+    for i, line in enumerate(lines):
+        if line.count("|") < 3 or line.strip().startswith("|---"):
+            continue
+        raw = line.strip()
+        if raw.startswith("|"):
+            raw = raw[1:]
+        if raw.endswith("|"):
+            raw = raw[:-1]
+        cells = [c.strip() for c in raw.split("|")]
+        if len(cells) < n_companies + 1:
+            continue
+        metric = cells[0].replace("**", "").strip().lower()
+        if "net income" in metric and "prior" in metric:
+            prior_i = i
+        elif metric.startswith("net income") and "growth" not in metric:
+            cur_i = i
+        elif "growth" in metric and ("net income" in metric or "earnings" in metric):
+            growth_i = i
+        else:
+            continue
+        cells_by_line[i] = cells
+
+    if cur_i is None or growth_i is None:
+        # Nothing to compute, but the helper row is still internal: never show it
+        return "\n".join(line for i, line in enumerate(lines) if i != prior_i)
+
+    cur_cells, growth_cells = cells_by_line[cur_i], cells_by_line[growth_i]
+    prior_cells = cells_by_line[prior_i] if prior_i is not None else None
+    for idx in range(1, n_companies + 1):
+        cur = parse_money(cur_cells[idx])
+        prior = parse_money(prior_cells[idx]) if prior_cells else None
+        if cur is None or prior is None:
+            growth_cells[idx] = "not in filing"
+            continue
+        base = prior[0]
+        if base == 0:
+            growth_cells[idx] = "undefined (zero prior-year net income)"
+            continue
+        growth = (cur[0] - base) / abs(base) * 100
+        growth_cells[idx] = f"{growth:+.1f}%"
+
+    lines[growth_i] = "| " + " | ".join(growth_cells) + " |"
+    return "\n".join(line for i, line in enumerate(lines) if i != prior_i)
+
+
 def normalize_comparison_table(text: str, company_periods: dict) -> str:
     """
     Rewrite the company columns of a markdown comparison table so every monetary
@@ -203,6 +280,7 @@ def normalize_comparison_table(text: str, company_periods: dict) -> str:
     A monetary cell that can't be converted is marked rather than dropped.
     """
     n_companies = len(company_periods)
+    text = _apply_computed_growth(text, n_companies)
     out_lines = []
     conversions = {}  # (basis, currency, fy, period_end) -> rate actually used
 
@@ -233,9 +311,9 @@ def normalize_comparison_table(text: str, company_periods: dict) -> str:
             if usd is None:
                 cells[idx] = f"{cell} (not comparable: no FX rate on file)"
             elif currency == "USD":
-                cells[idx] = f"${usd:,.1f}B"
+                cells[idx] = _format_usd_billions(usd)
             else:
-                cells[idx] = f"${usd:,.1f}B (reported {cell.strip()})"
+                cells[idx] = f"{_format_usd_billions(usd)} (reported {cell.strip()})"
                 rate = fx_rate(currency, fy, basis, period_end)
                 conversions[(basis, currency, fy, period_end)] = rate
         out_lines.append("| " + " | ".join(cells) + " |")

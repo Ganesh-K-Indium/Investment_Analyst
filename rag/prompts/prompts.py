@@ -52,7 +52,8 @@ For 2-company comparisons:
 | Revenue | $X B | $Y B | [Who leads and by how much %] |
 | Operating Margin | X% | Y% | [Who is more profitable and why] |
 | Net Income | $X B | $Y B | [Bottom-line comparison] |
-| Earnings Growth (YoY) | X% | Y% | [Growth momentum comparison] |
+| Prior-Year Net Income (attributable to shareholders) | $X B | $Y B | [Helper row: the system computes Earnings Growth from this row] |
+| Earnings Growth (YoY) | calc | calc | [Growth momentum comparison] |
 | R&D Expenses | $X B | $Y B | [Innovation investment comparison] |
 | Total Assets | $X B | $Y B | [Asset base scale] |
 | Total Debt | $X B | $Y B | [Leverage comparison] |
@@ -68,6 +69,10 @@ For 3-company comparisons, add a third company column.
 - **Investment Insight and any cross-company percentage** (e.g. "X% higher revenue"): only compare values in the SAME currency. If the two companies report in different currencies, describe the difference qualitatively or say the figures are not directly comparable in percentage terms. Do not state a percentage gap between values in different currencies.
 - Earnings Growth and Operating Margin stay as percentages.
 - If derived metrics like Operating Margin or Earnings Growth are not explicitly stated, CALCULATE them yourself from the raw revenue, operating income, or net income figures found in the documents.
+- **EARNINGS GROWTH**: the system computes Earnings Growth (YoY) in code from the Net Income row and the Prior-Year Net Income row. Fill both value rows from the comparative columns of the same filing, ALWAYS as net income ATTRIBUTABLE TO THE COMPANY'S SHAREHOLDERS (never total income including noncontrolling interests). Filing labels: Embraer "Owners of Embraer"; Boeing "Net loss attributable to Boeing shareholders". Put "calc" in the growth cells. Do NOT write a growth percentage yourself and never write "n/m" or "N/A" for growth.
+- **LOSSES KEEP THEIR SIGN**: show a net loss as a negative value (e.g. "-$11.8B"). Never drop the minus sign or parentheses from a loss, including in the Prior-Year row.
+- **NEGATIVE BASE**: a negative prior-year value is valid input. Enter it with its sign; the system handles the math and the sign of the growth result.
+- **ROUNDING**: keep every monetary comparison cell in USD billions ("$X.XB"), never switch to $M, because the chart reads the B unit. When a value is under $1B, use three decimals (e.g. $0.353B for $352.5M), never round it to a figure that changes its size (e.g. $0.353B must not become $0.3B).
 - "Investment Insight" column MUST have substantive analysis — never leave blank
 - Display ONLY the table when comparison is requested — no additional narrative text
 - Do NOT hallucinate any data — only include figures derived from documents. Converting from millions to billions or calculating derived margins/growth does NOT count as hallucinating. You MUST do these conversions to output in Billions and percentages."""
@@ -250,7 +255,8 @@ apples-to-apples comparison."""
 - Do NOT add inline source or page citations such as "(Source: ..., p. 87)" or a closing "Source:" line — the application attaches structured citations to every answer separately. Naming the filing in the sentence itself ("According to Embraer's FY2025 20-F...") is fine.
 - For comparison, segment, and geographic queries: ALWAYS use markdown tabular format
 - For all other queries: use narrative with structured data points
-- **NEVER say "data not available"** if ANY relevant figures exist in the documents
+- **NEVER say "data not available"** if ANY relevant figures exist in the documents for the period asked about
+- **PERIOD MUST MATCH**: when the question names a specific period (e.g. "Q3 2026", "FY2025"), present a figure as that period ONLY if the document itself labels it with that period. Web articles are often from an earlier year, so check the year stated in the text. If the documents only contain a different period (e.g. a Q3 2025 article for a Q3 2026 question), say the requested period's figure is not in the available sources, and you may add the labelled figure for the period that is available, naming that period. Never relabel one period's figure as another's.
 - For 10-Q quarterly queries, if standalone 3-month cash flow or CapEx is requested, present the reported 6-Month (YTD) cumulative cash flow figure clearly labeled as 6-Month YTD, since SEC 10-Q cash flow statements report cumulative YTD figures.
 - If the retrieved documents span different filing types (10-K/20-F vs. 10-Q/6-K vs. 8-K), different fiscal
   years, or a company whose fiscal year doesn't align with the calendar year, state this explicitly
