@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage
 from rag.graph.state import GraphState
 from rag.graph.nodes import (web_search, retrieve,
-                         grade_documents, generate, verify_grounding,
+                         grade_documents, generate,
                          show_result, integrate_web_search,
                          preprocess_and_analyze_query,
                          generate_comparison_chart,
@@ -74,7 +74,6 @@ class BuildingGraph:
         workflow.add_node("retrieve", time_node("retrieve")(retrieve))
         workflow.add_node("grade_documents", time_node("grade_documents")(grade_documents))
         workflow.add_node("generate", time_node("generate")(generate))
-        workflow.add_node("verify_grounding", time_node("verify_grounding")(verify_grounding))
         workflow.add_node("show_result", time_node("show_result")(show_result))
         workflow.add_node("integrate_web_search", time_node("integrate_web_search")(integrate_web_search))
         workflow.add_node("generate_chart", time_node("generate_chart")(generate_comparison_chart))
@@ -155,10 +154,8 @@ class BuildingGraph:
         # integrate_web_search → generate directly (no re-grading)
         workflow.add_edge("integrate_web_search", "generate")
 
-        # Generate -> verify_grounding (lightweight numeric-claims fact-check,
-        # zero added latency when the answer makes no numeric claims) -> chart decision
-        workflow.add_edge("generate", "verify_grounding")
-        workflow.add_edge("verify_grounding", "decide_chart")
+        # Generate -> chart decision
+        workflow.add_edge("generate", "decide_chart")
 
         # Add a decision node that routes to either chart generation or show_result
         workflow.add_node("decide_chart", lambda state: state)  # Pass-through node

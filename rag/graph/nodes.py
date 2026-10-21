@@ -583,6 +583,14 @@ def preprocess_and_analyze_query(state):
     # foreign equivalent for every company the question names.
     from app.utils.company_mapping import is_foreign_private_issuer
     _named_tickers = [get_ticker(c) or c for c in (analysis.companies_detected or []) if c]
+    # Foreign private issuers file no 10-Q (interim results go on 6-K). When every
+    # named company is one, a 10-Q that only the LLM hinted at (e.g. "how has it
+    # changed" read as quarterly) is spurious — keep it only on an explicit
+    # quarterly signal in the question (the keyword heuristic).
+    if _named_tickers and all(is_foreign_private_issuer(t) for t in _named_tickers if t):
+        if "10-Q" in filing_types and "10-Q" not in _heuristic_filing_types:
+            logger.info(f"[FILING TYPES] Foreign issuer(s) only, no explicit quarterly signal → dropping LLM-only 10-Q hint from {filing_types}")
+            filing_types = [ft for ft in filing_types if ft != "10-Q"]
     if any(is_foreign_private_issuer(t) for t in _named_tickers if t):
         _fpi_map = {"10-K": "20-F", "8-K": "6-K"}
         _mapped = {_fpi_map.get(ft, ft) for ft in filing_types}
@@ -1851,95 +1859,6 @@ def integrate_web_search(state):
         "documents": combined_documents,
         "web_searched": True
     }
-
-
-_NUMERIC_CLAIM_PATTERN = re.compile(
-    r'\$\s?[\d,]+(?:\.\d+)?|\b\d+(?:\.\d+)?\s?%|\b\d+(?:\.\d+)?\s?(?:million|billion|trillion)\b',
-    re.IGNORECASE,
-)
-
-
-def verify_grounding(state):
-    """
-    Lightweight post-generation grounding check for NUMERIC claims only —
-    replaces the old get_hallucination_chain/get_answer_quality_chain, which
-    were built but never actually wired into the graph (confirmed dead code
-    during a repo audit). This one runs for real, right after generate().
-
-    Deliberately narrow (numeric claims only, not a full hallucination
-    grader) rather than deliberately cheap — accuracy matters more than
-    model cost here, since a wrong "correction" is worse than not checking
-    at all (see below), and the regex gate already bounds how often this
-    runs at all:
-    1. A regex gate skips the entire check (zero added latency/cost) when
-       the generated answer makes no numeric claims at all — most
-       qualitative/MD&A-style answers hit this and pay nothing extra.
-    2. When numeric claims ARE present, a full-strength gpt-4o call verifies
-       them against the source documents. gpt-4o-mini was tried first and
-       reliably false-positived on unit conversions (flagging "$37.8B" as
-       unsupported when the source said "$37,791 million" — the same
-       number) — not accurate enough for arithmetic-sensitive verification.
-    3. If any claim is unsupported, ONE targeted correction pass rewrites
-       just the flagged claims (not a full regeneration). This node sits on
-       a straight-line edge (generate -> verify_grounding -> decide_chart),
-       so it only ever runs once per query — no loop/retry-counter needed.
-    4. Any failure in the check/correction itself fails OPEN (returns the
-       original answer unchanged) rather than blocking the response —
-       a grounding-check outage must never take down normal answers.
-    """
-    generation = state.get("Intermediate_message", "")
-    documents = state.get("documents", [])
-
-    if state.get("is_comparison_mode", False):
-        logger.info("[GROUNDING] Skipping grounding check for comparison queries as requested by user.")
-        return {}
-
-    if not generation or not documents:
-        return {}
-
-    if not _NUMERIC_CLAIM_PATTERN.search(generation):
-        logger.info("[GROUNDING] No numeric claims in answer — skipping check (zero added latency)")
-        return {}
-
-    from rag.prompts.prompts import get_grounding_check_chain, get_grounding_correction_chain
-
-    grounding_llm = ChatOpenAI(model="gpt-4o", temperature=0, timeout=20, max_retries=1)
-
-    doc_text = "\n\n".join(
-        (doc.page_content[:2000] if hasattr(doc, "page_content") else str(doc)[:2000])
-        for doc in documents[:25]
-    )
-
-    try:
-        check_chain = get_grounding_check_chain(grounding_llm)
-        result = check_chain.invoke({"documents": doc_text, "generation": generation})
-    except Exception as e:
-        logger.warning(f"[GROUNDING] Check failed, skipping (fail-open): {e}")
-        return {}
-
-    if result.is_grounded or not result.unsupported_claims:
-        logger.info("[GROUNDING] All numeric claims verified against source documents")
-        return {}
-
-    logger.warning(f"[GROUNDING] Unsupported claims found: {result.unsupported_claims}")
-
-    try:
-        correction_chain = get_grounding_correction_chain(grounding_llm)
-        corrected = correction_chain.invoke({
-            "documents": doc_text,
-            "generation": generation,
-            "unsupported_claims": "\n".join(f"- {c}" for c in result.unsupported_claims),
-        })
-        logger.info("[GROUNDING] Answer corrected — unsupported claims fixed/flagged as not disclosed")
-        return {"Intermediate_message": corrected}
-    except Exception as e:
-        logger.warning(f"[GROUNDING] Correction pass failed — flagging original answer instead: {e}")
-        flagged = (
-            generation
-            + "\n\n---\n**Note**: the following figures could not be verified against the source "
-            + "documents — please double-check: " + "; ".join(result.unsupported_claims)
-        )
-        return {"Intermediate_message": flagged}
 
 
 def show_result(state):

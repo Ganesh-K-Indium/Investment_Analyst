@@ -36,7 +36,7 @@ FastAPI app (app/main.py)
 │   │   one of: ALPHA (alpha_retrieve → alpha_generate), Scenario
 │   │   (Bull/Bear/Base), Macro (macro_analyze → macro_calculate →
 │   │   macro_format), or the standard path — retrieve → grade_documents →
-│   │   web_search (fallback) → generate → verify_grounding → decide_chart
+│   │   web_search (fallback) → generate → decide_chart
 │   │   → (generate_chart) → show_result
 │   ├── Qdrant: one hybrid collection per ticker (dense + BM25 + RRF,
 │   │   `ticker_{ticker}`), filtered further by filing-type/period
