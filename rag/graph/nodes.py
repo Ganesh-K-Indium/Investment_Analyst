@@ -18,7 +18,7 @@ from rag.prompts.prompts import (get_rag_chain,
                                                           MACRO_SYNTHESIS_PROMPT,
                                                           MACRO_FEW_SHOT)
 from rag.vectordb.client import load_vector_database
-from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company, get_company_aliases
+from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company, get_company_aliases, get_extra_web_domains
 from app.utils.filing_types import (
     ANNUAL_FILING_TYPES, EVENT_FILING_TYPES, group_filing_types,
     order_filing_types, web_search_form_label,
@@ -1586,12 +1586,32 @@ def web_search(state):
         logger.info(f"✓ Optimized search: {search_query}")
     
     # UNIVERSAL SUB-QUERY WEB SEARCH
-    web_search_tool = TavilySearch(
-        max_results=5, 
-        include_raw_content=True,
-        include_domains=TRUSTED_FINANCIAL_DOMAINS
+    _wants_recent = any(kw in question_lower for kw in
+        ('news', 'recently announced', 'today', 'this week', 'announcement'))
+    # News questions also search the named company's own newsroom / trade press. Other
+    # questions keep the general list only: a company site returns years-old press
+    # releases and investor decks, which is wrong for a non-news question.
+    _search_domains = TRUSTED_FINANCIAL_DOMAINS + (
+        [d for d in get_extra_web_domains([question, *companies_detected]) if d not in TRUSTED_FINANCIAL_DOMAINS]
+        if _wants_recent else []
     )
-    
+
+    def _search(q):
+        """
+        Domain-restricted search returning parsed sources. A recent-news question is
+        tried news-first over the last month; if that finds nothing it falls back to the
+        plain search, so a quiet month never yields an empty answer.
+        """
+        if _wants_recent:
+            news_tool = TavilySearch(max_results=5, include_raw_content=True,
+                                     include_domains=_search_domains, topic="news", time_range="month")
+            found = _parse_tavily_response(news_tool.invoke({"query": q}), q)
+            if found:
+                return found
+            logger.info("   No news in the last month for this query — falling back to the general search")
+        plain_tool = TavilySearch(max_results=5, include_raw_content=True, include_domains=_search_domains)
+        return _parse_tavily_response(plain_tool.invoke({"query": q}), q)
+
     documents = []
     total_chars = 0
     
@@ -1603,9 +1623,8 @@ def web_search(state):
             logger.info(f"   {i}. Web searching for: {sq}")
             
             # Search specifically for this data point
-            docs = web_search_tool.invoke({"query": sq})
-            sources = _parse_tavily_response(docs, sq)
-            
+            sources = _search(sq)
+
             for source in sources:
                 doc_content = f"**Source: {source['title']}**\n"
                 if source['url']:
@@ -1637,11 +1656,8 @@ def web_search(state):
         else:
             logger.info(f"Using original question for web search: {search_query[:150]}")
 
-        logger.info(f" Restricting search to {len(TRUSTED_FINANCIAL_DOMAINS)} trusted financial domains")
-        docs = web_search_tool.invoke({"query": search_query})
-
-        # Parse Tavily response into source chunks
-        sources = _parse_tavily_response(docs, search_query)
+        logger.info(f" Restricting search to {len(_search_domains)} trusted domains")
+        sources = _search(search_query)
 
         for source in sources:
             doc_content = f"**Source: {source['title']}**\n"

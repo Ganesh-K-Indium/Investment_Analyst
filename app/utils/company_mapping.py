@@ -398,6 +398,28 @@ FPI_HOME_MARKETS = {
 }
 
 
+# Company-specific web sources added on top of the general trusted-domain list, which is
+# U.S.-centric and has none of these companies' own investor-relations sites or trade
+# press. Matched by alias in the question / detected company names.
+COMPANY_WEB_SOURCES = {
+    'embj': {'aliases': ['embraer', 'embj'],
+             'domains': ['embraer.com', 'ri.embraer.com.br', 'aviationweek.com', 'flightglobal.com']},
+    'sny':  {'aliases': ['sanofi', 'sny'],
+             'domains': ['sanofi.com', 'fiercepharma.com', 'endpts.com']},
+}
+
+
+def get_extra_web_domains(texts) -> list:
+    """Company-specific web domains for any known company named in `texts` (strings)."""
+    import re
+    haystack = " ".join(t for t in texts if t).lower()
+    found = []
+    for entry in COMPANY_WEB_SOURCES.values():
+        if any(re.search(rf"\b{re.escape(a)}\b", haystack) for a in entry['aliases']):
+            found += [d for d in entry['domains'] if d not in found]
+    return found
+
+
 def get_fpi_home_market(ticker: str):
     """Home-market macro sources for a foreign private issuer, or None if the ticker is not one."""
     if not is_foreign_private_issuer(ticker):
