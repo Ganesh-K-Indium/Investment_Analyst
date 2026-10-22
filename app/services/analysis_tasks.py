@@ -57,7 +57,14 @@ class AnalysisTaskService:
         task_type: str,
         portfolio_id: Optional[int] = None,
         queue: str = "interactive",
+        session_ref: Optional[str] = None,
     ) -> AnalysisTask:
+        # session_ref ties the task to its chat session from the moment it is
+        # queued, so delete_for_session can also clean up FAILED/PENDING/RUNNING
+        # tasks (they never get result_metadata.response written).
+        metadata = {"queue": queue}
+        if session_ref:
+            metadata["session_ref"] = session_ref
         task = AnalysisTask(
             id=str(uuid.uuid4()),
             user_id=user_id,
@@ -65,7 +72,7 @@ class AnalysisTaskService:
             agent_type=agent_type,
             task_type=task_type,
             status=TaskStatus.PENDING,
-            result_metadata={"queue": queue},
+            result_metadata=metadata,
         )
         db.add(task)
         await db.commit()
@@ -161,10 +168,10 @@ class AnalysisTaskService:
         a chat session is deleted so it doesn't linger in the Overview
         dashboard as a "Ready" run whose View button points at nothing.
 
-        Only COMPLETED tasks carry this id (PENDING/RUNNING/FAILED tasks
-        never got a result_metadata.response written) — those statuses also
-        don't render a View action in the dashboard, so leaving them behind
-        isn't the dangling-link problem this exists to fix.
+        COMPLETED tasks carry the id inside result_metadata.response;
+        every task (including FAILED ones, which never get a response) also
+        carries it as result_metadata.session_ref, set when it is queued, so a
+        failed run disappears from the dashboard when its chat is deleted.
 
         Publishes a "task_deleted" event per removed task (when redis_client
         is given) so an open dashboard drops it immediately instead of only
@@ -173,7 +180,12 @@ class AnalysisTaskService:
         """
         thread_id_expr = AnalysisTask.result_metadata.op("->")("response").op("->>")("thread_id")
         session_id_expr = AnalysisTask.result_metadata.op("->")("response").op("->>")("session_id")
-        condition = or_(thread_id_expr == session_id, session_id_expr == session_id)
+        session_ref_expr = AnalysisTask.result_metadata.op("->>")("session_ref")
+        condition = or_(
+            thread_id_expr == session_id,
+            session_id_expr == session_id,
+            session_ref_expr == session_id,
+        )
 
         result = await db.execute(select(AnalysisTask).where(condition))
         tasks = list(result.scalars().all())

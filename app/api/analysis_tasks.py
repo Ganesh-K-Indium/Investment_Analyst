@@ -90,6 +90,7 @@ async def _enqueue(
     task = await AnalysisTaskService.create(
         db, user_id=str(user.id), agent_type=agent_type, task_type=task_type,
         portfolio_id=portfolio_id, queue=queue,
+        session_ref=payload_dict.get("thread_id") or payload_dict.get("session_id"),
     )
     await pool.enqueue_job(
         function, task.id, payload_dict,
