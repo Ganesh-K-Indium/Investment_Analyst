@@ -1538,6 +1538,39 @@ def grade_documents(state):
     }
 
 
+def _fetch_verified_market_data(ticker: str) -> str:
+    """Live price / SMA200 / RSI14 / P/E / EBITDA from yfinance (authoritative over web snippets)."""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        close = t.history(period="2y")["Close"].dropna()
+        if len(close) < 200:
+            return ""
+        price = float(close.iloc[-1])
+        sma200 = float(close.tail(200).mean())
+        delta = close.diff()
+        gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+        rsi = float(100 - 100 / (1 + gain.iloc[-1] / loss.iloc[-1]))
+        info = t.info or {}
+        pe = info.get("trailingPE")
+        ebitda = info.get("ebitda")
+        fin_cur = info.get("financialCurrency") or info.get("currency") or "USD"
+        sym = {"USD": "$", "EUR": "€", "GBP": "£"}.get(fin_cur, fin_cur + " ")
+        lines = [
+            f"Quote date: {close.index[-1].date()} ({info.get('currency', 'USD')})",
+            f"Current stock price: ${price:.2f}" if info.get("currency", "USD") == "USD" else f"Current stock price: {price:.2f} {info.get('currency')}",
+            f"200-day SMA: {sma200:.2f}",
+            f"RSI(14): {rsi:.2f}",
+            f"Trailing P/E: {pe:.2f}" if pe else "Trailing P/E: N/A",
+            f"EBITDA (TTM, reported in {fin_cur}): {sym}{ebitda/1e9:.2f}B" if ebitda else "EBITDA: N/A",
+        ]
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"    yfinance market data unavailable for {ticker}: {e}")
+        return ""
+
+
 def web_search(state):
     """
     Direct web search when question needs current/real-time data.
@@ -3263,8 +3296,10 @@ def alpha_generate_report(state):
             ebitda_docs    = [d for d in docs if d.metadata.get('data_type') == 'ebitda']
             logger.info(f"    ACTION docs → {len(technical_docs)} technical, {len(pe_docs)} P/E, {len(ebitda_docs)} EBITDA")
 
+            verified = _fetch_verified_market_data(ticker)
             action_document = (
-                f"=== TECHNICAL INDICATORS (web-sourced: RSI-14, SMA200, current price) ===\n"
+                (f"=== VERIFIED LIVE MARKET DATA (authoritative — use these values; ignore conflicting web figures) ===\n{verified}\n\n" if verified else "")
+                + f"=== TECHNICAL INDICATORS (web-sourced: RSI-14, SMA200, current price) ===\n"
                 f"{format_docs(technical_docs)}\n\n"
                 f"=== P/E RATIO (web-sourced) ===\n"
                 f"{format_docs(pe_docs)}\n\n"

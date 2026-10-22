@@ -1080,6 +1080,8 @@ Sentence 3 — P/E: Extract and state the exact P/E ratio from the P/E documents
 Sentence 4 — EBITDA: Extract and state the exact EBITDA figure from the EBITDA documents.
   Example: "GOOGL's EBITDA is $180.7B."  If not found: "GOOGL's EBITDA is N/A."
 
+If a "VERIFIED LIVE MARKET DATA" block is present, use ITS values for price, SMA, RSI, P/E and EBITDA and ignore conflicting web figures. Keep the currency symbol shown there (e.g. €13.54B for EUR reporters).
+
 NEVER replace a number with a qualitative phrase — always state the actual value.
 """
 

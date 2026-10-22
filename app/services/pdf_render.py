@@ -21,6 +21,7 @@ from fpdf import FPDF
 from fpdf.fonts import FontFace
 
 LINE_HEIGHT = 6.0
+PARA_GAP = 1.5  # space between paragraphs, like the editor's paragraph margin
 HEADING_SIZE = {1: 20, 2: 16, 3: 13, 4: 12, 5: 11, 6: 11}
 BODY_SIZE = 11
 PX_TO_MM = 25.4 / 96
@@ -93,7 +94,10 @@ class Run:
 def _collect_runs(node, bold=False, italic=False, underline=False, strike=False, color=None, highlight=None, size=None) -> List[Run]:
     runs: List[Run] = []
     if isinstance(node, NavigableString):
-        text = str(node)
+        # HTML collapses whitespace (incl. newlines between/inside tags) to a single
+        # space; only <br> is a real line break. Without this, "\n" in the source
+        # HTML became blank lines in the PDF.
+        text = re.sub(r"\s+", " ", str(node))
         if text:
             runs.append(Run(text, bold, italic, underline, strike, color, highlight, size))
         return runs
@@ -149,8 +153,21 @@ def _flow_runs(pdf: FPDF, runs: List[Run], size: float, left: float, right: floa
     """Word-wraps styled runs across the available width. Highlight is a real
     filled rectangle behind each word via cell(fill=True) — there is no
     equivalent in fpdf2's write_html."""
+    # Mirror browser behaviour: edge whitespace collapses away, but real <br>
+    # breaks the user typed are kept. A single trailing <br> is only a
+    # placeholder in HTML (it adds no extra line), so it is dropped.
+    while runs and runs[0].text == " ":
+        runs = runs[1:]
+    while runs and runs[-1].text == " ":
+        runs = runs[:-1]
+    if runs and runs[-1].text == "\n":
+        runs = runs[:-1]
     if not runs:
         return
+    if not runs[0].text.startswith("\n"):
+        runs[0].text = runs[0].text.lstrip()
+    if not runs[-1].text.endswith("\n"):
+        runs[-1].text = runs[-1].text.rstrip()
     max_size = max((r.size or size for r in runs), default=size)
     line_height = max(LINE_HEIGHT, max_size / 2.2)
     pdf.set_x(left)
@@ -169,6 +186,8 @@ def _flow_runs(pdf: FPDF, runs: List[Run], size: float, left: float, right: floa
                 if pdf.get_x() + w > right and tok.strip():
                     pdf.ln(line_height)
                     pdf.set_x(left)
+                if not tok.strip() and pdf.get_x() <= left + 0.01:
+                    continue  # no leading spaces at the start of a line
                 if run.highlight:
                     pdf.set_fill_color(*run.highlight)
                 x_start = pdf.get_x()
@@ -204,7 +223,9 @@ def _render_table(pdf: FPDF, table_node: Tag) -> None:
         return
     pdf.ln(2)
     pdf.set_font("Helvetica", "", BODY_SIZE - 1)
-    with pdf.table(borders_layout="ALL") as pdf_table:
+    # Left-align cell text: fpdf2's default justifies, which stretches words
+    # in narrow columns ("Boeing    leads   significantly").
+    with pdf.table(borders_layout="ALL", text_align="LEFT") as pdf_table:
         for cells in rows:
             row = pdf_table.row()
             for td in cells:
@@ -243,9 +264,21 @@ def _render_image(pdf: FPDF, img: Tag, left: float, right: float) -> None:
         else:
             x = left + (max_width - w) / 2
 
+        # Place at an explicit y and advance the cursor ourselves. Calling
+        # image() without y makes fpdf2 advance the cursor by h on its own, so
+        # adding h again here double-counted it and pushed the next block to the
+        # bottom of the page / onto a new page, leaving large blank areas.
+        bottom = pdf.h - pdf.b_margin
+        avail = bottom - pdf.t_margin
+        if h and h > avail:  # taller than a page: scale down to fit
+            w, h = w * avail / h, avail
+            x = left if align == "left" else (right - w if align == "right" else left + (max_width - w) / 2)
         pdf.ln(2)
-        pdf.image(tmp_path, x=x, w=w, h=h)
-        pdf.set_y(pdf.get_y() + (h or 0) + 3)
+        if h and pdf.get_y() + h > bottom:
+            pdf.add_page()
+        y = pdf.get_y()
+        pdf.image(tmp_path, x=x, y=y, w=w, h=h)
+        pdf.set_y(y + (h or 0) + 3)
     except Exception:
         pdf.set_font("Helvetica", "I", 9)
         pdf.set_text_color(130, 130, 130)
@@ -283,10 +316,11 @@ def _render_block(pdf: FPDF, node, left: float, right: float) -> None:
 
     if name == "p":
         runs = _collect_runs(node)
-        if runs:
+        if any(r.text.strip() for r in runs):
             _flow_runs(pdf, runs, BODY_SIZE, left, right)
         else:
-            pdf.ln(LINE_HEIGHT / 2)
+            pdf.ln(LINE_HEIGHT)  # empty paragraph = one blank line, as in the editor
+        pdf.ln(PARA_GAP)
         return
 
     if name in ("ul", "ol"):
