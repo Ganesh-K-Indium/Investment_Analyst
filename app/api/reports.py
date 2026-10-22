@@ -561,7 +561,7 @@ async def export_report_pdf(
     if (report.status.value if report.status else "draft") == "draft":
         verify_owner(report.user_id, current_user)
 
-    def _safe(text: str) -> str:
+    def _safe(text: str, keep_extra: bool = False) -> str:
         """Sanitize text to latin-1 range for Helvetica; replace common Unicode."""
         replacements = {
             "\u2014": "--", "\u2013": "-", "\u2018": "'", "\u2019": "'",
@@ -570,9 +570,15 @@ async def export_report_pdf(
         }
         for ch, rep in replacements.items():
             text = text.replace(ch, rep)
+        if keep_extra:
+            # Rich-text path: € and a few symbols are drawn with a fallback font
+            # by pdf_render; everything else outside latin-1 still becomes "?".
+            from app.services.pdf_render import EXTRA_GLYPHS
+            return "".join(c if ord(c) < 256 or c in EXTRA_GLYPHS else "?" for c in text)
         return text.encode("latin-1", errors="replace").decode("latin-1")
 
     pdf = FPDF()
+    family = "Helvetica"
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
@@ -602,7 +608,7 @@ async def export_report_pdf(
         # understand rgb()/rgba() colors, and crashes on TipTap's
         # width="450px"-style <img> attributes.
         from app.services.pdf_render import render_content_html
-        render_content_html(pdf, _safe(report.content_html))
+        render_content_html(pdf, _safe(report.content_html, keep_extra=True))
     elif report.content_markdown:
         import re
 

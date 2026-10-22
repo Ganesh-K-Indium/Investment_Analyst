@@ -11,6 +11,7 @@ directly with BeautifulSoup and lays text out word-by-word via fpdf2's
 low-level `cell()`/`table()`/`image()` primitives instead.
 """
 import os
+from pathlib import Path
 import re
 import tempfile
 import urllib.request
@@ -19,6 +20,10 @@ from typing import List, Optional, Tuple
 from bs4 import BeautifulSoup, NavigableString, Tag
 from fpdf import FPDF
 from fpdf.fonts import FontFace
+
+FONTS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+UNICODE_FAMILY = "LiberationSans"  # Arial/Helvetica-metric, covers € and other non-latin-1 symbols
+_FONT_FILES = {"": "Regular", "B": "Bold", "I": "Italic", "BI": "BoldItalic"}
 
 LINE_HEIGHT = 6.0
 PARA_GAP = 1.5  # space between paragraphs, like the editor's paragraph margin
@@ -34,6 +39,41 @@ _INLINE_ITALIC = {"em", "i"}
 _INLINE_UNDERLINE = {"u"}
 _INLINE_STRIKE = {"s", "del", "strike"}
 _TRANSPARENT_WRAPPERS = {"div", "span", "body", "html", "a"}
+
+
+# Characters Helvetica (latin-1 core font) can't draw but Liberation Sans can.
+# Anything else outside latin-1 still degrades to "?".
+EXTRA_GLYPHS = "\u20ac\u2122\u2265\u2264\u2260\u2248\u221e\u2192\u2190\u2191\u2193"  # € ™ ≥ ≤ ≠ ≈ ∞ → ← ↑ ↓
+
+
+def setup_fonts(pdf: FPDF) -> None:
+    """Registers Liberation Sans (Arial/Helvetica metrics) as a glyph fallback.
+    The document itself stays on core Helvetica; only runs of EXTRA_GLYPHS use
+    this font, so layout/formatting is identical to the all-Helvetica output."""
+    if getattr(pdf, "_fallback_ready", False):
+        return
+    try:
+        for style, suffix in _FONT_FILES.items():
+            pdf.add_font(UNICODE_FAMILY, style, str(FONTS_DIR / f"LiberationSans-{suffix}.ttf"))
+        pdf._fallback_ready = True  # type: ignore[attr-defined]
+    except Exception:
+        pdf._fallback_ready = False  # type: ignore[attr-defined]
+
+
+def _is_extra(ch: str) -> bool:
+    return ch in EXTRA_GLYPHS
+
+
+def _split_chunks(text: str) -> List[Tuple[str, bool]]:
+    """Splits text into (chunk, needs_fallback_font) runs."""
+    chunks: List[Tuple[str, bool]] = []
+    for ch in text:
+        extra = _is_extra(ch)
+        if chunks and chunks[-1][1] == extra:
+            chunks[-1] = (chunks[-1][0] + ch, extra)
+        else:
+            chunks.append((ch, extra))
+    return chunks
 
 
 def _parse_color(value: str) -> Optional[Tuple[int, int, int]]:
@@ -137,7 +177,7 @@ def _collect_runs(node, bold=False, italic=False, underline=False, strike=False,
     return runs
 
 
-def _set_font(pdf: FPDF, size: float, run: Run) -> None:
+def _set_font(pdf: FPDF, size: float, run: Run, family: str = "Helvetica") -> None:
     style = ""
     if run.bold:
         style += "B"
@@ -145,7 +185,7 @@ def _set_font(pdf: FPDF, size: float, run: Run) -> None:
         style += "I"
     if run.underline:
         style += "U"
-    pdf.set_font("Helvetica", style, run.size or size)
+    pdf.set_font(family, style, run.size or size)
     pdf.set_text_color(*(run.color or (26, 26, 26)))
 
 
@@ -180,7 +220,12 @@ def _flow_runs(pdf: FPDF, runs: List[Run], size: float, left: float, right: floa
                 continue
             _set_font(pdf, size, run)
             for tok in re.findall(r"\S+\s*|\s+", seg):
-                w = pdf.get_string_width(tok)
+                chunks = _split_chunks(tok)
+                widths = []
+                for text, extra in chunks:
+                    _set_font(pdf, size, run, UNICODE_FAMILY if extra and pdf._fallback_ready else "Helvetica")
+                    widths.append(pdf.get_string_width(text))
+                w = sum(widths)
                 if w <= 0:
                     continue
                 if pdf.get_x() + w > right and tok.strip():
@@ -191,7 +236,9 @@ def _flow_runs(pdf: FPDF, runs: List[Run], size: float, left: float, right: floa
                 if run.highlight:
                     pdf.set_fill_color(*run.highlight)
                 x_start = pdf.get_x()
-                pdf.cell(w, line_height, tok, fill=bool(run.highlight))
+                for (text, extra), cw in zip(chunks, widths):
+                    _set_font(pdf, size, run, UNICODE_FAMILY if extra and pdf._fallback_ready else "Helvetica")
+                    pdf.cell(cw, line_height, text, fill=bool(run.highlight))
                 if run.strike and tok.strip():
                     y = pdf.get_y() + line_height / 2
                     pdf.set_draw_color(*(run.color or (26, 26, 26)))
@@ -200,7 +247,7 @@ def _flow_runs(pdf: FPDF, runs: List[Run], size: float, left: float, right: floa
     pdf.set_text_color(0, 0, 0)
 
 
-def _cell_style(td: Tag) -> Tuple[str, "FontFace"]:
+def _cell_style(pdf: FPDF, td: Tag) -> Tuple[str, "FontFace"]:
     runs = _collect_runs(td)
     text = "".join(r.text for r in runs).strip()
     bold = td.name == "th" or any(r.bold for r in runs)
@@ -212,7 +259,8 @@ def _cell_style(td: Tag) -> Tuple[str, "FontFace"]:
     if td.name == "th" and fill == (255, 255, 255):
         fill = (240, 240, 240)
     size_pt = next((r.size for r in runs if r.size), None)
-    style = FontFace(emphasis="B" if bold else "", color=color, fill_color=fill, size_pt=size_pt)
+    family = UNICODE_FAMILY if any(_is_extra(c) for c in text) and getattr(pdf, "_fallback_ready", False) else "Helvetica"
+    style = FontFace(family=family, emphasis="B" if bold else "", color=color, fill_color=fill, size_pt=size_pt)
     return text, style
 
 
@@ -229,7 +277,7 @@ def _render_table(pdf: FPDF, table_node: Tag) -> None:
         for cells in rows:
             row = pdf_table.row()
             for td in cells:
-                text, style = _cell_style(td)
+                text, style = _cell_style(pdf, td)
                 row.cell(text, style=style)
     pdf.ln(2)
 
@@ -292,6 +340,44 @@ def _render_image(pdf: FPDF, img: Tag, left: float, right: float) -> None:
                 pass
 
 
+def _render_list(pdf: FPDF, list_node: Tag, left: float, right: float, depth: int) -> None:
+    """Renders <ul>/<ol> items; nested lists (and <p> blocks) inside an <li> get
+    their own lines, indented one level deeper — they must not be flattened
+    into the parent item's text."""
+    ordered = list_node.name.lower() == "ol"
+    items = [c for c in list_node.children if isinstance(c, Tag) and c.name.lower() == "li"]
+    for idx, li in enumerate(items, start=1):
+        prefix = f"{idx}. " if ordered else ("* " if depth == 0 else "- ")
+        pending: List[Run] = []
+        first = True
+
+        def flush() -> None:
+            nonlocal pending, first
+            if not any(r.text.strip() for r in pending):
+                pending = []
+                return
+            runs = ([Run(prefix)] if first else []) + pending
+            _flow_runs(pdf, runs, BODY_SIZE, left if first else left + 4, right)
+            first = False
+            pending = []
+
+        for child in li.children:
+            cname = child.name.lower() if isinstance(child, Tag) else ""
+            if cname in ("ul", "ol"):
+                flush()
+                if first:  # nested list with no leading text: still emit the marker
+                    _flow_runs(pdf, [Run(prefix.strip())], BODY_SIZE, left, right)
+                    first = False
+                _render_list(pdf, child, left + 5, right, depth + 1)
+            elif cname == "p":
+                flush()
+                pending = _collect_runs(child)
+                flush()
+            else:
+                pending.extend(_collect_runs(child))
+        flush()
+
+
 def _render_children(pdf: FPDF, parent, left: float, right: float) -> None:
     for child in parent.children:
         _render_block(pdf, child, left, right)
@@ -324,10 +410,7 @@ def _render_block(pdf: FPDF, node, left: float, right: float) -> None:
         return
 
     if name in ("ul", "ol"):
-        for idx, li in enumerate((c for c in node.children if isinstance(c, Tag) and c.name == "li"), start=1):
-            prefix = f"{idx}. " if name == "ol" else "* "
-            runs = [Run(prefix)] + _collect_runs(li)
-            _flow_runs(pdf, runs, BODY_SIZE, left + 5, right)
+        _render_list(pdf, node, left + 5, right, depth=0)
         return
 
     if name == "blockquote":
@@ -364,6 +447,7 @@ def render_content_html(pdf: FPDF, html: str) -> None:
     """Entry point — walks sanitized report HTML and draws it onto `pdf`."""
     if not html:
         return
+    setup_fonts(pdf)
     soup = BeautifulSoup(html, "html.parser")
     left = pdf.l_margin
     right = left + pdf.epw

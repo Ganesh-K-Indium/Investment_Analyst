@@ -1552,9 +1552,24 @@ def _fetch_verified_market_data(ticker: str) -> str:
         gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
         loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
         rsi = float(100 - 100 / (1 + gain.iloc[-1] / loss.iloc[-1]))
-        info = t.info or {}
+        try:
+            info = t.info or {}
+        except Exception:
+            info = {}
         pe = info.get("trailingPE")
         ebitda = info.get("ebitda")
+        if not ebitda:
+            # Fallbacks: TTM from last 4 quarters, then latest annual EBITDA
+            for getter, n in (("quarterly_income_stmt", 4), ("income_stmt", 1)):
+                try:
+                    stmt = getattr(t, getter)
+                    if "EBITDA" in stmt.index:
+                        vals = stmt.loc["EBITDA"].dropna().iloc[:n]
+                        if len(vals) == n:
+                            ebitda = float(vals.sum())
+                            break
+                except Exception:
+                    continue
         fin_cur = info.get("financialCurrency") or info.get("currency") or "USD"
         sym = {"USD": "$", "EUR": "€", "GBP": "£"}.get(fin_cur, fin_cur + " ")
         lines = [
