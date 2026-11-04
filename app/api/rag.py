@@ -14,6 +14,7 @@ from app.database.connection import get_db_session
 from app.services.portfolio import PortfolioService
 from app.services.chat import ChatService
 from app.database.models import AgentType, MessageRole, User, ChatSession
+from app.services.documents.quotes import pick_quote
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.services.vectordb_manager import get_vectordb_manager
 from app.utils.company_mapping import get_ticker
@@ -71,6 +72,30 @@ async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str):
             total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - start,
         )
     return result, tracker.summary()
+
+
+def _saved_document(doc, answer: str) -> dict:
+    """Source entry kept in the saved chat message: metadata plus the one-sentence quote that supports the answer
+    (picked once, here), so the PDF highlight works after a reload without storing chunk text in chat history."""
+    meta = doc.metadata if hasattr(doc, "metadata") else {}
+    entry = {"metadata": meta}
+    if meta.get("content_type") != "image":
+        quote = pick_quote(getattr(doc, "page_content", "") or "", answer)
+        if quote:
+            entry["quote"] = quote
+    return entry
+
+
+def _response_document(doc, answer: str) -> dict:
+    """Source entry in the live response: full text (as before) plus the server-picked cited quote."""
+    entry = {
+        "content": doc.page_content if hasattr(doc, "page_content") else str(doc),
+        "metadata": doc.metadata if hasattr(doc, "metadata") else {},
+    }
+    saved = _saved_document(doc, answer)
+    if "quote" in saved:
+        entry["quote"] = saved["quote"]
+    return entry
 
 
 def _build_citation_info(result: dict) -> list:
@@ -290,12 +315,7 @@ async def ask_core(
                 "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5],
                 "citation_info": _build_citation_info(result),
                 "document_sources": result.get("document_sources", {}),
-                "documents": [
-                    {
-                        "metadata": doc.metadata if hasattr(doc, "metadata") else {}
-                    }
-                    for doc in result.get("documents", [])
-                ],
+                "documents": [_saved_document(doc, answer) for doc in result.get("documents", [])],
                 "sub_query_analysis": result.get("sub_query_analysis", {}),
                 "sub_query_results": result.get("sub_query_results", {}),
                 "intermediate_message": result.get("Intermediate_message", ""),
@@ -325,13 +345,7 @@ async def ask_core(
                 for msg in result.get("messages", [])
             ],
             "intermediate_message": result.get("Intermediate_message", ""),
-            "documents": [
-                {
-                    "content": doc.page_content if hasattr(doc, 'page_content') else str(doc),
-                    "metadata": doc.metadata if hasattr(doc, 'metadata') else {}
-                }
-                for doc in result.get("documents", [])
-            ],
+            "documents": [_response_document(doc, answer) for doc in result.get("documents", [])],
             "vectorstore_searched": result.get("vectorstore_searched", False),
             "web_searched": result.get("web_searched", False),
             "vectorstore_quality": result.get("vectorstore_quality", "none"),
@@ -545,12 +559,7 @@ Compare {comparison_str} {year_str}:
                 "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5],
                 "citation_info": _build_citation_info(result),
                 "document_sources": result.get("document_sources", {}),
-                "documents": [
-                    {
-                        "metadata": doc.metadata if hasattr(doc, "metadata") else {}
-                    }
-                    for doc in result.get("documents", [])
-                ],
+                "documents": [_saved_document(doc, answer) for doc in result.get("documents", [])],
                 "sub_query_analysis": result.get("sub_query_analysis", {}),
                 "sub_query_results": result.get("sub_query_results", {}),
                 "intermediate_message": result.get("Intermediate_message", ""),
@@ -579,13 +588,7 @@ Compare {comparison_str} {year_str}:
                 for msg in result.get("messages", [])
             ],
             "intermediate_message": result.get("Intermediate_message", ""),
-            "documents": [
-                {
-                    "content": doc.page_content if hasattr(doc, 'page_content') else str(doc),
-                    "metadata": doc.metadata if hasattr(doc, 'metadata') else {}
-                }
-                for doc in result.get("documents", [])
-            ],
+            "documents": [_response_document(doc, answer) for doc in result.get("documents", [])],
             "vectorstore_searched": result.get("vectorstore_searched", False),
             "web_searched": result.get("web_searched", False),
             "vectorstore_quality": result.get("vectorstore_quality", "none"),
