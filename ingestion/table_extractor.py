@@ -26,6 +26,8 @@ classification.
 """
 
 import logging
+import re
+from statistics import median
 
 import fitz
 
@@ -130,23 +132,323 @@ def reconstruct_table_with_ruling_lines(page, table_obj, v_lines: list, page_num
     return {"page": page_num, "headers": grid[0], "rows": grid[1:]}
 
 
-def extract_page_tables(page, page_num: int) -> list:
-    """Extract structured tables from a page.
 
-    Returns a list of {"page": int, "headers": list[str], "rows": list[list[str]]}.
-    Empty list if the page has no detectable tables.
+# ---------------------------------------------------------------------------
+# Word-position reconstruction (financial statements)
+#
+# find_tables() + ruling lines drop the row-label column and split multi-row
+# headers whenever a statement is drawn with shaded bands instead of full grid
+# lines (e.g. Alphabet's 10-Q). Financial tables are right-aligned numeric
+# columns, so the columns are recovered directly from the numbers' right edges.
+# ---------------------------------------------------------------------------
+
+_NUM_CLEAN = re.compile(r"[\s$%,()\u00a0]")
+_YEAR = re.compile(r"^(19|20)\d\d$")
+_DASHES = {"—", "–", "-", "— ", "−"}
+COL_CLUSTER_TOL = 12.0   # pt: max right-edge spread inside one column (")" vs digit, etc.)
+HEADER_REACH = 150.0     # pt: how far above find_tables' bbox to look for column headers
+
+
+def _is_num(text: str) -> bool:
+    t = text.strip()
+    if t in _DASHES:
+        return True
+    t = _NUM_CLEAN.sub("", t).lstrip("-−")
+    return bool(t) and bool(re.fullmatch(r"\d+(\.\d+)?", t))
+
+
+def _split_words(page, y0: float, y1: float) -> list:
+    """Words (x0, y0, x1, y1, text) in the vertical band, with NBSP-joined tokens split."""
+    out = []
+    for w in page.get_text("words"):
+        if w[3] < y0 or w[1] > y1:
+            continue
+        parts = [p for p in w[4].split("\u00a0") if p.strip()]
+        if len(parts) <= 1:
+            out.append((w[0], w[1], w[2], w[3], w[4].strip()))
+            continue
+        width = (w[2] - w[0]) / max(1, len("".join(parts)))
+        x = w[0]
+        for part in parts:
+            out.append((x, w[1], x + width * len(part), w[3], part))
+            x += width * len(part)
+    return out
+
+
+def _group_lines(words: list) -> list:
+    """Cluster words into visual lines by vertical centre; each line sorted left to right."""
+    lines = []
+    for w in sorted(words, key=lambda w: (w[1] + w[3]) / 2):
+        cy, h = (w[1] + w[3]) / 2, w[3] - w[1]
+        for ln in lines:
+            if abs(ln["cy"] - cy) <= 0.55 * max(h, ln["h"]):
+                ln["words"].append(w)
+                ln["cy"] = sum((x[1] + x[3]) / 2 for x in ln["words"]) / len(ln["words"])
+                ln["h"] = max(ln["h"], h)
+                break
+        else:
+            lines.append({"cy": cy, "h": h, "words": [w]})
+    for ln in lines:
+        ln["words"].sort(key=lambda w: w[0])
+    return sorted(lines, key=lambda ln: ln["cy"])
+
+
+def _cluster_right_edges(tokens: list) -> list:
+    """tokens: [(x0, x1)] -> columns [{"x0", "x1", "n"}] clustered by right edge."""
+    cols = []
+    for x0, x1 in sorted(tokens, key=lambda t: t[1]):
+        if cols and x1 - cols[-1]["x1_max"] <= COL_CLUSTER_TOL:
+            c = cols[-1]
+            c["x0"], c["x1_max"], c["n"] = min(c["x0"], x0), x1, c["n"] + 1
+            c["sum"] += x1
+        else:
+            cols.append({"x0": x0, "x1_max": x1, "n": 1, "sum": x1})
+    for c in cols:
+        c["x1"] = c["sum"] / c["n"]
+    return cols
+
+
+def _join(words: list) -> str:
+    return " ".join(w[4] for w in words).strip()
+
+
+TITLE_REACH = 45.0           # pt above the column captions that may hold the statement title
+ROW_EXTENSION_REACH = 40.0   # pt below find_tables' bottom edge that may hold an aligned totals row
+CAPTION_MAX_PHRASE_WORDS = 10
+
+
+def _is_caption_line(words: list) -> bool:
+    """Column captions: phrases separated by wide gaps, each short. A paragraph line is one long unbroken phrase."""
+    phrase, longest = 0, 0
+    for k, w in enumerate(words):
+        phrase = 1 if k == 0 or w[0] - words[k - 1][2] > 14 else phrase + 1
+        longest = max(longest, phrase)
+    return bool(words) and longest <= CAPTION_MAX_PHRASE_WORDS
+
+
+def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
+    """Rebuild a numeric (financial) table from word positions.
+
+    Returns ({"page", "headers", "rows"}, (x0, y0, x1, y1)) or None when the region doesn't look like a
+    right-aligned numeric table (caller then falls back to the ruling-line / find_tables extraction).
     """
-    tables = []
+    top = max(prev_bottom, bbox[1] - HEADER_REACH)
+    words = _split_words(page, top, bbox[3] + ROW_EXTENSION_REACH)  # a little below: totals rows can sit under the detected edge
+    if not words:
+        return None
+    lines = _group_lines(words)
+
+    # Data rows = lines inside find_tables' vertical extent that carry numbers (not a bare years line).
+    def nums(ln):
+        return [w for w in ln["words"] if _is_num(w[4])]
+
+    in_body = [ln for ln in lines if bbox[1] - 2 <= ln["cy"] <= bbox[3] + 2]
+    data = [ln for ln in in_body if nums(ln) and not all(_YEAR.match(w[4]) for w in nums(ln))]
+    if len(data) < 2:
+        return None
+
+    tokens = [(w[0], w[2]) for ln in data for w in nums(ln) if w[4] not in _DASHES]
+    if len(tokens) < 4:
+        return None
+    clusters = _cluster_right_edges(tokens)
+    # Real columns carry a value on most rows; numbers quoted inside row labels ("of $190, $(36)") don't.
+    min_support = max(2 if len(data) > 2 else 1, -(-len(data) * 35 // 100))
+    cols = [c for c in clusters if c["n"] >= min_support]
+    if not cols:
+        return None
+    cols.sort(key=lambda c: c["x1"])
+
+    # Everything left of the first numeric column is the row label. A standalone "$" / "%" sitting just left
+    # of a value belongs to that value.
+    first = cols[0]
+    edge = first["x0"] - 2
+
+    # The detector's bottom edge can stop just above a totals row (its numbers sit on the underline). Keep taking
+    # the following lines while they hold numbers whose right edges line up with the known columns.
+    below = [ln for ln in lines if ln["cy"] > bbox[3] + 2]
+    last = in_body[-1] if in_body else None
+    for ln in below:
+        vals = [w for w in nums(ln) if w[4] not in _DASHES and w[0] >= edge]  # label numbers ("June 30, 2026") don't count
+        aligned = bool(vals) and all(any(abs(c["x1"] - w[2]) <= 1.5 * COL_CLUSTER_TOL for c in cols) for w in vals)
+        close = last is not None and ln["cy"] - last["cy"] <= 3.0 * max(ln["h"], last["h"])
+        if not (aligned and close):
+            break
+        in_body.append(ln)
+        last = ln
+
+    def col_index(w):
+        return min(range(len(cols)), key=lambda i: abs(cols[i]["x1"] - w[2]))
+
+    def row_cells(ln):
+        cells = [[] for _ in cols]
+        label = []
+        words_ = ln["words"]
+        for k, w in enumerate(words_):
+            nxt = words_[k + 1] if k + 1 < len(words_) else None
+            sign_of_value = w[4] == "$" and nxt is not None and nxt[0] >= edge and _is_num(nxt[4])
+            if w[0] < edge and not sign_of_value:
+                label.append(w)
+            elif w[4] == "$":
+                continue
+            else:
+                prev = words_[k - 1] if k else None
+                txt = ("$" + w[4]) if prev is not None and prev[4] == "$" and _is_num(w[4]) else w[4]
+                cells[col_index(w)].append((w[0], txt))
+        return label, [" ".join(t for _, t in sorted(c)) for c in cells]
+
+    # Header block: contiguous lines above the first data row that live entirely in the numeric area.
+    first_data_cy = data[0]["cy"]
+    above = [ln for ln in lines if ln["cy"] < first_data_cy - 1 and ln["cy"] >= top]
+    header_lines = []
+    centers = [(c["x0"] + c["x1"]) / 2 for c in cols]
+    pitch = median([b - a for a, b in zip(centers, centers[1:])]) if len(cols) > 1 else 0.0
+    caption_left = edge - max(25.0, 1.2 * pitch)  # wide group captions start left of the first numeric column
+    for ln in reversed(above):
+        short = _is_caption_line(ln["words"])
+        if short and all(w[0] >= caption_left for w in ln["words"]):
+            header_lines.insert(0, ln)
+        else:
+            break
+    col_headers = [[] for _ in cols]
+    spanning = []
+    for ln in header_lines:
+        phrases, cur = [], []
+        for w in ln["words"]:
+            if cur and w[0] - cur[-1][2] > 14:
+                phrases.append(cur); cur = []
+            cur.append(w)
+        if cur:
+            phrases.append(cur)
+        if len(phrases) == 1 and len(cols) >= 3:  # one caption over a wide table ("Three Months Ended ...") titles the table
+            spanning.append(_join(phrases[0]))
+            continue
+        for ph in phrases:
+            px0, px1, text = ph[0][0], ph[-1][2], _join(ph)
+            hit = [i for i, c in enumerate(cols) if px0 - 8 <= (c["x0"] + c["x1"]) / 2 <= px1 + 8]
+            if not hit:
+                hit = [min(range(len(cols)), key=lambda i: abs((cols[i]["x0"] + cols[i]["x1"]) / 2 - (px0 + px1) / 2))]
+            for i in hit:
+                col_headers[i].append(text)
+
+    # Body rows. A label-only line that doesn't end in ":" is the start of the next row's wrapped label.
+    rows, carry = [], []
+    for ln in in_body:
+        label_words, cells = row_cells(ln)
+        label = _join(label_words)
+        has_values = any(cells)
+        if not has_values:
+            if label.endswith(":") or not label:
+                rows.append([" ".join(carry + [label]).strip()] + [""] * len(cols) if label else None)
+                carry = []
+            else:
+                carry.append(label)
+            continue
+        rows.append([" ".join(carry + [label]).strip()] + cells)
+        carry = []
+    rows = [r for r in rows if r]
+    if carry:
+        rows.append([" ".join(carry)] + [""] * len(cols))
+
+    # Statement caption: the lines just above the column captions ("CONSOLIDATED STATEMENTS OF ...", "(in millions)").
+    header_top = min((ln["cy"] for ln in header_lines), default=first_data_cy)
+    title_lines = [ln for ln in above if ln not in header_lines and header_top - ln["cy"] <= TITLE_REACH
+                   and _is_caption_line(ln["words"])][-3:]  # captions only: never a paragraph above the table
+    title_parts = [_join(ln["words"]) for ln in title_lines] + spanning
+    title = re.sub(r"(?i)table of contents", "", " ".join(t for t in title_parts if not t.isdigit()))
+    title = " ".join(title.split())[:200]
+
+    headers = ["Line item"] + [" ".join(h) if h else f"Col {i + 1}" for i, h in enumerate(col_headers)]
+    all_words = [w for ln in header_lines + in_body for w in ln["words"]]
+    table_bbox = (min(w[0] for w in all_words), min(w[1] for w in all_words),
+                  max(w[2] for w in all_words), max(w[3] for w in all_words))
+    return {"page": page_num, "headers": headers, "rows": rows, "title": title}, table_bbox
+
+
+
+_DIGITS = re.compile(r"\d[\d,.]*")
+
+
+def _numbers(text: str):
+    from collections import Counter
+    return Counter(n.strip(".,") for n in _DIGITS.findall(text or ""))
+
+
+def _loses_numbers(page, table: dict, box) -> bool:
+    """True if any number printed inside `box` is missing from the rebuilt table (never silently drop data)."""
+    x0, y0, x1, y1 = box
+    raw = " ".join(w[4] for w in page.get_text("words")
+                   if w[0] >= x0 - 1 and w[2] <= x1 + 1 and w[1] >= y0 - 1 and w[3] <= y1 + 1)
+    cells = [h for h in table["headers"] if not re.fullmatch(r"(Col \d+|Line item)", h)]
+    cells += [c for row in table["rows"] for c in row] + [table.get("title") or ""]
+    missing = _numbers(raw) - _numbers(" ".join(cells))
+    return bool(missing)
+
+
+PROSE_MIN_WORDS = 8
+PROSE_MIN_STOPWORDS = 2
+PROSE_MAX_NUMERIC_SHARE = 0.3
+NUMBER_RICH = 12
+_STOPWORDS = {"the", "of", "and", "to", "in", "our", "were", "we", "that", "for", "as", "is", "are", "by", "its",
+              "an", "be", "on", "with", "from", "this", "which", "or", "has", "have", "was", "at"}
+_PUNCT_ONLY = re.compile(r"[\s$()%,.\-—–]*")
+_NUMBER_CELL = re.compile(r"[($\s-]*\d[\d,.]*\s*[)%]*\s*(bn|m)?")
+
+
+def _is_prose_cell(cell: str) -> bool:
+    words = cell.lower().split()
+    return len(words) >= PROSE_MIN_WORDS and sum(1 for w in words if w.strip(".,;:()") in _STOPWORDS) >= PROSE_MIN_STOPWORDS
+
+
+def _is_data_table(table: dict) -> bool:
+    """False only for regions that are clearly body text: a lone non-empty cell (a section caption such as
+    "Revenue:"), or sentence-like cells in a region with few numeric cells. The detector reports paragraphs, footnotes
+    and captions as tables; real tables, including text-only ones (names, dates, terms), have short cells and are kept.
+    Dropping a region never loses data: the page text chunk still contains every word and number."""
+    cells = [c.strip().replace("\u00a0", " ") for c in table["headers"] + [c for r in table["rows"] for c in r]]
+    cells = [c for c in cells if not _PUNCT_ONLY.fullmatch(c)]
+    if len(cells) <= 1:
+        return False
+    if sum(_numbers(" ".join(cells)).values()) >= NUMBER_RICH:
+        return True  # a number-rich region is data even when its cells hold long text (exhibit / patent tables)
+    numeric = sum(1 for c in cells if _NUMBER_CELL.fullmatch(c))
+    if numeric / len(cells) < PROSE_MAX_NUMERIC_SHARE and any(_is_prose_cell(c) for c in cells):
+        return False
+    return True
+
+
+def extract_page_tables_with_bbox(page, page_num: int) -> list:
+    """Extract structured tables from a page as [(table, bbox_or_None), ...].
+
+    table = {"page": int, "headers": list[str], "rows": list[list[str]]}; bbox is in PDF points.
+    Numeric (financial) tables are rebuilt from word positions; anything else falls back to the
+    ruling-line reconstruction, then to find_tables()'s own cells.
+    """
+    out = []
     try:
         tab_finder = page.find_tables()
         if not tab_finder.tables:
-            return tables
+            return out
 
         v_lines = get_vertical_lines(page)
+        prev_bottom = 0.0
 
-        for t in tab_finder.tables:
+        for t in sorted(tab_finder.tables, key=lambda t: t.bbox[1]):
+            built = None
+            try:
+                built = reconstruct_table_by_words(page, t.bbox, prev_bottom, page_num)
+            except Exception as e:
+                logger.warning("Word-position table rebuild failed on page %s: %s", page_num, e)
+            if built and _loses_numbers(page, *built):
+                logger.warning("Word-position rebuild dropped numbers on page %s; using ruling-line extraction", page_num)
+                built = None
+            if built:
+                table, box = built
+                prev_bottom = max(prev_bottom, box[3])
+                if _is_data_table(table):
+                    out.append((table, tuple(round(v, 2) for v in box)))
+                continue
+
             table = reconstruct_table_with_ruling_lines(page, t, v_lines, page_num)
-
             if table is None:
                 cells = t.extract()
                 if not cells:
@@ -160,23 +462,40 @@ def extract_page_tables(page, page_num: int) -> list:
             if table is not None:
                 all_text = table["headers"] + [c for row in table["rows"] for c in row]
                 if any(all_text):
-                    tables.append(table)
+                    prev_bottom = max(prev_bottom, t.bbox[3])
+                    if _is_data_table(table):
+                        out.append((table, tuple(round(float(v), 2) for v in t.bbox)))
 
     except Exception as e:
         logger.warning("Table extraction failed on page %s: %s", page_num, e)
-    return tables
+    return out
+
+
+def extract_page_tables(page, page_num: int) -> list:
+    """Extract structured tables from a page.
+
+    Returns a list of {"page": int, "headers": list[str], "rows": list[list[str]]}.
+    Empty list if the page has no detectable tables.
+    """
+    return [t for t, _ in extract_page_tables_with_bbox(page, page_num)]
 
 
 def table_to_markdown(table: dict) -> str:
     """Convert a {"headers", "rows"} table dict to a GitHub-flavoured Markdown table."""
     if not table["headers"]:
         return ""
-    lines = ["| " + " | ".join(table["headers"] or ["Col1"]) + " |"]
+    lines = [f"Table: {table['title']}"] if table.get("title") else []
+    lines.append("| " + " | ".join(table["headers"] or ["Col1"]) + " |")
     lines.append("| " + " | ".join("---" for _ in table["headers"]) + " |")
     for row in table["rows"]:
         padded = list(row) + [""] * max(0, len(table["headers"]) - len(row))
         lines.append("| " + " | ".join(padded[: len(table["headers"])]) + " |")
     return "\n".join(lines)
+
+
+def extract_table_markdowns_for_page(page, page_num: int) -> list:
+    """One markdown string per table on the page (so the chunker can keep each table whole)."""
+    return [md for md in (table_to_markdown(t) for t in extract_page_tables(page, page_num)) if md]
 
 
 def extract_tables_markdown_for_page(page, page_num: int) -> str:

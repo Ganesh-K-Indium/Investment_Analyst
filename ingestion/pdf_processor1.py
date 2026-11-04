@@ -19,6 +19,7 @@ from langchain_openai import OpenAIEmbeddings
 from rag.vectordb.client import load_vector_database
 from image_data_prep import ImageDescription
 from table_extractor import extract_tables_markdown_for_page
+from chunking import chunk_page_documents, make_text_splitter
 from dotenv import load_dotenv
 
 # Import company mapping utility
@@ -819,11 +820,9 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
             if documents:
                 yield f"Extracted {len(documents)} text segments from PDF."
                 _banner("TEXT 2/3", "Splitting extracted text into chunks...")
-                text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-                    chunk_size=1024, chunk_overlap=300
-                )
+                text_splitter = make_text_splitter()
                 # tiktoken encoding of the full document is CPU-bound — offload.
-                text_chunks = await asyncio.to_thread(text_splitter.split_documents, documents)
+                text_chunks = await asyncio.to_thread(chunk_page_documents, documents, text_splitter)
                 logger.info("Created %d text chunks", len(text_chunks))
 
                 # Generate deterministic UUIDs using the common function

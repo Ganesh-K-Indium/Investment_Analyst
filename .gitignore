@@ -118,3 +118,10 @@ terraform.tfvars
 .vscode-server/
 node_modules/
 
+
+# Generated / noise files (tracked files are unaffected)
+*.json
+*.md
+*.ttf
+# Fonts used by app/services/pdf_render.py must stay visible
+!app/assets/fonts/*.ttf

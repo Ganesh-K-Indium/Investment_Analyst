@@ -296,3 +296,28 @@ class AnalysisTask(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     portfolio = relationship("Portfolio", back_populates="analysis_tasks")
+
+
+class Document(Base):
+    """Registry of documents ingested into Qdrant (a synced cache; Qdrant is the source of truth)"""
+    __tablename__ = "documents"
+
+    doc_id = Column(String, primary_key=True)  # metadata.content_hash
+    ticker = Column(String, nullable=True, index=True)
+    company = Column(String, nullable=True, index=True)
+    form_type = Column(String, nullable=True, index=True)  # metadata.filing_type, e.g. '10-K'
+    fiscal_year = Column(Integer, nullable=True, index=True)
+    fiscal_quarter = Column(Integer, nullable=True)
+    period_end_date = Column(String, nullable=True)
+    filing_date = Column(Date, nullable=True)  # parsed from filename
+    accession = Column(String, nullable=True)  # parsed from filename
+    source_file = Column(String, nullable=False)  # as stored in Qdrant
+    collection = Column(String, nullable=False)  # Qdrant collection it was found in
+    page_count = Column(Integer, nullable=False, default=0)
+    text_pages = Column(Integer, nullable=False, default=0)
+    image_chunks = Column(Integer, nullable=False, default=0)
+    pdf_status = Column(String, nullable=False, default="missing")  # local | missing | downloading | failed | unsupported
+    page_fingerprints = Column(JSON, nullable=True)  # per-page hash for the re-download alignment check
+    ingested_at = Column(DateTime, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    removed = Column(Boolean, nullable=False, default=False, index=True)  # gone from Qdrant; hidden from lists
