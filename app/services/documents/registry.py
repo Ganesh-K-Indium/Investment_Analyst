@@ -245,39 +245,25 @@ async def sync_registry(db: AsyncSession, client=None, force: bool = True) -> Di
         return {"documents": len(seen), "added": added, "removed": removed}
 
 
-_refresh_task: Optional["asyncio.Task"] = None
 FAILURE_BACKOFF_SECONDS = 60
 
 
 def _mark_failed() -> None:
-    """Retry a failed sync after FAILURE_BACKOFF_SECONDS instead of on every request."""
+    """Retry a failed first sync after FAILURE_BACKOFF_SECONDS instead of on every request."""
     global _last_sync
     _last_sync = time.monotonic() - SYNC_TTL_SECONDS + FAILURE_BACKOFF_SECONDS
 
 
-async def _background_refresh() -> None:
-    from app.database.connection import SessionLocal
-    try:
-        async with SessionLocal() as db:
-            await sync_registry(db, force=False)
-    except Exception as e:
-        logger.error(f"Background documents sync failed: {e}")
-        _mark_failed()
-
-
 async def ensure_synced(db: AsyncSession) -> None:
-    """Keep the cache fresh without blocking requests.
+    """Sync only when there is nothing to show yet (first ever load).
 
-    Empty registry: sync inline (nothing to show otherwise). Stale registry: serve the cached rows now and
-    refresh in one background task. Failures back off so a broken Qdrant doesn't retrigger a scan per request.
+    After that the registry changes only when the user presses Refresh (POST /documents/sync): opening or
+    paging through documents never triggers a scan of Qdrant.
     """
-    global _refresh_task
     if _is_fresh():
         return
     has_rows = (await db.execute(select(func.count()).select_from(Document))).scalar_one() > 0
     if has_rows:
-        if _refresh_task is None or _refresh_task.done():
-            _refresh_task = asyncio.create_task(_background_refresh())
         return
     try:
         await sync_registry(db, force=False)

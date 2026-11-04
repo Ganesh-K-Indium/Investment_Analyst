@@ -87,17 +87,18 @@ async def process_collection(ticker: str, apply: bool, force: bool = False) -> d
                 if not force and all((p.payload.get('metadata') or {}).get('chunk_kind') for p in pts):
                     continue  # already upgraded (--force redoes these with the current extractor)
                 has_tables = any(split_page_content(p.payload.get("page_content") or "")[1] for p in pts)
-                if not has_tables:
-                    continue
-                stats["pages_with_tables"] += 1
                 page = pdf[page_num - 1]
                 text = page.get_text("text")
                 # Same fingerprint the Inspector uses: the PDF page must start where some indexed text chunk starts.
                 old_starts = [_norm(split_page_content(p.payload.get("page_content") or "")[0])[:150] for p in pts]
                 if _norm(text)[:150] not in [o for o in old_starts if o]:
-                    stats["skipped_text"] += 1  # PDF is not the ingested copy for this page
+                    if has_tables:
+                        stats["skipped_text"] += 1  # PDF is not the ingested copy for this page
                     continue
                 tables_md = extract_tables_markdown_for_page(page, page_num)
+                if not has_tables and not tables_md:
+                    continue  # no table before, none now: nothing to change on this page
+                stats["pages_with_tables"] += 1
                 meta = dict((pts[0].payload.get("metadata") or {}))
                 for k in ("chunk_kind", "chunk_index"):
                     meta.pop(k, None)

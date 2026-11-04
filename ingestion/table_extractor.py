@@ -144,7 +144,7 @@ def reconstruct_table_with_ruling_lines(page, table_obj, v_lines: list, page_num
 
 _NUM_CLEAN = re.compile(r"[\s$%,()\u00a0]")
 _YEAR = re.compile(r"^(19|20)\d\d$")
-_DASHES = {"—", "–", "-", "— ", "−"}
+_DASHES = {"—", "–", "-", "— ", "−", "$—", "$–", "$-"}
 COL_CLUSTER_TOL = 12.0   # pt: max right-edge spread inside one column (")" vs digit, etc.)
 HEADER_REACH = 150.0     # pt: how far above find_tables' bbox to look for column headers
 
@@ -212,9 +212,16 @@ def _join(words: list) -> str:
     return " ".join(w[4] for w in words).strip()
 
 
+_UNITS_NOTE = re.compile(r"(?i)\(.*\b(in|except)\b.*(millions|thousands|billions|per share).*\)")
 TITLE_REACH = 45.0           # pt above the column captions that may hold the statement title
 ROW_EXTENSION_REACH = 40.0   # pt below find_tables' bottom edge that may hold an aligned totals row
 CAPTION_MAX_PHRASE_WORDS = 10
+
+
+def _starts_like_caption(words: list) -> bool:
+    """A caption starts with a capital, digit or bracket; "were as follows:" is the tail of the sentence above."""
+    text = _join(words)
+    return bool(text) and (text[0].isupper() or text[0].isdigit() or text[0] in "($") and not text.endswith(":")
 
 
 def _is_caption_line(words: list) -> bool:
@@ -247,7 +254,7 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
     if len(data) < 2:
         return None
 
-    tokens = [(w[0], w[2]) for ln in data for w in nums(ln) if w[4] not in _DASHES]
+    tokens = [(w[0], w[2]) for ln in data for w in nums(ln)]  # dashes ("—") are values too: a Level 1 column may hold only dashes
     if len(tokens) < 4:
         return None
     clusters = _cluster_right_edges(tokens)
@@ -303,10 +310,20 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
     centers = [(c["x0"] + c["x1"]) / 2 for c in cols]
     pitch = median([b - a for a, b in zip(centers, centers[1:])]) if len(cols) > 1 else 0.0
     caption_left = edge - max(25.0, 1.2 * pitch)  # wide group captions start left of the first numeric column
+    unit_parts, header_src = [], []
     for ln in reversed(above):
-        short = _is_caption_line(ln["words"])
-        if short and all(w[0] >= caption_left for w in ln["words"]):
+        left = [w for w in ln["words"] if w[0] < caption_left]
+        right = [w for w in ln["words"] if w[0] >= caption_left]
+        short = _is_caption_line(right)
+        if short and not left:
             header_lines.insert(0, ln)
+            header_src.append(ln)
+        elif short and right and 0 < len(left) <= 6 and not any(_is_num(w[4]) for w in left):
+            unit_parts.insert(0, _join(left))  # a units label such as "(Dollars in Millions)" sharing the captions' line
+            header_lines.insert(0, {**ln, "words": right})
+            header_src.append(ln)
+        elif not header_lines and ln in in_body and all(w[2] < caption_left + 1 or w[0] < edge for w in ln["words"]):
+            continue  # a section label above the first row ("Assets", "Current assets:"): the captions are further up
         else:
             break
     col_headers = [[] for _ in cols]
@@ -336,6 +353,9 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
         label_words, cells = row_cells(ln)
         label = _join(label_words)
         has_values = any(cells)
+        if not has_values and _UNITS_NOTE.fullmatch(label):
+            unit_parts.append(label)  # "(Dollars in Millions)" describes the table; it is not a row label
+            continue
         if not has_values:
             if label.endswith(":") or not label:
                 rows.append([" ".join(carry + [label]).strip()] + [""] * len(cols) if label else None)
@@ -351,9 +371,9 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
 
     # Statement caption: the lines just above the column captions ("CONSOLIDATED STATEMENTS OF ...", "(in millions)").
     header_top = min((ln["cy"] for ln in header_lines), default=first_data_cy)
-    title_lines = [ln for ln in above if ln not in header_lines and header_top - ln["cy"] <= TITLE_REACH
-                   and _is_caption_line(ln["words"])][-3:]  # captions only: never a paragraph above the table
-    title_parts = [_join(ln["words"]) for ln in title_lines] + spanning
+    title_lines = [ln for ln in above if ln not in header_src and ln not in in_body and header_top - ln["cy"] <= TITLE_REACH
+                   and _is_caption_line(ln["words"]) and _starts_like_caption(ln["words"])][-3:]  # captions only, never prose
+    title_parts = [_join(ln["words"]) for ln in title_lines] + unit_parts + spanning
     title = re.sub(r"(?i)table of contents", "", " ".join(t for t in title_parts if not t.isdigit()))
     title = " ".join(title.split())[:200]
 
@@ -416,58 +436,212 @@ def _is_data_table(table: dict) -> bool:
     return True
 
 
+
+# ---------------------------------------------------------------------------
+# Borderless tables: runs of lines with right-aligned numbers that find_tables() never reports
+# ---------------------------------------------------------------------------
+
+BORDERLESS_MIN_ROWS = 3
+BORDERLESS_LINE_GAP = 3.2     # x line height: max vertical gap between lines of one block
+BORDERLESS_LABEL_WORDS = 14   # a row label is at most this many words before the first value
+BORDERLESS_ALIGNED_SHARE = 0.6
+
+
+def _value_tokens(ln: dict) -> list:
+    return [w for w in ln["words"] if _is_num(w[4])]
+
+
+def _is_data_line(ln: dict) -> bool:
+    """>= 2 numeric/dash values, a short label before them, and not just a line of years (a column caption)."""
+    vals = _value_tokens(ln)
+    if len(vals) < 2 or all(_YEAR.match(w[4]) for w in vals):
+        return False
+    first, last = vals[0], vals[-1]
+    label_words = [w for w in ln["words"] if w[2] <= first[0] + 1]
+    between = [w for w in ln["words"] if first[2] - 1 <= w[0] and w[2] <= last[2] + 1 and not _is_num(w[4]) and w[4] != "$"]
+    if any(re.search(r"[A-Za-z]", w[4]) for w in between):  # "Level 1  Level 2  Level 3": column captions, not values
+        return False
+    return len(label_words) <= BORDERLESS_LABEL_WORDS
+
+
+def _is_label_only(ln: dict) -> bool:
+    return not _value_tokens(ln) and len(ln["words"]) <= 12
+
+
+def find_borderless_blocks(page, covered: list) -> list:
+    """Bounding boxes of table-like blocks outside `covered` [(y0, y1), ...] (regions already extracted)."""
+    words = _split_words(page, 0, page.rect.height)
+    lines = _group_lines(words)
+    blocks, cur = [], None
+
+    def overlaps(ln):
+        return any(y0 - 2 <= ln["cy"] <= y1 + 2 for y0, y1 in covered)
+
+    def close():
+        nonlocal cur
+        if cur and cur["data"] >= BORDERLESS_MIN_ROWS:
+            # section labels directly above the first value row ("Derivatives designated ...:", "Assets:") are rows too
+            k, first = cur["start"], cur["lines"][0]
+            while k > 0:
+                prev = lines[k - 1]
+                if (_is_label_only(prev) and len(prev["words"]) <= 10 and not overlaps(prev)
+                        and first["cy"] - prev["cy"] <= BORDERLESS_LINE_GAP * max(first["h"], prev["h"])):
+                    cur["lines"].insert(0, prev)
+                    first = prev
+                    k -= 1
+                else:
+                    break
+            ws = [w for ln in cur["lines"] for w in ln["words"]]
+            blocks.append((min(w[0] for w in ws), min(w[1] for w in ws), max(w[2] for w in ws), max(w[3] for w in ws), cur["lines"]))
+        cur = None
+
+    for i, ln in enumerate(lines):
+        if overlaps(ln):
+            close()
+            continue
+        gap_ok = cur is not None and ln["cy"] - cur["last"]["cy"] <= BORDERLESS_LINE_GAP * max(ln["h"], cur["last"]["h"])
+        if _is_data_line(ln):
+            if cur is not None and not gap_ok:
+                close()
+            if cur is None:
+                cur = {"lines": [], "data": 0, "last": ln, "start": i}
+            cur["lines"].append(ln)
+            cur["data"] += 1
+            cur["last"] = ln
+        elif cur is not None and gap_ok and _is_label_only(ln) and any(
+                _is_data_line(n) and n["cy"] - ln["cy"] <= BORDERLESS_LINE_GAP * ln["h"] for n in lines[i + 1:i + 3]):
+            cur["lines"].append(ln)  # a section label or the first half of a wrapped label
+            cur["last"] = ln
+        else:
+            close()
+    close()
+
+    out = []
+    for x0, y0, x1, y1, blines in blocks:
+        data = [ln for ln in blines if _is_data_line(ln)]
+        edges = _cluster_right_edges([(w[0], w[2]) for ln in data for w in _value_tokens(ln)])
+        strong = [c for c in edges if c["n"] >= max(2, BORDERLESS_ALIGNED_SHARE * len(data))]
+        if len(strong) >= 2:  # real columns: values on most rows share right edges
+            out.append((x0, y0, x1, y1))
+    return out
+
+
+MERGE_GAP_FRAGMENTS = 42.0  # pt: row-sized fragments (height <= FRAGMENT_HEIGHT) merge across a blank row
+FRAGMENT_HEIGHT = 20.0
+MERGE_GAP = 26.0         # pt: detector regions closer than this vertically are parts of one table
+MERGE_X_OVERLAP = 0.6    # share of the narrower region's width that must overlap horizontally
+
+
+def _group_regions(tables: list) -> list:
+    """Group find_tables() regions that are stacked closely and line up horizontally.
+
+    The detector often reports every row (or every section) of one financial statement as its own tiny table;
+    those are one logical table. Groups are returned top to bottom as lists of Table objects."""
+    groups = []
+    for t in sorted(tables, key=lambda t: t.bbox[1]):
+        x0, y0, x1, y1 = t.bbox
+        if groups:
+            g = groups[-1]
+            gx0, gy0, gx1, gy1 = (min(m.bbox[0] for m in g), min(m.bbox[1] for m in g),
+                                  max(m.bbox[2] for m in g), max(m.bbox[3] for m in g))
+            overlap = min(x1, gx1) - max(x0, gx0)
+            narrow = max(1.0, min(x1 - x0, gx1 - gx0))
+            small = (y1 - y0) <= FRAGMENT_HEIGHT and (g[-1].bbox[3] - g[-1].bbox[1]) <= FRAGMENT_HEIGHT
+            gap_limit = MERGE_GAP_FRAGMENTS if small else MERGE_GAP
+            if y0 - gy1 <= gap_limit and overlap / narrow >= MERGE_X_OVERLAP:
+                g.append(t)
+                continue
+        groups.append([t])
+    return groups
+
+
+def _union(group: list):
+    return (min(t.bbox[0] for t in group), min(t.bbox[1] for t in group),
+            max(t.bbox[2] for t in group), max(t.bbox[3] for t in group))
+
+
 def extract_page_tables_with_bbox(page, page_num: int) -> list:
     """Extract structured tables from a page as [(table, bbox_or_None), ...].
 
-    table = {"page": int, "headers": list[str], "rows": list[list[str]]}; bbox is in PDF points.
-    Numeric (financial) tables are rebuilt from word positions; anything else falls back to the
-    ruling-line reconstruction, then to find_tables()'s own cells.
+    table = {"page": int, "headers": list[str], "rows": list[list[str]], "title": str}; bbox is in PDF points.
+    Closely stacked detector regions are merged into one table. Numeric (financial) tables are rebuilt from word
+    positions; anything else (or a rebuild that would drop a number) falls back to the ruling-line reconstruction,
+    then to find_tables()'s own cells.
     """
     out = []
+    tab_finder = None
     try:
         tab_finder = page.find_tables()
-        if not tab_finder.tables:
-            return out
+        if tab_finder is None:  # transient PyMuPDF failure: retry once rather than silently dropping the page's tables
+            tab_finder = page.find_tables()
+        detected = tab_finder.tables if tab_finder is not None else []
 
         v_lines = get_vertical_lines(page)
         prev_bottom = 0.0
 
-        for t in sorted(tab_finder.tables, key=lambda t: t.bbox[1]):
-            built = None
+        def rebuild(bbox):
             try:
-                built = reconstruct_table_by_words(page, t.bbox, prev_bottom, page_num)
+                built = reconstruct_table_by_words(page, bbox, prev_bottom, page_num)
             except Exception as e:
                 logger.warning("Word-position table rebuild failed on page %s: %s", page_num, e)
+                return None
             if built and _loses_numbers(page, *built):
                 logger.warning("Word-position rebuild dropped numbers on page %s; using ruling-line extraction", page_num)
-                built = None
-            if built:
-                table, box = built
-                prev_bottom = max(prev_bottom, box[3])
-                if _is_data_table(table):
-                    out.append((table, tuple(round(v, 2) for v in box)))
-                continue
+                return None
+            return built
 
-            table = reconstruct_table_with_ruling_lines(page, t, v_lines, page_num)
-            if table is None:
-                cells = t.extract()
-                if not cells:
-                    continue
-                headers = [str(c or "").strip() for c in cells[0]]
-                rows = [[str(c or "").strip() for c in row] for row in cells[1:]]
-                all_cells = headers + [cell for row in rows for cell in row]
-                if any(all_cells):
-                    table = {"page": page_num, "headers": headers, "rows": rows}
-
-            if table is not None:
-                all_text = table["headers"] + [c for row in table["rows"] for c in row]
-                if any(all_text):
-                    prev_bottom = max(prev_bottom, t.bbox[3])
+        for group in _group_regions(detected):
+            if len(group) > 1:
+                built = rebuild(_union(group))
+                if built:
+                    table, box = built
+                    prev_bottom = max(prev_bottom, box[3])
                     if _is_data_table(table):
-                        out.append((table, tuple(round(float(v), 2) for v in t.bbox)))
+                        out.append((table, tuple(round(v, 2) for v in box)))
+                    continue
+                # could not rebuild the merged table cleanly: handle the regions one by one, as before
+
+            for t in group:
+                built = rebuild(t.bbox)
+                if built:
+                    table, box = built
+                    prev_bottom = max(prev_bottom, box[3])
+                    if _is_data_table(table):
+                        out.append((table, tuple(round(v, 2) for v in box)))
+                    continue
+
+                table = reconstruct_table_with_ruling_lines(page, t, v_lines, page_num)
+                if table is None:
+                    cells = t.extract()
+                    if not cells:
+                        continue
+                    headers = [str(c or "").strip() for c in cells[0]]
+                    rows = [[str(c or "").strip() for c in row] for row in cells[1:]]
+                    all_cells = headers + [cell for row in rows for cell in row]
+                    if any(all_cells):
+                        table = {"page": page_num, "headers": headers, "rows": rows}
+
+                if table is not None and table["rows"]:  # a header-only leftover carries no data (the page text keeps it)
+                    all_text = table["headers"] + [c for row in table["rows"] for c in row]
+                    if any(all_text):
+                        prev_bottom = max(prev_bottom, t.bbox[3])
+                        if _is_data_table(table):
+                            out.append((table, tuple(round(float(v), 2) for v in t.bbox)))
 
     except Exception as e:
         logger.warning("Table extraction failed on page %s: %s", page_num, e)
+
+    # Tables with no ruling lines are invisible to find_tables(): pick them up from word positions.
+    try:
+        covered = [(bb[1], bb[3]) for _, bb in out]  # only what was actually extracted: dropped fragments may still be found
+        for x0, y0, x1, y1 in find_borderless_blocks(page, covered):
+            above = [bb[3] for _, bb in out if bb[3] <= y0 + 1]
+            built = reconstruct_table_by_words(page, (x0, y0, x1, y1), max(above, default=0.0), page_num)
+            if built and not _loses_numbers(page, *built) and _is_data_table(built[0]):
+                out.append((built[0], tuple(round(v, 2) for v in built[1])))
+        out.sort(key=lambda tb: tb[1][1])
+    except Exception as e:
+        logger.warning("Borderless table detection failed on page %s: %s", page_num, e)
     return out
 
 

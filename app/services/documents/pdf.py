@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -22,6 +23,10 @@ from app.database.models import Document
 from app.services.documents import registry
 
 logger = logging.getLogger("app.services.documents.pdf")
+
+# PyMuPDF (MuPDF) is not thread-safe: concurrent find_tables()/get_text() calls from worker threads corrupt each other
+# ("not a textpage of this page", find_tables() returning None). Every PyMuPDF use in the API goes through this lock.
+FITZ_LOCK = threading.RLock()
 
 FINGERPRINT_CHARS = 200
 ALIGNMENT_THRESHOLD = 0.9  # share of indexed pages whose fingerprint must match
@@ -56,7 +61,7 @@ def fingerprint(text: str) -> Optional[str]:
 def pdf_fingerprints(path: Path) -> List[Optional[str]]:
     """Per-page fingerprints of a PDF, index 0 = page 1."""
     import fitz
-    with fitz.open(path) as pdf:
+    with FITZ_LOCK, fitz.open(path) as pdf:
         return [fingerprint(page.get_text("text")) for page in pdf]
 
 

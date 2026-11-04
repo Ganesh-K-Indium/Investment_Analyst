@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from qdrant_client import models
 
 from app.database.models import Document
-from app.services.documents.pdf import pdf_path_for
+from app.services.documents.pdf import FITZ_LOCK, pdf_path_for
 
 TABLES_MARKER = "\n\n[TABLES]\n"
 _XREF_RE = re.compile(r"-page\d+-(\d+)$")
@@ -147,7 +147,7 @@ def _live_tables(page, page_num: int) -> List[Dict[str, Any]]:
 def _geometry(path: str, mtime: float, page_num: int, xrefs: Tuple[int, ...]) -> Dict[str, Any]:
     """size, text blocks, table bboxes and image bboxes of one page. `mtime` only busts the cache on file change."""
     import fitz
-    with fitz.open(path) as pdf:
+    with FITZ_LOCK, fitz.open(path) as pdf:
         page = pdf[page_num - 1]
         blocks = [{"id": f"b{b[5]}", "bbox": _round(b[:4]), "text": b[4].strip()}
                   for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]
@@ -290,7 +290,7 @@ def _locate_words(words: list, q_tokens: List[str]) -> Optional[Tuple[list, floa
 @lru_cache(maxsize=256)
 def _locate(path: str, mtime: float, page_num: int, quote: str) -> Dict[str, Any]:
     import fitz
-    with fitz.open(path) as pdf:
+    with FITZ_LOCK, fitz.open(path) as pdf:
         page = pdf[page_num - 1]
         words = page.get_text("words")
         if not words:
