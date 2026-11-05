@@ -9,7 +9,18 @@ def _current_year() -> int:
 from schemas.models import UniversalSubQueryAnalysis, SimpleDocumentGrade
 
 
-def get_rag_chain(llm_generate, query_type: str = "general", alpha_pillar: str = None, comparison_span_note: str = None):
+ANALYST_NOTE_RULES = """
+
+**ANALYST NOTES (present in this context):**
+Some chunks begin with "[ANALYST NOTE". These are the user's OWN research notes: their views, estimates and targets. They are NOT company disclosures and NOT SEC filing data, whatever the general rule above says about chunks without a "Source:" header.
+- Use a note only as the user's own perspective. Attribute it in the sentence (e.g. "In your note from 6 Apr 2026..."), never as something the company or a filing stated.
+- Never use a figure from a note as a reported or filed figure, and never use notes to fill reported-data rows or comparison tables; those come from the filings.
+- If a note disagrees with a filing, say so explicitly: the filing governs reported facts, the note is the user's estimate or view.
+- If a note adds nothing relevant to the question, ignore it. Do not mention that you ignored it."""
+
+
+def get_rag_chain(llm_generate, query_type: str = "general", alpha_pillar: str = None, comparison_span_note: str = None,
+                  analyst_notes: bool = False):
     cur_year = _current_year()
     
     # Base system prompt used for all queries
@@ -265,7 +276,9 @@ apples-to-apples comparison."""
 
 **IMPORTANT:** Search every document thoroughly before concluding information is unavailable."""
 
-    full_system_prompt = f"{base_prompt}\n{dynamic_rules}\n{closing_prompt}"
+    # Appended only when a note chunk is actually present, so filing-only questions keep their exact prompt.
+    note_rules = ANALYST_NOTE_RULES if analyst_notes else ""
+    full_system_prompt = f"{base_prompt}{note_rules}\n{dynamic_rules}\n{closing_prompt}"
     
     # Conditional human prompt based on query type to reduce noise
     if query_type == "financial_calculation":
@@ -1098,7 +1111,7 @@ Extract the exact values from the documents above and write the 4 sentences.""")
     return prompt | structured_llm
 
 
-def get_alpha_report_combiner_chain(llm):
+def get_alpha_report_combiner_chain(llm, analyst_notes: bool = False):
     """
     Combines all 5 ALPHA dimensions into a final coherent report.
     Renders each pillar with its Recommendation label and closes with ALPHA Summary.
@@ -1164,8 +1177,18 @@ never skip a sentence that does contain a concrete number/fact — every one mus
 *Analysis based on SEC filings, publicly available financial data, and web-sourced market information. For informational purposes only — does not constitute investment advice or a solicitation to trade.*
 """
 
+    notes_system, notes_human = "", ""
+    if analyst_notes:  # only when the user has notes on this ticker: otherwise the prompt is exactly the one above
+        notes_system = """
+
+**The user's own analyst notes are supplied after the five analyses.** They are the user's views and estimates, NOT company disclosures and NOT part of the five dimensions. Do not change, reinterpret or add to any dimension text because of them, and do not let them move the overall stance. Immediately after the Summary's final stance sentence, and BEFORE the closing "---" line and the disclaimer, add one short paragraph beginning "**Your notes:**". In at most 3 sentences it must say whether the notes AGREE or DISAGREE with the overall stance you just gave and on what point (for example "Your note from 6 Apr 2026 agrees with a cautious stance: it ..."), attributing every point to the user's own note. Apply no sentiment tags inside that paragraph. If the notes say nothing relevant to this stock's stance, omit the paragraph."""
+        notes_human = """
+
+The user's own analyst notes:
+{analyst_notes}"""
+
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
+        ("system", SYSTEM_PROMPT + notes_system),
         ("human", """Company: {company}
 Ticker: {ticker}
 
@@ -1182,7 +1205,7 @@ Horizon Analysis:
 {horizon}
 
 Action Analysis:
-{action}
+{action}""" + notes_human + """
 
 Render the full Indium's ALPHA Framework report now.""")
     ])

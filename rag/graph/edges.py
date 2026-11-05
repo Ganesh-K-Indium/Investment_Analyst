@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from rag.vectordb.client import load_vector_database
 from app.utils.filing_types import is_annual_only
+from rag.graph.doc_kinds import split_notes
 
 logger = logging.getLogger("rag.graph.edges")
 
@@ -110,7 +111,8 @@ def decide_to_generate(state):
         logger.error("---DECISION: QDRANT ERROR, ROUTE TO GENERATE FOR USER-FACING MESSAGE---")
         return "generate"
 
-    filtered_documents = state["documents"]
+    # Routing is about whether the FILINGS (and web results) answer the question: the user's own notes don't count.
+    filtered_documents, _notes = split_notes(state["documents"])
     web_searched = state.get("web_searched", False)
 
     doc_count = len(filtered_documents) if filtered_documents else 0

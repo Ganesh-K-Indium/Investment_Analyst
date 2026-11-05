@@ -499,7 +499,7 @@ Compare {comparison_str} {year_str}:
         
         logger.info("Compare mode: tickers=%s session=%s", tickers, thread_id)
         
-        config = {"configurable": {"thread_id": f"rag:{thread_id}"}}
+        config = {"configurable": {"thread_id": f"rag:{thread_id}", "user_id": str(current_user.id)}}
         
         # Prepare inputs with comparison mode enabled
         inputs = {
@@ -702,7 +702,7 @@ async def alpha_core(
 
                 # Each ticker gets its own checkpointer thread so per-ticker
                 # alpha_dimensions/state don't leak into one another.
-                config = {"configurable": {"thread_id": f"rag:{thread_id}-alpha-{ticker}"}}
+                config = {"configurable": {"thread_id": f"rag:{thread_id}-alpha-{ticker}", "user_id": str(current_user.id)}}
 
                 inputs = {
                     "messages": [HumanMessage(content=f"ALPHA analysis for {ticker}")],

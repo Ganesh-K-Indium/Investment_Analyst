@@ -13,7 +13,7 @@ from rag.graph.nodes import (web_search, retrieve,
                          preprocess_and_analyze_query,
                          generate_comparison_chart,
                          detect_alpha_query, alpha_dimension_retrieve, alpha_generate_report,
-                         detect_scenario_query, scenario_data_retrieve, scenario_generate_report,
+                         detect_scenario_query, scenario_data_retrieve, scenario_generate_report, scenario_load_notes,
                          detect_macro_query, macro_analyze_query,
                          macro_fetch_and_calculate, macro_format_answer)
 from rag.graph.edges import (route_question, decide_to_generate,
@@ -61,6 +61,7 @@ class BuildingGraph:
         # Add Scenario Framework nodes (Bull / Bear / Base)
         workflow.add_node("detect_scenario", time_node("detect_scenario")(detect_scenario_query))
         workflow.add_node("scenario_retrieve", time_node("scenario_retrieve")(scenario_data_retrieve))
+        workflow.add_node("scenario_notes", time_node("scenario_notes")(scenario_load_notes))
         workflow.add_node("scenario_generate", time_node("scenario_generate")(scenario_generate_report))
         
         # Add Macro Framework nodes (3-step pipeline)
@@ -112,7 +113,8 @@ class BuildingGraph:
         workflow.add_edge("alpha_generate", "show_result")
 
         # Scenario workflow: scenario_retrieve -> scenario_generate -> show_result -> END
-        workflow.add_edge("scenario_retrieve", "scenario_generate")
+        workflow.add_edge("scenario_retrieve", "scenario_notes")
+        workflow.add_edge("scenario_notes", "scenario_generate")
         workflow.add_edge("scenario_generate", "show_result")
         
         # Macro workflow: macro_analyze -> macro_calculate -> macro_format -> show_result -> END

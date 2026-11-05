@@ -77,6 +77,7 @@ class GraphState(TypedDict):
     macro_calculation_results: List[Dict[str, Any]]  # Step 2 output: deterministic calculation results from Python
     macro_report: str                      # Step 3 output: LLM-formatted final answer
     qdrant_error: Optional[str]            # Set when Qdrant connection fails (not collection-not-found)
+    analyst_notes: List[Any]               # The user's own notes for the ALPHA / scenario reports (set fresh by those branches)
     # Filing-type-aware retrieval fields (RAG multi-filing-type support)
     filing_types: List[str]                # Inferred/resolved filing type filter(s): any of "10-K"/"20-F"/"10-Q"/"8-K"/"6-K", empty list = search all
     comparison_spans_multiple_filings: bool  # True when a requested year range required querying more than one filing/year window

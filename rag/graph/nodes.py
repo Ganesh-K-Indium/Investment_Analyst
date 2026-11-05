@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from dotenv import load_dotenv
 from langchain_core.documents import Document
+from rag.graph.doc_kinds import is_analyst_note, split_notes
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_core.messages import AIMessage
@@ -864,7 +865,8 @@ def _doc_key(metadata: dict, content: str, default_company: str = "") -> str:
     return f"{metadata.get('company') or default_company}_{metadata.get('source_file', '')}_{metadata.get('page_num', '')}_{digest}"
 
 
-_ANALYST_NOTE_LIMIT = 3  # max note chunks added per question
+_ANALYST_NOTE_PER_TICKER = 3  # note chunks per ticker named in the question...
+_ANALYST_NOTE_MAX = 6  # ...capped, so a wide question cannot flood the context
 
 
 async def _analyst_note_documents(config, tickers, query) -> list:
@@ -875,7 +877,8 @@ async def _analyst_note_documents(config, tickers, query) -> list:
         return []
     try:
         from app.services.analyst_notes import search_notes
-        docs = await search_notes(user_id, query, sorted({str(t).upper() for t in tickers}), limit=_ANALYST_NOTE_LIMIT)
+        wanted = sorted({str(t).upper() for t in tickers})
+        docs = await search_notes(user_id, query, wanted, limit=min(_ANALYST_NOTE_MAX, _ANALYST_NOTE_PER_TICKER * len(wanted)))
     except Exception as e:
         logger.warning(f" Analyst notes skipped: {e}")
         return []
@@ -1340,8 +1343,10 @@ def generate(state):
     # Keep the model's context from overflowing by DROPPING whole low-priority
     # chunks — never by cutting inside one (see _CONTEXT_TOKEN_BUDGET). Filing
     # chunks outrank web results; within each group, retrieval order is kept.
+    # The user's own notes are kept before everything else: a few small chunks the user put there on purpose, which
+    # must not be the first thing to go when a big filing fills the budget.
     _web_sources = ("web_search", "integrate_web_search")
-    priority = [1 if d.metadata.get("source", "") in _web_sources else 0 for d in documents]
+    priority = [-1 if is_analyst_note(d) else 1 if d.metadata.get("source", "") in _web_sources else 0 for d in documents]
     kept_idx, dropped, used_tokens = _fit_texts_to_token_budget([d.page_content for d in documents], priority=priority)
     if dropped:
         logger.warning(f"[DOC SIZE] Over the {_CONTEXT_TOKEN_BUDGET:,}-token budget — dropped {dropped} whole low-priority chunk(s), kept {len(kept_idx)} ({used_tokens:,} tokens)")
@@ -1365,7 +1370,9 @@ def generate(state):
         logger.info(f" [GENERATE] Alpha pillar mode: {alpha_pillar}")
 
     comparison_span_note = state.get("comparison_span_details") if state.get("comparison_spans_multiple_filings") else None
-    rag_chain = get_rag_chain(llm, query_type=query_type, alpha_pillar=alpha_pillar, comparison_span_note=comparison_span_note)
+    has_notes = any(is_analyst_note(d) for d in documents)  # after budget trimming: only if a note chunk really is in the context
+    rag_chain = get_rag_chain(llm, query_type=query_type, alpha_pillar=alpha_pillar, comparison_span_note=comparison_span_note,
+                              analyst_notes=has_notes)
     
     generation_input = {
         "documents": documents,
@@ -1444,6 +1451,23 @@ def grade_documents(state):
             }
         }
     
+    # Analyst notes are the user's own views, not filing data: they must not make the retrieval look sufficient.
+    # Grade only the other chunks; the notes still reach generation (they stay in the returned documents).
+    all_documents = documents
+    documents, note_docs = split_notes(all_documents)
+    if not documents:
+        logger.info(" ONLY ANALYST NOTES RETRIEVED (no filing chunks) → INSUFFICIENT, will trigger web search")
+        return {
+            "documents": all_documents,
+            "financial_grading": {
+                "overall_grade": "insufficient",
+                "can_answer": False,
+                "missing_data_summary": "No filing chunks found in vector database (only the user's own notes)",
+                "company_coverage": [],
+                "documents_graded_count": 0
+            }
+        }
+
     # Initialize financial analyst grader with gpt-4o
     llm = ChatOpenAI(model="gpt-4o", temperature=0, timeout=60, max_retries=2)
     analyst_grader = get_financial_analyst_grader_chain(llm)
@@ -1544,7 +1568,7 @@ def grade_documents(state):
         logger.info(f"   Next: Decision node will use this grading to determine if web search needed")
 
         return {
-            "documents": documents,
+            "documents": documents + note_docs,
             "financial_grading": grading_result
     }
 
@@ -1557,7 +1581,7 @@ def grade_documents(state):
         # filing chunks when there are enough) instead of marking the retrieval
         # "partial" and pulling in web results the filings didn't need.
         return {
-            "documents": documents,
+            "documents": documents + note_docs,
             "financial_grading": {"error": str(e)}
     }
 
@@ -2741,7 +2765,7 @@ def _format_alpha_docs(docs, ticker: str) -> str:
     return "\n\n---\n\n".join(parts[k] for k in kept_idx)
 
 
-async def alpha_dimension_retrieve(state):
+async def alpha_dimension_retrieve(state, config=None):
     """
     Retrieve dimension-specific data for ALPHA Framework.
     
@@ -3277,8 +3301,15 @@ async def alpha_dimension_retrieve(state):
     logger.info("="*80 + "\n")
     
     return {
-        "alpha_dimensions": alpha_dimensions
+        "alpha_dimensions": alpha_dimensions,
+        # always set (even []) so a note from an earlier turn on this thread can never leak into this report
+        "analyst_notes": await _analyst_note_documents(config, [ticker], f"{ticker} investment thesis outlook valuation risks"),
     }
+
+
+def _analyst_notes_text(state) -> str:
+    """The user's notes for the ALPHA / scenario reports as one block ('' when there are none)."""
+    return "\n\n".join(d.page_content for d in (state.get("analyst_notes") or []) if getattr(d, "page_content", ""))
 
 
 def alpha_generate_report(state):
@@ -3409,18 +3440,22 @@ def alpha_generate_report(state):
     logger.info("\n Combining dimensions into final report...")
 
     try:
-        combiner_chain = get_alpha_report_combiner_chain(llm)
+        notes_text = _analyst_notes_text(state)
+        combiner_chain = get_alpha_report_combiner_chain(llm, analyst_notes=bool(notes_text))
+        combiner_inputs = {
+            "company": ticker,
+            "ticker": ticker,
+            "alignment": dimension_outputs.get('alignment', {}).get('analysis', 'N/A'),
+            "liquidity": dimension_outputs.get('liquidity', {}).get('analysis', 'N/A'),
+            "performance": dimension_outputs.get('performance', {}).get('analysis', 'N/A'),
+            "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
+            "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
+        }
+        if notes_text:
+            combiner_inputs["analyst_notes"] = notes_text
         _combiner_start = time.perf_counter()
         with get_openai_callback() as cb:
-            final_report = combiner_chain.invoke({
-                "company": ticker,
-                "ticker": ticker,
-                "alignment": dimension_outputs.get('alignment', {}).get('analysis', 'N/A'),
-                "liquidity": dimension_outputs.get('liquidity', {}).get('analysis', 'N/A'),
-                "performance": dimension_outputs.get('performance', {}).get('analysis', 'N/A'),
-                "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
-                "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
-            })
+            final_report = combiner_chain.invoke(combiner_inputs)
         record_usage(
             stage="alpha.combiner", model="gpt-4o",
             prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
@@ -3750,6 +3785,14 @@ def scenario_data_retrieve(state):
     return {"scenario_data": scenario_data}
 
 
+async def scenario_load_notes(state, config=None):
+    """Scenario branch: load the user's own notes for this ticker (the scenario nodes are sync, so the async lookup
+    lives in its own node). Always sets `analyst_notes`, even to [], so nothing stale carries over."""
+    ticker = (state.get("ticker") or "").upper()
+    notes = await _analyst_note_documents(config, [ticker] if ticker else [], f"{ticker} bull base bear case price target thesis catalysts risks")
+    return {"analyst_notes": notes}
+
+
 def scenario_generate_report(state):
     """
     Generate the final Bull / Bear / Base scenario report from collected web data.
@@ -3804,6 +3847,14 @@ def scenario_generate_report(state):
         return "\n\n---\n\n".join(parts[i] for i in kept)
 
     analyst_text = _format_bucket("analyst_data")
+    notes_text = _analyst_notes_text(state)
+    if notes_text:
+        # Prepended AFTER the bucket's token budget is applied, so the user's notes are never the part that gets dropped.
+        analyst_text = (
+            "=== THE USER'S OWN ANALYST NOTES (their views and estimates, NOT market consensus and NOT company "
+            "disclosures: weigh them as one input and attribute them as the user's view) ===\n"
+            f"{notes_text}\n\n=== MARKET ANALYST DATA (web) ===\n{analyst_text}"
+        )
     valuation_text = _format_bucket("valuation_data")
     catalyst_text = _format_bucket("catalyst_data")
     risk_text = _format_bucket("risk_data")
