@@ -255,8 +255,9 @@ async def ask_core(
                 
         logger.info("Portfolio-scoped context: %s | Tickers: %s", portfolio.name, company_tickers)
         
-        config = {"configurable": {"thread_id": f"rag:{thread_id}"}}
-        
+        # user_id lets retrieve() add this user's analyst notes; it comes from the verified token, never the payload
+        config = {"configurable": {"thread_id": f"rag:{thread_id}", "user_id": str(current_user.id)}}
+
         # Standard execution
         inputs = {
             "messages": [HumanMessage(content=query)],

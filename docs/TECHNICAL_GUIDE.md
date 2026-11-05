@@ -67,7 +67,7 @@ Plus root routes: `GET /` (service directory), `GET /health` (aggregated RAG age
 | Router | Total routes | Authenticated | Unauthenticated (and why) |
 |---|---|---|---|
 | `auth` | 6 | 3 | `POST /signup`, `POST /login`, `POST /refresh` — issue the very token they'd otherwise require |
-| `reports`, `portfolios`, `integrations`, `chats`, `form4`, `edgar`, `analysis_tasks` | 8/8/9/17/2/3/8 | 100% | none |
+| `reports`, `portfolios`, `integrations`, `chats`, `form4`, `edgar`, `analysis_tasks` | 8/8/9/17/3/3/8 | 100% | none |
 | `rag` | 7 | 5 | `GET /health`, `GET /capabilities` — public status/introspection |
 | `quant` | 5 | 3 | `GET /quant/health`, `GET /quant/capabilities` — public status/introspection |
 
@@ -341,7 +341,7 @@ All 8 routes require auth. Every enqueue route also accepts an optional `schedul
 
 A standalone pipeline (not part of the LangGraph supervisor) consumed from the RAG side, sharing the main app's async Postgres engine (`rag/utils/Insights_Form4/database.py` is a thin re-export shim over `app.database.connection`/`models`, not a separate database).
 
-**Ingestion**: `SecEdgarFetcher` (Form4-specific, distinct from the filing-ingestion `edgar_fetcher.py`) paginates SEC EDGAR's Form 4 ATOM feed, resolves each filing to its XML document, parses it (`Form4Parser`) into issuer/reporting-owner/transaction records, filters to **common-stock-only** transactions (excludes preferred/warrant/option/note/convertible), dedups by SEC accession number, and handles **4/A amendments** by deleting prior rows for the same reporter+period before inserting the amendment's rows. A "dummy" placeholder row is inserted for filings with zero qualifying transactions, to avoid reprocessing them every run.
+**Ingestion**: `SecEdgarFetcher` (Form4-specific, distinct from the filing-ingestion `edgar_fetcher.py`) paginates SEC EDGAR's Form 4 ATOM feed, resolves each filing to its XML document, parses it (`Form4Parser`) into issuer/reporting-owner/transaction records, filters to **common-stock-only** transactions (excludes preferred/warrant/option/note/convertible), dedups by SEC accession number, and handles **4/A amendments** by deleting prior rows for the same reporter+period before inserting the amendment's rows. A "dummy" placeholder row is inserted for filings with zero qualifying transactions, to avoid reprocessing them every run. `run_form4_ingestion`/`run_form4_ingestion_multi` accept an optional `progress_cb(dict)` (events `ticker_start`, `fetched`, `filing`, `ticker_done`) that the SSE endpoint maps to its event stream; the callback fires from a `finally` so skipped and failed filings still advance progress.
 
 **Advisory analysis** (`advisory_hub.get_advisory_report(ticker, start_date, end_date)`): a raw-SQL grouped dedup query against `form4_transactions`, further merged in Python by normalized reporter name (handles spelling variants like "HENNESSY JOHN L" vs "Hennessy John L."), then `advisory_analyst.analyze_transactions()` computes a role-weighted (Officer ×2, Director ×1.5, 10% Owner ×1.2), dollar-weighted buy/sell signal score by transaction code (P=purchase strong positive, S=sale strong negative), and an LLM turns the aggregated signal into a natural-language recommendation/reasoning — surfaced in the ALPHA framework's "Alignment" dimension and via `POST /form4/ingest`.
 
@@ -418,6 +418,9 @@ Fetches ~17 FRED series concurrently (`asyncio.Semaphore(5)`) — GDP (quarterly
 |---|---|---|
 | POST | `/form4/ingest` | Single-ticker Form 4 ingestion |
 | POST | `/form4/ingest/batch` | Multi-ticker (sequential, one failure doesn't stop the rest) |
+| POST | `/form4/ingest/stream` | Same as `/batch`, streamed as SSE (progress + live logs) — used by the Fund Manager's Data Sources tab |
+
+`/form4/ingest/stream` takes `{tickers, start_date?, end_date?}` and emits `data: {"event": ..., "data": {...}}` frames: `start` {tickers, total} → per ticker `ticker_start` {ticker, index, count}, `fetched` {ticker, total}, `progress` {ticker, processed, total} (one per filing, including skipped/failed ones), `ticker_completed` {result} → `completed` {tickers, results, totals, date_range}; `log` {message} frames interleave throughout, and `error` {detail} ends a failed run. Same SSE plumbing as `/edgar/ingest` (`sse_log_context` + root `SSELogHandler`), with log lines flushed before `completed`/`error`. Ticker validation errors are a plain 400 before the stream opens. Foreign private issuers are skipped inside the pipeline (they file no Form 4) and come back as a `ticker_completed` result with the exemption `message`.
 
 ### `/chats`
 
@@ -438,6 +441,17 @@ Session CRUD, message history, LLM summaries (single + consolidated multi-sessio
 Queued/async equivalents of `/ask`, `/compare`, `/alpha`, `/quant/query`, plus status polling and SSE streaming — see [§7](#7-background-job-system-redisarq) for the full route table.
 
 ---
+
+## 10a. Document Inspector
+
+A global library of every document ingested into Qdrant plus a per-document inspector (PDF pages beside the extracted text, tables, image analyses and page JSON). Full design: `docs/DOCUMENT_INSPECTOR_PLAN.md`.
+
+- **Registry**: `documents` table (migration `018`) is a cache of Qdrant (`app/services/documents/registry.py`); `doc_id` = `metadata.content_hash`. Re-synced lazily (5 min TTL) or via `POST /documents/sync`.
+- **Endpoints** (`app/api/documents.py`, all authenticated): `GET /documents` (filters, cursor paging, facets), `/documents/{id}`, `/pages`, `/pages/{n}` (page JSON + PyMuPDF geometry), `/pages/{n}/locate?q=` (cited text -> rects; exact search, then fuzzy word-window match), `/pdf` (Range + ETag), `POST /ensure-pdf` + `GET /pdf-status` (re-download from SEC EDGAR into `sec_filings/{TICKER}/`).
+- **Alignment check**: a re-downloaded PDF is rendered from HTML, so pagination can differ; per-page text fingerprints decide `aligned`, and the UI warns / searches adjacent pages when false.
+- **Frontend** (`investment-analyst-ui/src/features/documents/`): `/documents` (URL-synced filters) and `/documents/:docId?page=&hl=&tab=&from=chat:<portfolio>:<session>`. pdf.js renders pages lazily; right pane has Text / JSON / Tables / Images tabs with block-hover mapping. Shortcuts: `j`/`k` page, `/` search, `+`/`-` zoom, `1`-`4` tabs, `Esc` clear highlight.
+- **Table ingestion** (`ingestion/table_extractor.py`, `ingestion/chunking.py`): financial tables are rebuilt from word positions (columns from the numbers' right edges, row labels and wrapped labels kept, multi-row headers flattened, statement caption added); a completeness guard falls back to ruling-line extraction if any printed number would be dropped. Tables are packed whole into separate `[TABLES]` chunks (`chunk_kind: table`) instead of being cut mid-row by the text splitter. `scripts/reextract_tables.py` (dry run by default, `--apply` to write) upgrades already-ingested filings: it re-chunks only pages that have tables, re-embeds them and replaces that page's old text chunks.
+- **Citations**: chat citation page pills link to the Inspector; `features/documents/citations.ts` picks the best-matching sentence on the cited page (no LLM) as the highlight quote. Stored chat history keeps only metadata, so older sessions open the right page without a highlight.
 
 ## 11. Services layer
 

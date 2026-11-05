@@ -321,3 +321,36 @@ class Document(Base):
     ingested_at = Column(DateTime, nullable=True)
     synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     removed = Column(Boolean, nullable=False, default=False, index=True)  # gone from Qdrant; hidden from lists
+
+
+class AnalystNote(Base):
+    """
+    An analyst's own research note, indexed into the separate `analyst_notes` Qdrant collection.
+
+    The SQL row is the system of record (owner, visibility, original text); Qdrant holds a derived copy of the chunks
+    carrying the same owner_id/visibility so retrieval can filter by them. `owner_id` always comes from the auth token.
+    """
+    __tablename__ = "analyst_notes"
+
+    note_id    = Column(String, primary_key=True)  # uuid4; also metadata.note_id / content_hash in Qdrant
+    owner_id   = Column(String, nullable=False, index=True)  # users.id as string (matches the other user_id columns)
+    author     = Column(String, nullable=False)  # display name captured at write time
+    ticker     = Column(String, nullable=False, index=True)  # upper-case
+    title      = Column(String, nullable=False)
+    note_date  = Column(Date, nullable=False)
+    visibility = Column(String, nullable=False, default="private")  # private | shared
+    active     = Column(Boolean, nullable=False, default=True)  # owner "hide for now": False keeps the note stored but out of everyone's analysis
+    input_method = Column(String, nullable=False, default="typed")  # typed | handwritten (transcribed from an image/scan, reviewed by the author)
+    content    = Column(Text, nullable=False)  # original text (source of truth for re-indexing)
+    chunk_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AnalystNoteInclusion(Base):
+    """A user's opt-in to use ANOTHER analyst's shared note in their own analysis (row present = included)."""
+    __tablename__ = "analyst_note_inclusions"
+
+    user_id    = Column(String, primary_key=True)  # users.id as string
+    note_id    = Column(String, ForeignKey("analyst_notes.note_id", ondelete="CASCADE"), primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

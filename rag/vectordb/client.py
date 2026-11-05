@@ -196,7 +196,8 @@ class load_vector_database():
     async def hybrid_search(self, query: str, content_type: str = None, company: str = None,
                      years: list = None, filing_type: Union[str, Sequence[str]] = None, period_end_date: str = None,
                      fiscal_quarter: int = None,
-                     limit: int = 10, dense_limit: int = 100, sparse_limit: int = 100):
+                     limit: int = 10, dense_limit: int = 100, sparse_limit: int = 100,
+                     extra_conditions: list = None):
         """
         Advanced hybrid search using prefetch and fusion queries (RRF).
 
@@ -220,6 +221,9 @@ class load_vector_database():
             limit: Final number of results to return
             dense_limit: Number of results from dense vector search
             sparse_limit: Number of results from sparse (BM25) search
+            extra_conditions: Additional qdrant conditions (FieldCondition or nested Filter) ANDed onto the
+                filter, e.g. an owner/visibility filter for the analyst_notes collection. None (default)
+                leaves the filter exactly as before.
 
         Returns:
             List of search results with payloads
@@ -312,6 +316,9 @@ class load_vector_database():
                     match=models.MatchValue(value=fiscal_quarter)
                 )
             )
+
+        if extra_conditions:
+            filter_conditions.extend(extra_conditions)
 
         global_filter = models.Filter(must=filter_conditions) if filter_conditions else None
         

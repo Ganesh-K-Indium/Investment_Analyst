@@ -76,6 +76,7 @@ from app.api.auth import router as auth_router
 from app.api.reports import router as reports_router
 from app.api.analysis_tasks import router as analysis_tasks_router
 from app.api.documents import router as documents_router
+from app.api.notes import router as notes_router
 import app.api.rag as rag_router_module
 import app.api.quant as quant_router_module
 import app.api.analysis_tasks as analysis_tasks_module
@@ -201,6 +202,7 @@ app.include_router(form4_router)
 app.include_router(edgar_router)
 app.include_router(analysis_tasks_router)
 app.include_router(documents_router)
+app.include_router(notes_router)
 
 
 @app.get("/")

@@ -864,6 +864,26 @@ def _doc_key(metadata: dict, content: str, default_company: str = "") -> str:
     return f"{metadata.get('company') or default_company}_{metadata.get('source_file', '')}_{metadata.get('page_num', '')}_{digest}"
 
 
+_ANALYST_NOTE_LIMIT = 3  # max note chunks added per question
+
+
+async def _analyst_note_documents(config, tickers, query) -> list:
+    """Note chunks the authenticated user may read for these tickers. [] when no user is in the config
+    (compare/alpha/benchmark runs), when they have no notes, or on any error: filing retrieval never depends on this."""
+    user_id = ((config or {}).get("configurable") or {}).get("user_id")
+    if not user_id or not tickers:
+        return []
+    try:
+        from app.services.analyst_notes import search_notes
+        docs = await search_notes(user_id, query, sorted({str(t).upper() for t in tickers}), limit=_ANALYST_NOTE_LIMIT)
+    except Exception as e:
+        logger.warning(f" Analyst notes skipped: {e}")
+        return []
+    if docs:
+        logger.info(f" Added {len(docs)} analyst note chunk(s) for user {user_id}")
+    return docs
+
+
 async def retrieve(state, config):
     """
     Retrieve documents relevant to the question using ticker-based collections.
@@ -1263,6 +1283,10 @@ async def retrieve(state, config):
             logger.info(f"\nRetrieved {len(all_documents)} chunks total from {len(target_tickers)} collections")
             logger.info(f"    {content_types['text']} text,  {content_types['image']} images")
             logger.info(f"    {', '.join(sorted(companies_found))}")
+
+    # The caller's own analyst notes (separate collection, owner/visibility-filtered), appended after the filing
+    # chunks. Only runs when the route put the authenticated user in the graph config.
+    all_documents.extend(await _analyst_note_documents(config, target_tickers, question))
 
     # Final summary
     logger.info(f"\n{'='*80}")
