@@ -36,6 +36,7 @@ MAX_PAGES = 10
 MAX_SIDE_PX = 2048
 RENDER_DPI = 200
 MIN_TEXT_LAYER_CHARS = 40  # a PDF page with at least this much text is "typed", not a scan
+SCAN_IMAGE_COVERAGE = 0.5  # ...unless a picture covers this share of the page: then the text is a scanner's OCR layer
 ENGINE_TIMEOUT_SECONDS = 120
 
 PROMPT = """You are transcribing a handwritten or scanned note for a financial analyst's records.
@@ -124,6 +125,36 @@ def _compare(a: str, b: str) -> Optional[str]:
     return None
 
 
+def _similar(a: str, b: str) -> float:
+    return difflib.SequenceMatcher(None, _canon(a), _canon(b)).ratio()
+
+
+def _pair_lines(a_lines: List[str], b_lines: List[str]) -> List[tuple]:
+    """Pair up the lines of a disagreeing block as (a_group, b_group).
+
+    Usually one to one, but the two readers often break a line differently (one reads two lines as one),
+    so a line is also matched against two consecutive lines of the other reading, when that fits clearly better.
+    """
+    pairs, i, j = [], 0, 0
+    while i < len(a_lines) and j < len(b_lines):
+        one = _similar(a_lines[i], b_lines[j])
+        split_b = _similar(a_lines[i], " ".join(b_lines[j:j + 2])) if j + 1 < len(b_lines) else 0.0
+        split_a = _similar(" ".join(a_lines[i:i + 2]), b_lines[j]) if i + 1 < len(a_lines) else 0.0
+        if max(split_a, split_b) >= 0.8 and max(split_a, split_b) > one + 0.1:
+            if split_b >= split_a:
+                pairs.append(([a_lines[i]], b_lines[j:j + 2]))
+                i, j = i + 1, j + 2
+            else:
+                pairs.append((a_lines[i:i + 2], [b_lines[j]]))
+                i, j = i + 2, j + 1
+        else:
+            pairs.append(([a_lines[i]], [b_lines[j]]))
+            i, j = i + 1, j + 1
+    pairs.extend(([l], []) for l in a_lines[i:])
+    pairs.extend(([], [l]) for l in b_lines[j:])
+    return pairs
+
+
 def merge_readings(primary: List[str], secondary: Optional[List[str]]) -> List[OcrLine]:
     """Line-align the two readings. The primary's text is kept; disagreements are flagged with the other version."""
     primary = [l.strip() for l in primary if l and l.strip()]
@@ -137,17 +168,18 @@ def merge_readings(primary: List[str], secondary: Optional[List[str]]) -> List[O
         if tag == "equal":
             out.extend(OcrLine(l) if "[?]" not in l else OcrLine(l, "review", [], "unreadable part") for l in primary[i1:i2])
             continue
-        a_lines, b_lines = primary[i1:i2], secondary[j1:j2]
-        for k in range(max(len(a_lines), len(b_lines))):
-            a = a_lines[k] if k < len(a_lines) else None
-            b = b_lines[k] if k < len(b_lines) else None
+        for a_group, b_group in _pair_lines(primary[i1:i2], secondary[j1:j2]):
+            a, b = " ".join(a_group) or None, " ".join(b_group) or None
             if a is not None and b is not None:
                 reason = _compare(a, b)
-                out.append(OcrLine(a) if reason is None else OcrLine(a, "review", [b] if _canon(a) != _canon(b) else [], reason))
+                flag = reason is not None
+                alts = [b] if flag and _canon(a) != _canon(b) else []
+                for n, line in enumerate(a_group):
+                    out.append(OcrLine(line, "review", alts if n == 0 else [], reason) if flag else OcrLine(line))
             elif a is not None:
-                out.append(OcrLine(a, "review", [], "second reader did not see this line"))
+                out.extend(OcrLine(l, "review", [], "second reader did not see this line") for l in a_group)
             else:
-                out.append(OcrLine(b, "review", [], "only the second reader saw this line"))
+                out.extend(OcrLine(l, "review", [], "only the second reader saw this line") for l in b_group)
     return out
 
 
@@ -185,6 +217,29 @@ def normalize_image(data: bytes) -> bytes:
     return buf.getvalue()
 
 
+def _is_scanned_page(page) -> bool:
+    """A picture covering most of the page means a scan, whatever text layer rides on top.
+
+    Scanner apps and archives embed their own OCR layer, which is often gibberish for handwriting;
+    trusting it would skip real OCR and index the gibberish.
+    """
+    area = page.rect.width * page.rect.height
+    if area <= 0:
+        return False
+    try:
+        covered = sum(fitz_rect_area(info["bbox"], page.rect) for info in page.get_image_info())
+    except Exception:
+        return False
+    return covered / area >= SCAN_IMAGE_COVERAGE
+
+
+def fitz_rect_area(bbox, page_rect) -> float:
+    x0, y0, x1, y1 = bbox
+    w = max(0.0, min(x1, page_rect.x1) - max(x0, page_rect.x0))
+    h = max(0.0, min(y1, page_rect.y1) - max(y0, page_rect.y0))
+    return w * h
+
+
 def split_pages(data: bytes) -> List[Dict[str, Any]]:
     """[{"page": n, "text": str | None, "image": jpeg bytes | None}]: typed PDF pages carry text, everything else an image."""
     kind = _sniff(data)
@@ -203,7 +258,7 @@ def split_pages(data: bytes) -> List[Dict[str, Any]]:
         pages = []
         for i, page in enumerate(pdf, 1):
             text = page.get_text().strip()
-            if len(text) >= MIN_TEXT_LAYER_CHARS:
+            if len(text) >= MIN_TEXT_LAYER_CHARS and not _is_scanned_page(page):
                 pages.append({"page": i, "text": text, "image": None})
             else:
                 png = page.get_pixmap(dpi=RENDER_DPI).tobytes("png")

@@ -264,3 +264,55 @@ def test_input_method_is_stored_and_defaults_to_typed():
     assert NoteCreate(**base, input_method="handwritten").input_method == "handwritten"
     with pytest.raises(ValueError):
         NoteCreate(**base, input_method="scanned-by-someone")
+
+
+def _pdf_with_text_over_scan(text):
+    """A page-sized picture with a text layer on top, like a scanner app's output."""
+    import fitz
+    from PIL import Image
+    import io
+    img = Image.new("RGB", (800, 1000), "white")
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_image(page.rect, stream=buf.getvalue())
+    page.insert_text((72, 100), text)
+    return doc.tobytes()
+
+
+def _typed_pdf(text):
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), text)
+    return doc.tobytes()
+
+
+def test_scan_with_embedded_ocr_layer_is_still_read_as_image():
+    pages = ocr.split_pages(_pdf_with_text_over_scan("Qslqe eA6i-a3U gibberish from a scanner layer"))
+    assert pages[0]["text"] is None and pages[0]["image"]
+
+
+def test_typed_pdf_keeps_its_text_layer():
+    pages = ocr.split_pages(_typed_pdf("Revenue grew 12% year over year to 4.2 billion dollars."))
+    assert pages[0]["text"] and pages[0]["image"] is None
+
+
+def test_line_split_differently_by_the_two_readers_is_not_flagged_twice():
+    a = ["Control contrast with time in Bath B - 1 min low 4 min normal"]
+    b = ["Control contrast with time in Bath B - 1 min. low", "4 min normal"]
+    lines = ocr.merge_readings(a, b)
+    assert [l.text for l in lines] == a and all(l.status == "agreed" for l in lines)
+
+
+def test_split_line_with_a_different_number_is_still_flagged_once():
+    a = ["Control contrast with time in Bath B - 1 min low 4 min normal"]
+    b = ["Control contrast with time in Bath B - 1 min low", "7 min normal"]
+    lines = ocr.merge_readings(a, b)
+    assert len(lines) == 1 and lines[0].status == "review" and lines[0].reason == "numbers differ"
+
+
+def test_unrelated_extra_line_is_still_reported():
+    lines = ocr.merge_readings(["Revenue 4.2bn"], ["Revenue 4.2bn", "Margin 31%"])
+    assert [(l.text, l.status) for l in lines] == [("Revenue 4.2bn", "agreed"), ("Margin 31%", "review")]
