@@ -346,20 +346,13 @@ class load_vector_database():
                 )
             )
         
-        # Fusion query combining dense and sparse results with RRF
-        fusion_prefetch = models.Prefetch(
-            prefetch=prefetch_queries,
-            query=models.FusionQuery(fusion=models.Fusion.RRF),  # Reciprocal Rank Fusion
-            limit=limit
-        )
-        
-        # Final query — use RRF fusion result directly (not dense re-rank which discards BM25)
+        # Single-stage RRF fusion over the dense + sparse prefetches (filters are applied
+        # inside each prefetch). Not dense re-rank, which would discard BM25.
         try:
             response = await self.async_qdrant_client.query_points(
                 collection_name=self.collection_name,
-                prefetch=fusion_prefetch,
+                prefetch=prefetch_queries,
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
-                query_filter=global_filter,
                 limit=limit,
                 with_payload=True,
             )
