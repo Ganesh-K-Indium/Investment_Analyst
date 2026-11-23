@@ -192,16 +192,8 @@ async def index_note(note: AnalystNote, previous_chunk_count: int = 0) -> int:
         raise ValueError("Note has no text to index")
     db = _get_db()
     await _ensure_collection(db)
-    emb = await db.generate_embeddings_for_ingestion(chunks, label="analyst note chunk(s)")
-    points = []
-    for i, text in enumerate(chunks):
-        vector = {"dense": emb["dense"][i]}
-        if emb["sparse"][i] is not None:
-            vector["bm25"] = emb["sparse"][i]
-        points.append(models.PointStruct(
-            id=point_id(note.note_id, i), vector=vector,
-            payload={"page_content": text, "metadata": chunk_metadata(note, i, len(chunks))}))
-    await db.async_qdrant_client.upsert(collection_name=NOTES_COLLECTION, points=points, wait=True)
+    await db.upsert_texts([{"id": point_id(note.note_id, i), "text": text, "metadata": chunk_metadata(note, i, len(chunks))} for i, text in enumerate(chunks)],
+                          label="analyst note chunk(s)", wait=True)
     if previous_chunk_count > len(chunks):
         stale = [point_id(note.note_id, i) for i in range(len(chunks), previous_chunk_count)]
         await db.async_qdrant_client.delete(

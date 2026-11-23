@@ -69,10 +69,13 @@ def context_header(meta: dict, section: Optional[str]) -> str:
     return "[" + ", ".join(str(p) for p in parts if p) + "]" if any(parts) else ""
 
 
-def embed_text(doc: Document) -> str:
+def embedding_input(text: str, header: Optional[str] = None) -> str:
     """What is embedded and keyword-indexed for a chunk: its context header (if any) plus its text. The stored text stays clean."""
-    h = (doc.metadata or {}).get("context_header")
-    return f"{h}\n\n{doc.page_content}" if h else doc.page_content
+    return f"{header}\n\n{text}" if header else text
+
+
+def embed_text(doc: Document) -> str:
+    return embedding_input(doc.page_content, (doc.metadata or {}).get("context_header"))
 
 
 def chunk_page_documents(documents: List[Document], text_splitter, context_prefix: bool = False) -> List[Document]:

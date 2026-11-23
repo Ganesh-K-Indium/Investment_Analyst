@@ -6,23 +6,18 @@ import hashlib
 import asyncio
 import logging
 import time
-import traceback
 from datetime import datetime
 import fitz  # PyMuPDF
 from tqdm import tqdm
-import httpx
 from qdrant_client import models
-from qdrant_client.http.exceptions import ResponseHandlingException
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
 from rag.vectordb.client import load_vector_database
 from ingestion.image_data_prep import ImageDescription
 from app.docproc.services.reading.table_extractor import extract_tables_markdown_for_page
 from ingestion.chunking import chunk_page_documents, embed_text, make_text_splitter
 from dotenv import load_dotenv
 
-from app.utils.company_mapping import TICKER_TO_COMPANY, get_company_name, get_ticker
+from app.utils.company_mapping import get_company_name, get_ticker
 from app.utils.usage_tracker import track_usage, record_usage
 from app.utils.filing_types import VALID_FILING_TYPES
 
@@ -71,73 +66,11 @@ def _banner(tag: str, message: str):
     logger.info("[%s] %s", tag, message)
 
 
-QDRANT_UPSERT_BATCH_SIZE = 50
-QDRANT_UPSERT_MAX_ATTEMPTS = 4
-
 async def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids, label: str = "documents"):
-    """
-    Ingest documents with hybrid vectors (dense + sparse).
-
-    Args:
-        db_loader: The load_vector_database instance
-        documents: List of LangChain Document objects
-        doc_ids: List of document IDs (UUIDs)
-        label: Human-facing noun for the stage banners/embedding logs (e.g.
-            "text chunk(s)" or "image caption(s)") — this function is shared
-            by both the text and image ingestion paths.
-    """
-    # Extract text content from documents
-    texts = [embed_text(doc) for doc in documents]   # context header (when present) + text; the stored text stays clean
-
-    # Generate all embeddings (dense + sparse)
-    embeddings_dict = await db_loader.generate_embeddings_for_ingestion(texts, label=label)
-
-    # Build points for Qdrant
-    points = []
-    for i, doc in enumerate(documents):
-        # Build vector dict with dense and sparse embeddings
-        vector_dict = {"dense": embeddings_dict['dense'][i]}
-        
-        # Add sparse vector if available
-        if embeddings_dict['sparse'][i] is not None:
-            vector_dict["bm25"] = embeddings_dict['sparse'][i]
-        
-        # Create point
-        point = models.PointStruct(
-            id=doc_ids[i],
-            vector=vector_dict,
-            payload={
-                "page_content": doc.page_content,
-                "metadata": doc.metadata
-            }
-        )
-        points.append(point)
-    
-    # Upload to Qdrant in small batches with retries. A single large upsert
-    # (568 points x 3072-dim dense vectors) can be dropped mid-request if the
-    # Qdrant server restarts or closes the connection, which previously failed
-    # the whole filing with no retry.
-    logger.info("Uploading %d %s to collection '%s'...", len(points), label, db_loader.collection_name)
-    for start in range(0, len(points), QDRANT_UPSERT_BATCH_SIZE):
-        batch = points[start:start + QDRANT_UPSERT_BATCH_SIZE]
-        for attempt in range(1, QDRANT_UPSERT_MAX_ATTEMPTS + 1):
-            try:
-                await db_loader.async_qdrant_client.upsert(
-                    collection_name=db_loader.collection_name,
-                    points=batch
-                )
-                break
-            except (httpx.TransportError, ResponseHandlingException) as e:
-                if attempt == QDRANT_UPSERT_MAX_ATTEMPTS:
-                    raise
-                wait = 2 ** attempt
-                logger.warning(
-                    "Qdrant upsert batch %d-%d failed (attempt %d/%d: %s). Retrying in %ds...",
-                    start, start + len(batch), attempt, QDRANT_UPSERT_MAX_ATTEMPTS, type(e).__name__, wait,
-                )
-                await asyncio.sleep(wait)
-
-    return len(points)
+    """Embed (dense + sparse) and store Documents under the given ids. Shared by the text and image-caption paths; the embedding, batching
+    and retry logic lives in `load_vector_database.upsert_texts`."""
+    return await db_loader.upsert_texts(
+        [{"id": doc_ids[i], "text": d.page_content, "embed": embed_text(d), "metadata": d.metadata} for i, d in enumerate(documents)], label=label)
 
 def extract_company_name(file_name: str) -> str:
     """

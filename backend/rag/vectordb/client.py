@@ -5,13 +5,15 @@ this module is used for loading the unified RAG database with hybrid search capa
 import asyncio
 import logging
 import time
-from typing import Sequence, Union
+from typing import Any, Dict, List, Sequence, Union
+import httpx
 import tiktoken
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient, AsyncQdrantClient
 from qdrant_client import models
+from qdrant_client.http.exceptions import ResponseHandlingException
 from qdrant_client.http.models import PayloadSchemaType
 from tqdm import tqdm
 import os
@@ -449,4 +451,37 @@ class load_vector_database():
         logger.info(f"Generated embeddings: {len(result['dense'])} dense, {len([s for s in result['sparse'] if s is not None])} sparse")
         return result
 
+    async def upsert_texts(self, chunks: List[Dict[str, Any]], *, label: str = "documents", batch_size: int = 50, wait: bool = False,
+                           max_attempts: int = 4) -> int:
+        """Embed (dense + BM25) and store chunks in this collection. The one place every ingestion path (SEC filings, user documents,
+        analyst notes) goes through, so batching and retries behave the same everywhere.
 
+        Each chunk is a dict: `id` (point id), `text` (what is stored and shown), `metadata`, and optionally `embed` (what is embedded and
+        keyword-indexed instead of `text`, e.g. text with a context header; the stored text stays clean).
+
+        Upserts go in small batches with retries: one large request (hundreds of 3072-dim vectors) can be dropped mid-way if Qdrant restarts or
+        closes the connection, which used to fail a whole filing with no retry. `wait=True` returns once the points are searchable."""
+        if not chunks:
+            return 0
+        emb = await self.generate_embeddings_for_ingestion([c.get("embed") or c["text"] for c in chunks], label=label)
+        points = []
+        for i, c in enumerate(chunks):
+            vector = {"dense": emb["dense"][i]}
+            if emb["sparse"][i] is not None:
+                vector["bm25"] = emb["sparse"][i]
+            points.append(models.PointStruct(id=c["id"], vector=vector, payload={"page_content": c["text"], "metadata": c["metadata"]}))
+        logger.info("Uploading %d %s to collection '%s'...", len(points), label, self.collection_name)
+        for start in range(0, len(points), batch_size):
+            batch = points[start:start + batch_size]
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    await self.async_qdrant_client.upsert(collection_name=self.collection_name, points=batch, wait=wait)
+                    break
+                except (httpx.TransportError, ResponseHandlingException) as e:
+                    if attempt == max_attempts:
+                        raise
+                    pause = 2 ** attempt
+                    logger.warning("Qdrant upsert batch %d-%d failed (attempt %d/%d: %s). Retrying in %ds...",
+                                   start, start + len(batch), attempt, max_attempts, type(e).__name__, pause)
+                    await asyncio.sleep(pause)
+        return len(points)

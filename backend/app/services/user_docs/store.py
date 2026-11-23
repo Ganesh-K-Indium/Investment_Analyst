@@ -68,24 +68,15 @@ async def _ensure() -> Any:
 
 
 def embed_text(chunk: Dict[str, Any]) -> str:
-    h = chunk["metadata"].get("context_header")
-    return f"{h}\n\n{chunk['text']}" if h else chunk["text"]
+    from ingestion.chunking import embedding_input
+    return embedding_input(chunk["text"], chunk["metadata"].get("context_header"))
 
 
 async def index_chunks(chunks: List[Dict[str, Any]]) -> int:
     if not chunks:
         return 0
     db = await _ensure()
-    emb = await db.generate_embeddings_for_ingestion([embed_text(c) for c in chunks], label="user document chunk(s)")
-    points = []
-    for i, c in enumerate(chunks):
-        vec = {"dense": emb["dense"][i]}
-        if emb["sparse"][i] is not None:
-            vec["bm25"] = emb["sparse"][i]
-        points.append(models.PointStruct(id=c["id"], vector=vec, payload={"page_content": c["text"], "metadata": c["metadata"]}))
-    for k in range(0, len(points), 64):
-        await db.async_qdrant_client.upsert(collection_name=COLLECTION, points=points[k:k + 64], wait=True)
-    return len(points)
+    return await db.upsert_texts([{**c, "embed": embed_text(c)} for c in chunks], label="user document chunk(s)", batch_size=64, wait=True)
 
 
 async def _delete(flt: models.Filter) -> None:
