@@ -171,6 +171,8 @@ Or run everything (Postgres + Qdrant + Redis + API + both workers + all MCP serv
 docker compose up --build
 ```
 
+**Market-data providers.** Data Sources > Add data source connects Alpha Vantage, Polygon.io, Finnhub, Twelve Data, Financial Modeling Prep or a custom REST API (for example your own gateway in front of Bloomberg or Refinitiv; they have no open internet API). The key is tested when you connect it, stored encrypted, and used server-side by the quant agent's "Data Sources" sub-agent, which can fetch quotes, daily prices, profiles, statements, news and symbol search where the provider offers them. PostgreSQL databases are connected the same way as before. Run `alembic upgrade head` to create the table. Adding another provider is a short entry in `app/services/data_sources.py`.
+
 **Your own MCP servers.** Under Settings > Quant agent > Your tools a user can connect remote MCP servers (an `https://…/mcp` address, optional sign-in header). The quant agent then has a "Your Tools" sub-agent that can list and call their tools. Only remote servers are accepted (nothing is started on this machine), tools that are not read-only stay blocked until the user allows actions for that server, and servers on this machine or a private network are refused unless `MCP_ALLOW_PRIVATE_URLS=1` (turn it on for a single-user install). Run `alembic upgrade head` once to create the table.
 
 ### 7. Start the web UI
