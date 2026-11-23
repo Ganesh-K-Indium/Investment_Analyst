@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.database.connection import get_db_session
 from app.services.chat import ChatService
+from app.services import run_context
 from app.database.models import AgentType, ChatSession, ChatMessage, ConsolidatedSummary, Portfolio, User
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.utils.time import to_iso_z
@@ -176,13 +177,14 @@ async def generate_session_summary(
     verify_owner(chat_session.user_id, current_user)
 
     try:
-        summary = await ChatService.generate_chat_summary(
-            db=db,
-            session_id=session_id,
-            max_messages=request.max_messages,
-            llm_model=request.llm_model,
-            store_in_db=True
-        )
+        async with run_context.run_context(db, current_user.id, roles=("summarizer",)):
+            summary = await ChatService.generate_chat_summary(
+                db=db,
+                session_id=session_id,
+                max_messages=request.max_messages,
+                llm_model=request.llm_model,
+                store_in_db=True
+            )
 
         if not summary:
             raise HTTPException(status_code=404, detail="Chat session not found")
@@ -223,12 +225,13 @@ async def generate_consolidated_summary(
             verify_owner(sess.user_id, current_user)
 
     try:
-        result = await ChatService.generate_consolidated_summary(
-            db=db,
-            session_ids=request.session_ids,
-            max_messages_per_session=request.max_messages_per_session,
-            llm_model=request.llm_model
-        )
+        async with run_context.run_context(db, current_user.id, roles=("summarizer",)):
+            result = await ChatService.generate_consolidated_summary(
+                db=db,
+                session_ids=request.session_ids,
+                max_messages_per_session=request.max_messages_per_session,
+                llm_model=request.llm_model
+            )
 
         if not result:
             raise HTTPException(

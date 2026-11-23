@@ -414,3 +414,14 @@ class UserDocument(Base):
     confirmed       = Column(JSON, nullable=False, default=list)      # item ids a person confirmed as-is
     created_at  = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ProviderCredential(Base):
+    """A language-model provider key or address a user (or, for user_id "__workspace__", an admin for everyone) saved from Settings.
+    `value_enc` is Fernet-encrypted; it is never returned by any API and never logged. `name` is the environment variable that sets the same thing."""
+    __tablename__ = "provider_credentials"
+
+    user_id    = Column(String, primary_key=True)
+    name       = Column(String, primary_key=True)
+    value_enc  = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

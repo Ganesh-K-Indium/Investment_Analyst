@@ -21,7 +21,7 @@ from app.services.vectordb_manager import get_vectordb_manager
 from app.utils.company_mapping import get_ticker
 from app.utils.time import to_iso_z
 from app.utils.usage_tracker import track_usage
-from app.services import app_settings, usage_ledger
+from app.services import app_settings, usage_ledger, llm_providers, run_context
 from app.services.graph_stream import stream_graph
 from app.services.app_settings import store as settings_store
 import asyncio
@@ -54,7 +54,7 @@ def _maybe_save_debug_response(response_data: dict, prefix: str) -> None:
         logger.warning("Failed to save debug response: %s", e)
 
 
-async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str, settings: dict = None, db=None, user_id=None, emit=None):
+async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str, settings: dict = None, db=None, user_id=None, emit=None, creds: dict = None):
     """Run one LangGraph query end-to-end while capturing tokens and wall-clock time.
 
     `settings` are the user's effective settings (app/services/app_settings): they are made current for the whole run, so every
@@ -63,7 +63,7 @@ async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str, 
 
     Returns (result, usage_summary_dict).
     """
-    with track_usage(run_label) as tracker, app_settings.use(settings):
+    with track_usage(run_label) as tracker, app_settings.use(settings), llm_providers.use_credentials(creds):
         start = time.perf_counter()
         with get_openai_callback() as cb:
             if emit is None:
@@ -314,11 +314,12 @@ async def ask_core(
             "verification": {},
             "clarified": False,
         }
-        settings = await settings_store.effective(db, current_user.id, portfolio.id, payload.settings_override)
+        settings, creds = await run_context.load(db, current_user.id, portfolio.id, payload.settings_override)
+        run_context.preflight(settings, creds, run_context.RAG_ROLES)
         if payload.clarification:
             from langgraph.types import Command
             inputs = Command(resume=payload.clarification)       # continue the paused run with the user's answer
-        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"ask:{thread_id}", settings, db, current_user.id, emit)
+        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"ask:{thread_id}", settings, db, current_user.id, emit, creds)
 
         pending = result.get("__interrupt__")
         if pending:
@@ -609,8 +610,9 @@ Compare {comparison_str} {year_str}:
         }
         
         # Invoke with memory
-        settings = await settings_store.effective(db, current_user.id, portfolio_id)
-        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"compare:{thread_id}", settings, db, current_user.id)
+        settings, creds = await run_context.load(db, current_user.id, portfolio_id)
+        run_context.preflight(settings, creds, run_context.RAG_ROLES)
+        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"compare:{thread_id}", settings, db, current_user.id, None, creds)
 
         # Extract answer and chart URL
         answer = result["messages"][-1].content
@@ -742,7 +744,8 @@ async def alpha_core(
         verify_owner(session.user_id, current_user)
 
         portfolio = session.portfolio
-        alpha_settings = await settings_store.effective(db, current_user.id, portfolio.id)
+        alpha_settings, alpha_creds = await run_context.load(db, current_user.id, portfolio.id)
+        run_context.preflight(alpha_settings, alpha_creds, run_context.RAG_ROLES)
 
         resolved_tickers = []
         for t in payload.tickers:
@@ -810,7 +813,7 @@ async def alpha_core(
                 }
 
                 result, usage_summary = await _run_agent_tracked(
-                    agent, inputs, config, f"alpha:{thread_id}:{ticker}", alpha_settings)
+                    agent, inputs, config, f"alpha:{thread_id}:{ticker}", alpha_settings, None, None, None, alpha_creds)
                 report = result.get("alpha_report") or result["messages"][-1].content
 
                 if on_ticker_done is not None:

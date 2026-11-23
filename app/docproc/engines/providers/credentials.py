@@ -149,6 +149,10 @@ def get(name: str) -> str:
     saved = _saved().get(name)
     if saved:
         return saved.strip()
+    from app.services.llm_providers import context as request_creds     # the signed-in user's own keys (Settings, AI providers)
+    mine = request_creds.get(name)
+    if mine:
+        return mine
     env = (os.getenv(name) or "").strip()
     if not env and name == "GEMINI_API_KEY":
         env = (os.getenv(GEMINI_ALIAS) or "").strip()

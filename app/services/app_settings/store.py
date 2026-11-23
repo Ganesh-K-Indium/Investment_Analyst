@@ -46,11 +46,11 @@ async def reset_layer(db: AsyncSession, scope: str, scope_id: str, section: Opti
     return data
 
 
-async def allowed_models(db: AsyncSession) -> list:
-    """The models users may pick: the built-in gpt-4-series list, extended or narrowed by an admin through the system layer."""
+async def allowed_models(db: AsyncSession) -> Optional[list]:
+    """An administrator's restriction on which model specs users may pick (system layer, models.allowed_models), or None for no restriction."""
     system = await get_layer(db, "system", SYSTEM_SCOPE_ID)
     extra = (system.get("models") or {}).get("allowed_models")
-    return list(extra) if isinstance(extra, list) and extra else schema.ALLOWED_MODELS
+    return list(extra) if isinstance(extra, list) and extra else None
 
 
 async def effective(db: AsyncSession, user_id: Any, portfolio_id: Any = None, override: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
@@ -66,7 +66,10 @@ async def effective(db: AsyncSession, user_id: Any, portfolio_id: Any = None, ov
             logger.warning("Ignoring invalid per-request settings override: %s", e)
     out = resolver.resolve(*layers)
     allowed = await allowed_models(db)
+    from .llm import valid_spec_for_effective
     for key, spec in schema.SECTIONS["models"]["fields"].items():
-        if spec["type"] == "model" and out["models"].get(key) not in allowed:
-            out["models"][key] = spec["default"] if spec["default"] in allowed else allowed[0]
+        if spec["type"] == "model":
+            v = out["models"].get(key)
+            if not valid_spec_for_effective(v) or (allowed and v not in allowed):
+                out["models"][key] = spec["default"] if (not allowed or spec["default"] in allowed) else allowed[0]
     return out

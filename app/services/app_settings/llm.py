@@ -3,7 +3,6 @@ import logging
 from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_openai import ChatOpenAI
 
 from app.utils.usage_tracker import record_usage
 
@@ -40,13 +39,24 @@ def model_for(role: str) -> str:
     return resolver.get("models", f"{role}_model", MODEL_ROLES[role][1])
 
 
-def get_llm(role: str, **overrides: Any) -> ChatOpenAI:
-    """A chat model for `role` using the settings in force. `overrides` (temperature=, timeout=, model=) win for that one call site."""
+def valid_spec_for_effective(spec) -> bool:
+    from app.services.llm_providers.catalog import valid_spec
+    return valid_spec(spec)
+
+
+def get_llm(role: str, **overrides: Any):
+    """A chat model for `role` using the settings in force: any connected provider (OpenAI, Anthropic, Gemini, Ollama, self-hosted).
+    `overrides` (temperature=, timeout=, model=) win for that one call site. Raises ProviderNotConfigured with a message that is safe
+    to show when the job's provider has no key."""
+    from app.services.llm_providers import factory
     m = resolver.current().get("models", {})
-    kwargs = {"model": model_for(role), "temperature": m.get("temperature", 0.0), "timeout": m.get("request_timeout", 60), "max_retries": m.get("max_retries", 2)}
+    spec = overrides.pop("model", None) or model_for(role)
+    temperature = m.get("temperature", 0.0)
     # roles whose output is structured/planning stay deterministic whatever the answer temperature is
     if role in ("router", "grader", "verifier", "rewriter", "macro_planner"):
-        kwargs["temperature"] = 0
+        temperature = 0
+    temperature = overrides.pop("temperature", temperature)
     track = overrides.pop("track", True)  # False where the call site already records its own usage (ALPHA dimensions)
-    kwargs.update(overrides)
-    return ChatOpenAI(callbacks=[UsageCallback(role, kwargs["model"])] if track else None, **kwargs)
+    return factory.build(spec, temperature=temperature, timeout=overrides.pop("timeout", m.get("request_timeout", 60)),
+                         max_retries=overrides.pop("max_retries", m.get("max_retries", 2)),
+                         callbacks=[UsageCallback(role, spec)] if track else None, **overrides)

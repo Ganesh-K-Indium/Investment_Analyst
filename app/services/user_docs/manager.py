@@ -218,7 +218,10 @@ async def _run(doc_id: str, settings: Dict[str, Dict[str, Any]], known: List[str
         if doc is None:
             return
         try:
-            with app_settings.use(settings):
+            from app.services import llm_providers
+            from app.services.llm_providers import service as provider_service
+            creds = await provider_service.credentials_for(db, doc.user_id)          # the owner's own keys, also in the background
+            with app_settings.use(settings), llm_providers.use_credentials(creds):
                 await _ingest(db, doc, settings, known, force_vision)
         except Exception as e:  # noqa: BLE001
             logger.exception("Ingesting %s failed", doc_id)
@@ -267,7 +270,8 @@ async def _read_pdf(db: AsyncSession, doc: UserDocument, pdf: str, settings: Dic
     strategy = (doc.reading or {}).get("strategy") or d["reading_strategy"]
     if d["local_only"]:
         strategy = "economy"
-    plan = plans.resolve({"escalate_below": d["escalate_below"], "token_cap": d["token_cap"], "models": ["gpt-4.1", "gpt-4.1-mini"]}, {"strategy": strategy})
+    plan = plans.resolve({"escalate_below": d["escalate_below"], "token_cap": d["token_cap"],
+                          "models": [d["vision_model_primary"], d["vision_model_secondary"]]}, {"strategy": strategy})
     loop = asyncio.get_running_loop()
     state = {"stage": "reading", "done": 0, "total": 0}
 

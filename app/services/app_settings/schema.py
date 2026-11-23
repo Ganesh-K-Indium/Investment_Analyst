@@ -8,10 +8,11 @@ Precedence when settings are resolved (last wins):
     SYSTEM_DEFAULTS -> system overrides (admin) -> user -> portfolio -> per-request override
 """
 import copy
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-# gpt-4-series only (cost rule). Admins can extend the list through the "system" scope.
-ALLOWED_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4-turbo"]
+# A model is a spec "provider:model" (a bare name means OpenAI); any model a connected provider serves is valid. The defaults below stay in the
+# OpenAI gpt-4 family; an admin can still restrict users to a list through the "system" scope (models.allowed_models).
+PROVIDER_IDS = ["openai", "anthropic", "gemini", "ollama", "custom"]
 
 MODEL_ROLES: Dict[str, Tuple[str, str]] = {
     # role: (label, default model)
@@ -42,7 +43,8 @@ SECTIONS: Dict[str, Dict[str, Any]] = {
         "label": "Models and cost",
         "help": "Which model does each job. Cheaper models for routing and rewriting, stronger ones for the final answer.",
         "fields": {
-            **{f"{r}_model": _f("model", d, label, "", options=ALLOWED_MODELS) for r, (label, d) in MODEL_ROLES.items()},
+            "default_provider": _f("enum", "openai", "Default provider", "Used by presets and by Use for all jobs. Each job below can still use a different provider.", options=PROVIDER_IDS),
+            **{f"{r}_model": _f("model", d, label, "") for r, (label, d) in MODEL_ROLES.items()},
             "temperature": _f("float", 0.0, "Answer temperature", "0 gives the same answer to the same question.", min=0.0, max=1.0),
             "request_timeout": _f("int", 60, "Model timeout (seconds)", "", min=10, max=300),
             "max_retries": _f("int", 2, "Model retries", "", min=0, max=5),
@@ -99,6 +101,8 @@ SECTIONS: Dict[str, Dict[str, Any]] = {
             "local_only": _f("bool", False, "Never send documents to a cloud model", "Forces local OCR only."),
             "escalate_below": _f("float", 0.85, "Escalate when OCR confidence is below", "", min=0.3, max=0.99),
             "token_cap": _f("int", 0, "Token cap per document", "0 = no cap.", min=0, max=5_000_000),
+            "vision_model_primary": _f("model", "openai:gpt-4.1", "Vision model for scans", "Reads pages local OCR is unsure of. Needs a model that accepts images."),
+            "vision_model_secondary": _f("model", "openai:gpt-4.1-mini", "Second vision model", "Cross-checks the first on every scan in Accuracy mode."),
             "index_policy": _f("enum", "after_review", "Index low-confidence text", "after_review = only once a person confirms it (recommended); flagged = index now, marked low confidence; never = keep out of search.", options=["after_review", "flagged", "never"]),
             "auto_detect_type": _f("bool", True, "Detect document type automatically", ""),
             "max_upload_mb": _f("int", 50, "Largest file (MB)", "", min=1, max=500),
@@ -143,7 +147,7 @@ class SettingsError(ValueError):
     pass
 
 
-def _coerce(spec: Dict[str, Any], value: Any, allowed_models: List[str], path: str) -> Any:
+def _coerce(spec: Dict[str, Any], value: Any, allowed_models: Optional[List[str]], path: str) -> Any:
     t = spec["type"]
     if t == "bool":
         if not isinstance(value, bool):
@@ -157,8 +161,11 @@ def _coerce(spec: Dict[str, Any], value: Any, allowed_models: List[str], path: s
             raise SettingsError(f"{path}: must be between {spec.get('min')} and {spec.get('max')}")
         return v
     if t == "model":
-        if value not in allowed_models:
-            raise SettingsError(f"{path}: model {value!r} is not allowed (choose one of {', '.join(allowed_models)})")
+        from app.services.llm_providers.catalog import valid_spec
+        if not valid_spec(value):
+            raise SettingsError(f"{path}: expected a model name such as gpt-4o or anthropic:claude-sonnet-5-5")
+        if allowed_models and value not in allowed_models:
+            raise SettingsError(f"{path}: your administrator limits models to: {', '.join(allowed_models)}")
         return value
     if t == "enum":
         if value not in spec["options"]:
@@ -204,10 +211,9 @@ def _check_custom(section: str, key: str, value: Any, path: str) -> Any:
     return value
 
 
-def validate(patch: Dict[str, Any], allowed_models: List[str] = None) -> Dict[str, Dict[str, Any]]:
+def validate(patch: Dict[str, Any], allowed_models: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
     """Check a (partial) settings object against the schema and return it cleaned. Unknown sections or keys are errors,
     never silently dropped, so a typo cannot look like a saved setting."""
-    allowed_models = allowed_models or ALLOWED_MODELS
     if not isinstance(patch, dict):
         raise SettingsError("settings must be an object")
     out: Dict[str, Dict[str, Any]] = {}
@@ -226,16 +232,15 @@ def validate(patch: Dict[str, Any], allowed_models: List[str] = None) -> Dict[st
     return out
 
 
-def ui_schema(allowed_models: List[str] = None) -> Dict[str, Any]:
+def ui_schema(allowed_models: Optional[List[str]] = None) -> Dict[str, Any]:
     """What the settings page renders its forms from."""
-    allowed_models = allowed_models or ALLOWED_MODELS
     sections = []
     for sid, sec in SECTIONS.items():
         fields = []
         for key, f in sec["fields"].items():
             item = {"key": key, **{k: v for k, v in f.items()}}
-            if f["type"] == "model":
-                item["options"] = allowed_models
+            if f["type"] == "model" and allowed_models:
+                item["options"] = allowed_models                # administrator restriction: the UI offers only these
             fields.append(item)
         sections.append({"id": sid, "label": sec["label"], "help": sec["help"], "fields": fields})
     return {"sections": sections, "defaults": SYSTEM_DEFAULTS, "model_roles": {r: {"label": l, "default": d} for r, (l, d) in MODEL_ROLES.items()}}

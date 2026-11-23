@@ -18,13 +18,17 @@ def test_validate_accepts_good_and_rejects_bad():
     ok = schema.validate({"retrieval": {"top_k": 20, "rerank_provider": "off"}, "models": {"generator_model": "gpt-4.1"}})
     assert ok["retrieval"]["top_k"] == 20
     for bad in ({"nope": {}}, {"retrieval": {"nope": 1}}, {"retrieval": {"top_k": 999}}, {"retrieval": {"top_k": True}},
-                {"models": {"generator_model": "gpt-5.2"}}, {"retrieval": {"sources": ["filings", "bogus"]}}, {"answers": {"verify_mode": "maybe"}}):
+                {"models": {"generator_model": "anthropic:"}}, {"models": {"generator_model": "has space"}}, {"retrieval": {"sources": ["filings", "bogus"]}}, {"answers": {"verify_mode": "maybe"}}):
         with pytest.raises(schema.SettingsError):
             schema.validate(bad)
 
 
-def test_cost_rule_blocks_non_gpt4_models():
-    assert all(m.startswith("gpt-4") for m in schema.ALLOWED_MODELS)
+def test_any_provider_model_is_valid_but_defaults_stay_gpt4_family():
+    ok = schema.validate({"models": {"generator_model": "anthropic:claude-sonnet-5-5", "router_model": "ollama:llama3.1:8b", "grader_model": "custom:my/model-v2"}})
+    assert ok["models"]["generator_model"] == "anthropic:claude-sonnet-5-5"
+    assert all(d.startswith("gpt-4") for _, d in schema.MODEL_ROLES.values())
+    with pytest.raises(schema.SettingsError, match="administrator"):
+        schema.validate({"models": {"generator_model": "gemini:gemini-2.5-pro"}}, allowed_models=["gpt-4o"])
 
 
 def test_custom_framework_validation():
@@ -45,7 +49,8 @@ def test_resolution_order_and_context():
     assert app_settings.get("retrieval", "top_k") == 12
 
 
-def test_model_registry_follows_settings():
+def test_model_registry_follows_settings(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-unit-tests")
     with app_settings.use(resolver.resolve({"models": {"generator_model": "gpt-4.1", "temperature": 0.3}})):
         llm = app_settings.get_llm("generator")
         assert llm.model_name == "gpt-4.1" and llm.temperature == 0.3

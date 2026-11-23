@@ -13,8 +13,11 @@ PRICES = {"gpt-4o": (2.5, 10.0), "gpt-4o-mini": (0.15, 0.6), "gpt-4.1": (2.0, 8.
 
 
 def cost(model: str, prompt: int, completion: int) -> float:
-    pin, pout = PRICES.get(model, (2.5, 10.0))
-    return round((prompt * pin + completion * pout) / 1_000_000, 6)
+    """Estimated USD from list prices; 0 for a model with no known price (other providers, self-hosted): those are counted in tokens only."""
+    price = PRICES.get(model.split(":", 1)[-1] if model.startswith("openai:") else model)
+    if price is None:
+        return 0.0
+    return round((prompt * price[0] + completion * price[1]) / 1_000_000, 6)
 
 
 async def persist(db: AsyncSession, user_id: str, tracker: UsageTracker) -> Dict[str, Any]:

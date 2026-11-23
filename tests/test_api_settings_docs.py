@@ -58,14 +58,16 @@ def client(tmp_path, monkeypatch):
 def test_schema_get_put_validate_reset(client):
     sch = client.get("/settings/schema").json()
     assert {s["id"] for s in sch["sections"]} >= {"models", "retrieval", "answers", "modules", "prompts", "documents", "quant", "ui"}
-    assert all(m.startswith("gpt-4") for m in sch["sections"][0]["fields"][0]["options"])
+    models = {f["key"]: f for sec in sch["sections"] for f in sec["fields"]}
+    assert models["generator_model"]["type"] == "model" and "options" not in models["generator_model"] and models["default_provider"]["options"][:2] == ["openai", "anthropic"]
     r = client.get("/settings").json()
     assert r["saved"] == {} and r["effective"]["retrieval"]["top_k"] == 12
     r = client.put("/settings", json={"retrieval": {"top_k": 20}, "models": {"generator_model": "gpt-4.1"}}).json()
     assert r["saved"]["retrieval"]["top_k"] == 20 and r["effective"]["models"]["generator_model"] == "gpt-4.1" and r["effective"]["retrieval"]["rerank_enabled"] is True
     bad = client.put("/settings", json={"retrieval": {"top_k": 9999}})
     assert bad.status_code == 422 and "top_k" in bad.json()["detail"]
-    assert client.put("/settings", json={"models": {"generator_model": "gpt-5.2"}}).status_code == 422          # cost rule
+    assert client.put("/settings", json={"models": {"generator_model": "anthropic:"}}).status_code == 422          # a provider needs a model
+    assert client.put("/settings", json={"models": {"generator_model": "anthropic:claude-sonnet-5-5"}}).status_code == 200
     assert client.put("/settings", json={"nope": {}}).status_code == 422
     assert client.delete("/settings?section=retrieval").json()["effective"]["retrieval"]["top_k"] == 12
     assert client.delete("/settings?section=bogus").status_code == 422
@@ -97,7 +99,8 @@ def test_frameworks_prompts_usage_and_portfolio_scope(client):
 def test_admin_can_narrow_allowed_models(client):
     client.me["u"] = User(id=1, email="adm@x", username="adm", role="admin", hashed_password="x", is_active=True, token_version=0)
     client.put("/settings/system", json={"models": {"allowed_models": ["gpt-4o-mini"], "generator_model": "gpt-4o-mini"}})
-    assert client.get("/settings/schema").json()["sections"][0]["fields"][0]["options"] == ["gpt-4o-mini"]
+    gen = next(f for sec in client.get("/settings/schema").json()["sections"] for f in sec["fields"] if f["key"] == "generator_model")
+    assert gen["options"] == ["gpt-4o-mini"]
     assert client.put("/settings", json={"models": {"generator_model": "gpt-4o"}}).status_code == 422
     eff = client.get("/settings").json()["effective"]["models"]
     assert eff["grader_model"] == "gpt-4o-mini"                                         # a default the admin removed falls back to an allowed model

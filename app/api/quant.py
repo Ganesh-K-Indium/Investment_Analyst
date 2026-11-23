@@ -16,7 +16,7 @@ from app.database.models import AgentType, MessageRole, User, ChatSession
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.utils.time import to_iso_z
 from app.utils.usage_tracker import track_usage
-from app.services import app_settings, quant_runtime, usage_ledger, mcp_registry
+from app.services import app_settings, quant_runtime, usage_ledger, mcp_registry, llm_providers, run_context
 from app.services.app_settings import store as settings_store
 from app.services.graph_stream import stream_graph
 from datetime import datetime
@@ -191,11 +191,12 @@ async def query_core(
             final_query = f"{payload.query}\n\n[SYSTEM: {context_str}]"
 
         # The user's settings: models per agent, enabled agents, history window, risk profile, step limit
-        settings = await settings_store.effective(db, current_user.id, payload.portfolio_id)
+        settings, creds = await run_context.load(db, current_user.id, payload.portfolio_id)
+        run_context.preflight(settings, creds, run_context.QUANT_ROLES)
         final_query = f"{final_query}\n\n{quant_runtime.request_preamble(settings)}"
 
         # Invoke supervisor with thread_id for memory persistence
-        with track_usage(f"quant:{session_id}") as tracker, app_settings.use(settings):
+        with track_usage(f"quant:{session_id}") as tracker, app_settings.use(settings), llm_providers.use_credentials(creds):
             run_inputs = {"messages": [HumanMessage(content=final_query)]}
             run_config = {"configurable": {"thread_id": f"quant:{session_id}", "user_id": str(current_user.id)},
                           "recursion_limit": settings["quant"]["recursion_limit"]}
