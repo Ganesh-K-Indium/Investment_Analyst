@@ -4,6 +4,7 @@ Finds stock ticker symbols from company names using Tavily search
 """
 import asyncio
 from langchain_openai import ChatOpenAI
+from app.services.quant_runtime import RoleChatModel
 from langchain_community.tools import TavilySearchResults
 from langchain.agents import create_agent
 from dotenv import load_dotenv
@@ -46,7 +47,7 @@ Include exchange suffix if specified (e.g., "0700.HK" for Tencent Hong Kong)
 
 Your response must be ONLY the ticker symbol(s), nothing else."""
     
-    model = ChatOpenAI(model="gpt-4o", temperature=0)
+    model = RoleChatModel(role="quant_agent")
     
     # Create Tavily search tool configured for Yahoo Finance
     tavily_tool = TavilySearchResults(

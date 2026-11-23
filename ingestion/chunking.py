@@ -11,7 +11,8 @@ it, which cut tables mid-row (a continuation chunk had numbers with no row label
 
 Chunks carry `chunk_kind` ("text" | "table") and `chunk_index` (order within the page).
 """
-from typing import List
+import re
+from typing import List, Optional
 
 from langchain_core.documents import Document
 
@@ -47,11 +48,44 @@ def split_table_block(block: str) -> List[str]:
     return out
 
 
-def chunk_page_documents(documents: List[Document], text_splitter) -> List[Document]:
+_SECTION_RE = re.compile(r"^\s*((?:PART\s+[IVX]+\b|Item\s+\d{1,2}[A-C]?\b)[^\n]{0,90})$", re.I | re.M)
+
+
+def find_section(text: str) -> Optional[str]:
+    """The last Part/Item heading on a page ("Item 7. Management's Discussion and Analysis"), or None."""
+    found = _SECTION_RE.findall(text or "")
+    return re.sub(r"\s+", " ", found[-1]).strip(" .") if found else None
+
+
+def context_header(meta: dict, section: Optional[str]) -> str:
+    """One line that says what a chunk is part of, for the embedding input only (contextual retrieval): without it a chunk reading
+    "Revenue increased 12%" says nothing about which company, filing or period it belongs to."""
+    parts = [meta.get("company") or meta.get("ticker"), meta.get("filing_type") or meta.get("doc_type"),
+             f"FY{meta['year']}" if meta.get("year") else None,
+             f"quarter {meta['fiscal_quarter']}" if meta.get("fiscal_quarter") else None,
+             f"period ended {meta['period_end_date']}" if meta.get("period_end_date") else None,
+             f"section: {section}" if section else None,
+             f"page {meta['page_num']}" if meta.get("page_num") is not None else None]
+    return "[" + ", ".join(str(p) for p in parts if p) + "]" if any(parts) else ""
+
+
+def embed_text(doc: Document) -> str:
+    """What is embedded and keyword-indexed for a chunk: its context header (if any) plus its text. The stored text stays clean."""
+    h = (doc.metadata or {}).get("context_header")
+    return f"{h}\n\n{doc.page_content}" if h else doc.page_content
+
+
+def chunk_page_documents(documents: List[Document], text_splitter, context_prefix: bool = False) -> List[Document]:
     chunks: List[Document] = []
+    section: Optional[str] = None
     for doc in documents:
         text, _, tables = doc.page_content.partition(TABLES_MARKER)
         idx = 0
+        if context_prefix:
+            section = find_section(text) or section          # a heading carries forward to the pages after it
+            header = context_header(doc.metadata, section)
+            if header:
+                doc = Document(page_content=doc.page_content, metadata={**doc.metadata, "context_header": header})
         if text.strip():
             for c in text_splitter.split_documents([Document(page_content=text, metadata=dict(doc.metadata))]):
                 c.metadata = {**c.metadata, "chunk_kind": "text", "chunk_index": idx}

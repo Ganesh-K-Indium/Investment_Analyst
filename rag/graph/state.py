@@ -83,3 +83,11 @@ class GraphState(TypedDict):
     comparison_spans_multiple_filings: bool  # True when a requested year range required querying more than one filing/year window
     comparison_span_details: Optional[str]   # Human-readable note on which years/filing types were combined, threaded to the generation prompt
     requested_fiscal_quarters: List[int]    # Fiscal quarter(s) (1-4) explicitly requested in the question (e.g. "Q1 vs Q3"), empty list if not quarter-specific
+    # Configurable-pipeline fields
+    module_id: Optional[str]               # explicit framework chosen in the UI (a custom framework's id)
+    custom_module: Optional[Dict[str, Any]]  # the user's framework this run executes
+    custom_sections: Dict[str, Any]        # evidence grouped by the framework's sections
+    rewrite_count: int                     # corrective-retrieval retries used so far
+    verification: Dict[str, Any]           # answer-vs-evidence check result (rag/verify/numbers.py)
+    clarified: bool                        # the user already answered a clarification question
+    document_ids: Optional[List[str]]       # restrict the search of the user's uploaded documents to these

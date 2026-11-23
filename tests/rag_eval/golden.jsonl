@@ -1,0 +1,11 @@
+# One JSON case per line. Add "expected": {"facts": [...], "sources": [...], "must_not_include": [...]} from the filings to score accuracy.
+{"id": "single-annual-revenue", "question": "What were Amazon's 2025 annual revenues?"}
+{"id": "single-quarter-income", "question": "Meta's Q1 2026 net income"}
+{"id": "multi-year-trend", "question": "Google's annual revenue from 2024 to 2026"}
+{"id": "two-quarter-compare", "question": "Compare Google's Q1 2026 and Q2 2026 revenue"}
+{"id": "segment", "question": "Apple revenue by segment in fiscal 2025"}
+{"id": "geographic", "question": "Microsoft revenue by geography in fiscal 2025"}
+{"id": "company-compare", "question": "Compare Apple and Microsoft operating margin in 2025"}
+{"id": "risk-factors", "question": "What are the main risk factors Tesla discloses?"}
+{"id": "ambiguous-scope", "question": "What is the revenue?", "settings": {"answers": {"clarify_ambiguous": true}}}
+{"id": "units-check", "question": "What was Apple's total net sales in fiscal 2025, with the unit?"}

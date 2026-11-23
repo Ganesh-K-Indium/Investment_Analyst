@@ -8,6 +8,8 @@ import asyncio
 import logging
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from app.services import mcp_registry
+from app.services.quant_runtime import RoleChatModel, harden_tools
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain.agents import create_agent
 from mcp import ClientSession
@@ -17,7 +19,7 @@ load_dotenv()
 
 logger = logging.getLogger("quant.stock_agent.stock_exchange_agent.subagents.options_agent.langgraph_agent")
 
-MCP_URL = "http://localhost:8568/mcp"
+MCP_URL = mcp_registry.url_for("options")
 
 SYSTEM_PROMPT = """You are an options market analyst. Your job is to read pre-computed options data
 and write a plain-English summary that any investor can understand — no jargon, no raw numbers
@@ -152,14 +154,14 @@ async def wait_for_server(url: str, timeout: int = 10) -> bool:
 
 async def create_options_agent(checkpointer=None):
     """Create the Options Intelligence sub-agent connected to port 8568."""
-    model = ChatOpenAI(model="gpt-4o", temperature=0)
+    model = RoleChatModel(role="quant_agent")  # the model follows the user's settings, per request
 
     client = streamablehttp_client(MCP_URL)
     read_stream, write_stream, _ = await client.__aenter__()
     session = ClientSession(read_stream, write_stream)
     await session.__aenter__()
     await session.initialize()
-    tools = await load_mcp_tools(session)
+    tools = harden_tools(await load_mcp_tools(session), "options_agent")
 
     agent = create_agent(
         model=model,

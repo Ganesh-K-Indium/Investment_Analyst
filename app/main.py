@@ -75,6 +75,8 @@ from app.api.edgar import router as edgar_router
 from app.api.auth import router as auth_router
 from app.api.reports import router as reports_router
 from app.api.analysis_tasks import router as analysis_tasks_router
+from app.api.settings import router as settings_router
+from app.api.user_documents import router as user_documents_router
 from app.api.documents import router as documents_router
 from app.api.notes import router as notes_router
 import app.api.rag as rag_router_module
@@ -208,6 +210,8 @@ app.include_router(chats_router)
 app.include_router(form4_router)
 app.include_router(edgar_router)
 app.include_router(analysis_tasks_router)
+app.include_router(settings_router)
+app.include_router(user_documents_router)
 app.include_router(documents_router)
 app.include_router(notes_router)
 

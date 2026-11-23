@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 from langchain_core.documents import Document
 from rag.graph.doc_kinds import is_analyst_note, split_notes
 from langchain_openai import ChatOpenAI
+from app.services import app_settings
+from rag.prompts import registry as prompt_registry
+from app.services.app_settings import get_llm
 from langchain_groq import ChatGroq
 from langchain_core.messages import AIMessage
 from langchain_tavily import TavilySearch
@@ -563,7 +566,7 @@ def preprocess_and_analyze_query(state):
 
     # UNIVERSAL APPROACH: Single LLM call for sub-query analysis
     logger.info("---UNIVERSAL SUB-QUERY ANALYSIS---")
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = get_llm("router")
     
     from rag.prompts.prompts import get_universal_sub_query_analyzer
     sub_query_analyzer = get_universal_sub_query_analyzer(llm)
@@ -887,6 +890,45 @@ async def _analyst_note_documents(config, tickers, query) -> list:
     return docs
 
 
+async def _user_upload_documents(state, config, query) -> list:
+    """Chunks from the user's own uploaded documents (statements, broker notes, models, scans) that they may read. Relevance decides
+    which documents answer: the question need not name the file. [] when no user is in the config, when they have none, or on error."""
+    user_id = ((config or {}).get("configurable") or {}).get("user_id")
+    if not user_id:
+        return []
+    try:
+        from app.services.user_docs import store as udocs
+        top_k = int(app_settings.get("retrieval", "top_k", 12))
+        docs = await udocs.search(user_id, query, limit=max(4, min(10, top_k // 2)), doc_ids=state.get("document_ids") or None)
+    except Exception as e:
+        logger.warning(f" User documents skipped: {e}")
+        return []
+    if docs:
+        logger.info(f" Added {len(docs)} chunk(s) from the user's uploaded documents")
+    return docs
+
+
+async def _rerank_documents(query: str, docs: list, cut: bool) -> list:
+    """Re-rank text chunks with the user's chosen re-ranker (see rag/retrieval/rerank.py). Images keep their place after the text."""
+    r = app_settings.current().get("retrieval", {})
+    provider = r.get("rerank_provider", "local") if r.get("rerank_enabled", True) else "off"
+    if provider == "off" or len(docs) < 2:
+        return docs
+    from rag.retrieval.rerank import rerank
+    text = [d for d in docs if getattr(d, "metadata", {}).get("content_type", "text") != "image"]
+    other = [d for d in docs if d not in text]
+    groups: dict = {}
+    for d in text:
+        groups.setdefault(d.metadata.get("company") or d.metadata.get("ticker") or "", []).append(d)
+    keep = r.get("rerank_top_n", 8) if cut else None
+    out: list = []
+    for g in groups.values():
+        ranked, ran = await asyncio.to_thread(rerank, query, g, provider, keep)
+        logger.info(f"[RERANK] {provider}: {len(g)} -> {len(ranked)} chunks{'' if ran else ' (re-ranker unavailable, retrieval order kept)'}")
+        out.extend(ranked)
+    return out + other
+
+
 async def retrieve(state, config):
     """
     Retrieve documents relevant to the question using ticker-based collections.
@@ -1064,6 +1106,10 @@ async def retrieve(state, config):
                         target_tickers.add(company_name.lower())
 
     logger.info(f" Identified Target Tickers: {list(target_tickers) or 'None'}")
+    note_tickers = set(target_tickers)  # the user's notes are about these companies even when SEC filings are switched off
+    if "filings" not in app_settings.get("retrieval", "sources", ["filings"]):
+        logger.info(" Source choice excludes SEC filings: skipping filing collections")
+        target_tickers = set()
 
     # If primary_ticker was empty, set it to the first found ticker for downstream consistency
     if not primary_ticker and target_tickers:
@@ -1252,7 +1298,7 @@ async def retrieve(state, config):
             # Search every ticker concurrently, then merge in a stable order
             direct_tickers = sorted(target_tickers)
             direct_outcomes = await asyncio.gather(
-                *[_search_ticker(direct_mode_query, t, requested_fiscal_quarters, 10, 100, 100) for t in direct_tickers],
+                *[_search_ticker(direct_mode_query, t, requested_fiscal_quarters, int(app_settings.get("retrieval", "top_k", 10)), 100, 100) for t in direct_tickers],
                 return_exceptions=True,
             )
 
@@ -1287,9 +1333,18 @@ async def retrieve(state, config):
             logger.info(f"    {content_types['text']} text,  {content_types['image']} images")
             logger.info(f"    {', '.join(sorted(companies_found))}")
 
+    # Second-stage re-ranking (cross-encoder) of the filing chunks, per company so one company cannot crowd out another.
+    # Comparison / segment / sub-query searches are only re-ordered, never cut: they deliberately fetch one slice per question.
+    all_documents = await _rerank_documents(direct_mode_query, all_documents,
+                                            cut=not (state.get("is_comparison_mode") or needs_sub_queries or query_type in ("segment", "geographic")))
+
     # The caller's own analyst notes (separate collection, owner/visibility-filtered), appended after the filing
-    # chunks. Only runs when the route put the authenticated user in the graph config.
-    all_documents.extend(await _analyst_note_documents(config, target_tickers, question))
+    # chunks. Only runs when the route put the authenticated user in the graph config, and the user's source choice allows notes.
+    if "notes" in app_settings.get("retrieval", "sources", ["notes"]):
+        all_documents.extend(await _analyst_note_documents(config, note_tickers, question))
+    # The user's own uploaded documents (any file type), searched by relevance for the question that was actually asked.
+    if "uploads" in app_settings.get("retrieval", "sources", ["uploads"]):
+        all_documents.extend(await _user_upload_documents(state, config, direct_mode_query))
 
     # Final summary
     logger.info(f"\n{'='*80}")
@@ -1354,13 +1409,7 @@ def generate(state):
     else:
         logger.info(f"[DOC SIZE] {used_tokens:,} tokens across {len(documents)} chunks (budget: {_CONTEXT_TOKEN_BUDGET:,})")
 
-    llm = ChatOpenAI(
-        model="gpt-4o",
-        temperature=0,  # filing Q&A: same question, same answer
-        timeout=60,  # Set timeout to prevent hanging
-        request_timeout=30,
-        max_retries=2
-    )
+    llm = get_llm("generator")  # temperature/timeout/retries come from the user's settings (default 0: same question, same answer)
     # Extract query type and alpha pillar to format prompt appropriately
     sub_query_analysis = state.get("sub_query_analysis", {})
     query_type = sub_query_analysis.get("query_type", "general")
@@ -1469,7 +1518,7 @@ def grade_documents(state):
         }
 
     # Initialize financial analyst grader with gpt-4o
-    llm = ChatOpenAI(model="gpt-4o", temperature=0, timeout=60, max_retries=2)
+    llm = get_llm("grader")
     analyst_grader = get_financial_analyst_grader_chain(llm)
 
     # Concatenate all documents into a single massive context window
@@ -3337,7 +3386,7 @@ def alpha_generate_report(state):
         get_alpha_report_combiner_chain
     )
 
-    llm = ChatOpenAI(model="gpt-4o", temperature=0, timeout=90, max_retries=2)
+    llm = get_llm("analysis", timeout=90, track=False)  # this node records usage per dimension itself
     
     # Helper to format documents
     def format_docs(docs):
@@ -3818,7 +3867,7 @@ def scenario_generate_report(state):
         get_scenario_report_combiner_chain,
     )
 
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    llm = get_llm("analysis", temperature=0)
 
     def _format_bucket(bucket_key, budget=_SCENARIO_BUCKET_TOKENS):
         """
@@ -4175,10 +4224,10 @@ def macro_analyze_query(state):
     class MacroQueryPlan(BaseModel):
         queries: List[MacroExtraction] = Field(description="List of macro queries to execute.")
 
-    planner_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    planner_llm = get_llm("macro_planner")
     structured_llm = planner_llm.with_structured_output(MacroQueryPlan)
     
-    system_prompt = MACRO_PLANNER_SYSTEM_PROMPT
+    system_prompt = prompt_registry.apply("macro.planner", MACRO_PLANNER_SYSTEM_PROMPT)
     
     try:
         plan = structured_llm.invoke([
@@ -4352,9 +4401,9 @@ def macro_format_answer(state):
         data_context += attribution_text
         logger.info("   Source attribution attached")
 
-    synthesis_prompt = MACRO_SYNTHESIS_PROMPT + "\n\n" + MACRO_FEW_SHOT
+    synthesis_prompt = prompt_registry.apply("macro.synthesis", MACRO_SYNTHESIS_PROMPT) + "\n\n" + MACRO_FEW_SHOT
     
-    generator_llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    generator_llm = get_llm("macro_writer", temperature=0)
     response = generator_llm.invoke([
         SystemMessage(content=synthesis_prompt),
         HumanMessage(content=f"Question: {question}\n\nCalculated Data:\n{data_context}")

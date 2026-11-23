@@ -15,6 +15,10 @@ from app.services.chat import ChatService
 from app.database.models import AgentType, MessageRole, User, ChatSession
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.utils.time import to_iso_z
+from app.utils.usage_tracker import track_usage
+from app.services import app_settings, quant_runtime, usage_ledger, mcp_registry
+from app.services.app_settings import store as settings_store
+from app.services.graph_stream import stream_graph
 from datetime import datetime
 import json
 import os
@@ -105,6 +109,7 @@ async def query_core(
     background_tasks: Optional[BackgroundTasks],
     db: AsyncSession,
     current_user: User,
+    emit=None,
 ) -> StockQueryResponse:
     """Core /quant/query logic, shared by the HTTP route and the background job runner."""
     verify_user_id_matches(payload.user_id, current_user)
@@ -173,17 +178,36 @@ async def query_core(
         context_tags = []
         
         if payload.postgres_integration_id:
-            context_tags.append(f"use integration_id={payload.postgres_integration_id}")
+            from app.services.integration import IntegrationService
+            from app.services.mcp_auth import sign_integration
+            integ = await IntegrationService.get_integration(db, payload.postgres_integration_id)
+            if integ is None or str(integ.user_id) != str(current_user.id):
+                raise HTTPException(status_code=403, detail="That database connection does not belong to you.")
+            # the model gets a signed token, not a bare id: the Postgres tool verifies it and the owner, so it cannot be pointed at someone else's database
+            context_tags.append(f"use integration_id={sign_integration(current_user.id, integ.id)}")
             
         if context_tags:
             context_str = " | ".join(context_tags)
             final_query = f"{payload.query}\n\n[SYSTEM: {context_str}]"
 
+        # The user's settings: models per agent, enabled agents, history window, risk profile, step limit
+        settings = await settings_store.effective(db, current_user.id, payload.portfolio_id)
+        final_query = f"{final_query}\n\n{quant_runtime.request_preamble(settings)}"
+
         # Invoke supervisor with thread_id for memory persistence
-        response = await stock_supervisor.ainvoke(
-            {"messages": [HumanMessage(content=final_query)]},
-            config={"configurable": {"thread_id": f"quant:{session_id}"}}
-        )
+        with track_usage(f"quant:{session_id}") as tracker, app_settings.use(settings):
+            run_inputs = {"messages": [HumanMessage(content=final_query)]}
+            run_config = {"configurable": {"thread_id": f"quant:{session_id}", "user_id": str(current_user.id)},
+                          "recursion_limit": settings["quant"]["recursion_limit"]}
+            if emit is None:
+                response = await stock_supervisor.ainvoke(run_inputs, config=run_config)
+            else:
+                response = await stream_graph(stock_supervisor, run_inputs, run_config, emit)
+        try:
+            usage = await usage_ledger.persist(db, current_user.id, tracker)
+        except Exception:
+            logger.exception("Could not store quant usage")
+            usage = None
         
         # Extract only NEW messages from this turn
         all_messages = response['messages']
@@ -239,13 +263,54 @@ async def query_core(
             agent_used=agent_used,
             metadata={
                 "message_count": len(all_messages),
-                "new_messages": len(new_messages)
+                "new_messages": len(new_messages),
+                "usage": usage,
             }
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Error processing stock query: %s", e)
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
+
+
+@router.post("/query/stream")
+async def stream_stock_query(payload: StockQueryRequest, db: AsyncSession = Depends(get_db_session), current_user: User = Depends(get_current_user)):
+    """Server-sent events for a quant query: {"type":"step","node"} as each agent finishes, tokens, then {"type":"done","result"} or {"type":"error"}."""
+    import asyncio
+    from fastapi.responses import StreamingResponse
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def emit(event):
+        await queue.put(event)
+
+    async def run():
+        try:
+            result = await query_core(payload, None, db, current_user, emit=emit)
+            await queue.put({"type": "done", "result": result.model_dump()})
+        except HTTPException as e:
+            await queue.put({"type": "error", "status": e.status_code, "detail": e.detail})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Streaming quant query failed")
+            await queue.put({"type": "error", "status": 500, "detail": str(e)})
+        finally:
+            await queue.put(None)
+
+    task = asyncio.create_task(run())
+
+    async def events():
+        try:
+            while True:
+                ev = await queue.get()
+                if ev is None:
+                    break
+                yield f"data: {json.dumps(ev, default=str)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.get("/health", response_model=HealthStatusResponse)
@@ -276,12 +341,8 @@ async def health_check():
             logger.warning("Server check failed for %s: %s", url, e)
             return False
     
-    # Check all MCP servers
-    servers_status = {
-        "stock_information": check_server("http://localhost:8565/mcp"),
-        "technical_analysis": check_server("http://localhost:8566/mcp"),
-        "research": check_server("http://localhost:8567/mcp"),
-    }
+    # Check every MCP server the registry lists (including Options and Postgres, which the old check skipped)
+    servers_status = {m["key"]: check_server(m["url"]) for m in mcp_registry.all_servers() if m["enabled"]}
     
     # Determine overall health
     all_servers_ready = all(servers_status.values())

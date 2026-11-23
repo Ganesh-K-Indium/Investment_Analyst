@@ -4,6 +4,9 @@ from datetime import datetime
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
+from rag.prompts import registry
+
+
 def _current_year() -> int:
     return datetime.now().year
 from schemas.models import UniversalSubQueryAnalysis, SimpleDocumentGrade
@@ -19,12 +22,8 @@ Some chunks begin with "[ANALYST NOTE". These are the user's OWN research notes:
 - If a note adds nothing relevant to the question, ignore it. Do not mention that you ignored it."""
 
 
-def get_rag_chain(llm_generate, query_type: str = "general", alpha_pillar: str = None, comparison_span_note: str = None,
-                  analyst_notes: bool = False):
-    cur_year = _current_year()
-    
-    # Base system prompt used for all queries
-    base_prompt = f"""You are a senior Investment Analyst with expertise in equity research, SEC filings (10-K, 10-Q, 8-K, and the foreign private issuer forms 20-F and 6-K), and financial statement analysis. You think like a Wall Street analyst — data-driven, precise, and always connecting numbers to investment implications.
+def _generator_base_prompt(cur_year: int) -> str:
+    return f"""You are a senior Investment Analyst with expertise in equity research, SEC filings (10-K, 10-Q, 8-K, and the foreign private issuer forms 20-F and 6-K), and financial statement analysis. You think like a Wall Street analyst — data-driven, precise, and always connecting numbers to investment implications.
 
 **YOUR ROLE:**
 Provide accurate, insightful, investment-grade answers grounded strictly in the provided documents. Go beyond data presentation — interpret what the numbers mean for investors.
@@ -50,6 +49,16 @@ Documents come from SEC 10-K, 10-Q, 8-K, 20-F, and 6-K filings, or real-time web
 - Before stating a total, verify it against the sum of the parts you just listed
 - If the parts sum to the stated total (within rounding), state the total as-is
 - If they DON'T reconcile, do not silently present both numbers as if consistent. Either: (a) derive the total yourself as the sum of the parts and say so, or (b) if the source document shows an explicit reconciling item (e.g. corporate/eliminations, hedging gains/losses, unallocated costs) account for it and name it — never leave an unexplained gap between a breakdown and its total"""
+
+
+def get_rag_chain(llm_generate, query_type: str = "general", alpha_pillar: str = None, comparison_span_note: str = None,
+                  analyst_notes: bool = False):
+    cur_year = _current_year()
+    
+    # Base system prompt used for all queries
+    base_prompt = _generator_base_prompt(cur_year)
+    base_prompt = registry.apply("generator.system", base_prompt) + registry.style_suffix()
+
 
     # Dynamic rule injection
     dynamic_rules = ""
@@ -1472,7 +1481,7 @@ Produce the final comprehensive scenario report.""")
     return prompt | llm | StrOutputParser()
 
 
-MACRO_PLANNER_SYSTEM_PROMPT = """
+_MACRO_PLANNER_DEFAULT = """
 You are an expert macroeconomic query planner.
 Your job is to analyze the user's question and extract structured query parameters.
 
@@ -1656,7 +1665,7 @@ Metrics
 """
 
 
-MACRO_SYNTHESIS_PROMPT = """
+_MACRO_SYNTHESIS_DEFAULT = """
 You are an expert macroeconomic research analyst.
 
 Your job is to take the provided economic data and turn it into a clear, accurate, and professional response that gives both:
@@ -2072,3 +2081,8 @@ Source: Federal Funds Effective Rate (FEDFUNDS) — Federal Reserve Economic Dat
 
 
 
+
+
+# Public names kept for importers; the registry applies the user's override where each prompt is used.
+MACRO_PLANNER_SYSTEM_PROMPT = _MACRO_PLANNER_DEFAULT
+MACRO_SYNTHESIS_PROMPT = _MACRO_SYNTHESIS_DEFAULT

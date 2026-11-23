@@ -1,3 +1,7 @@
+# This branch has its own compose project, so its containers and volumes (Postgres, Redis, Qdrant if local) are separate from the
+# older branch's: the demo branch keeps its database untouched, and this one migrates its own copy. Override with COMPOSE_PROJECT_NAME.
+name: ${COMPOSE_PROJECT_NAME:-investment_analyst_new}
+
 services:
   postgres:
     image: postgres:16-alpine

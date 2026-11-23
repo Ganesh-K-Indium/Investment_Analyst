@@ -75,3 +75,16 @@ def test_prose_blocks_are_not_data_tables_but_real_tables_are():
     one_row = {"headers": ["Thereafter", "2,753"], "rows": []}
     assert not _is_data_table(prose) and not _is_data_table(footnote) and not _is_data_table(caption)
     assert _is_data_table(repurchase) and _is_data_table(text_only) and _is_data_table(dated) and _is_data_table(one_row)
+
+
+def test_context_prefix_goes_to_the_embedding_text_not_the_stored_text():
+    from chunking import embed_text, find_section
+    meta = {"company": "ACME", "filing_type": "10-K", "year": 2024, "page_num": 31}
+    pages = [Document(page_content="Item 7. Management's Discussion and Analysis\nRevenue rose 12%.", metadata=dict(meta)),
+             Document(page_content="Costs rose 3%.", metadata={**meta, "page_num": 32})]
+    chunks = chunk_page_documents(pages, FakeSplitter(), context_prefix=True)
+    assert chunks[0].page_content.startswith("Item 7") and "[ACME" not in chunks[0].page_content
+    assert embed_text(chunks[0]).startswith("[ACME, 10-K, FY2024, section: Item 7. Management's Discussion and Analysis, page 31]")
+    assert "section: Item 7" in embed_text(chunks[1]) and "page 32" in embed_text(chunks[1])       # heading carried forward
+    assert "context_header" not in chunk_page_documents(pages, FakeSplitter())[0].metadata       # off by default
+    assert find_section("no headings here") is None

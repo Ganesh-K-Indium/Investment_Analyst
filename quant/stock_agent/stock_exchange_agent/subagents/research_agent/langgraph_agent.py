@@ -7,6 +7,8 @@ import asyncio
 import aiohttp
 import logging
 from langchain_openai import ChatOpenAI
+from app.services import mcp_registry
+from app.services.quant_runtime import RoleChatModel, harden_tools
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain.agents import create_agent
 from mcp import ClientSession
@@ -171,8 +173,8 @@ You: [Call analyze_mda_sentiment, include quarter dates]
 - Never mix data from different dates without clearly labeling each date
 - Always provide full, unshortened URLs for transparency"""
     
-    model = ChatOpenAI(model="gpt-4o", temperature=0)
-    MCP_HTTP_STREAM_URL = "http://localhost:8567/mcp"  # Research MCP server
+    model = RoleChatModel(role="quant_agent")  # the model follows the user's settings, per request
+    MCP_HTTP_STREAM_URL = mcp_registry.url_for("research")  # Research MCP server
     
     # Keep the client and session open for the lifetime of the agent
     client = streamablehttp_client(MCP_HTTP_STREAM_URL)
@@ -180,7 +182,7 @@ You: [Call analyze_mda_sentiment, include quarter dates]
     session = ClientSession(read_stream, write_stream)
     await session.__aenter__()
     await session.initialize()
-    tools = await load_mcp_tools(session)
+    tools = harden_tools(await load_mcp_tools(session), "research_agent")
     
     agent = create_agent(
         model=model,

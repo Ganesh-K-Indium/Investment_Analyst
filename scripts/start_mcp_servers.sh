@@ -130,6 +130,7 @@ start_server() {
     
     # Start the server
     cd "$server_dir"
+    export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"   # the servers import app.* (registry, auth)
     nohup python "$script" > "$log_file" 2>&1 &
     local pid=$!
     echo $pid > "$pid_file"

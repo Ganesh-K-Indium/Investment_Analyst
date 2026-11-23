@@ -354,3 +354,63 @@ class AnalystNoteInclusion(Base):
     user_id    = Column(String, primary_key=True)  # users.id as string
     note_id    = Column(String, ForeignKey("analyst_notes.note_id", ondelete="CASCADE"), primary_key=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SettingsRecord(Base):
+    """One layer of user-configurable settings (see app/services/app_settings). scope: system | user | portfolio."""
+    __tablename__ = "app_settings"
+
+    scope      = Column(String, primary_key=True)
+    scope_id   = Column(String, primary_key=True)
+    data       = Column(JSON, nullable=False, default=dict)
+    version    = Column(Integer, nullable=False, default=1)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class UsageEvent(Base):
+    """Tokens spent by one model role during one request, for the monthly budget and the cost display."""
+    __tablename__ = "usage_events"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    user_id     = Column(String, nullable=False, index=True)
+    run_label   = Column(String, nullable=True)
+    role        = Column(String, nullable=False)
+    model       = Column(String, nullable=False)
+    prompt_tokens     = Column(Integer, nullable=False, default=0)
+    completion_tokens = Column(Integer, nullable=False, default=0)
+    cost_usd    = Column(Float, nullable=False, default=0.0)
+    created_at  = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class UserDocument(Base):
+    """A file a user brought (statement, broker note, model, scan...). Content is searchable through the `user_documents` Qdrant
+    collection; this row holds ownership, status and review state. Files live under data/user_docs/<id>/."""
+    __tablename__ = "user_documents"
+
+    id          = Column(String, primary_key=True)
+    user_id     = Column(String, nullable=False, index=True)
+    filename    = Column(String, nullable=False)
+    ext         = Column(String, nullable=False)
+    sha256      = Column(String, nullable=False, index=True)
+    size_bytes  = Column(Integer, nullable=False, default=0)
+    doc_type    = Column(String, nullable=True)      # user's choice or the detected type (broker_note, bank_statement, model, ...)
+    label       = Column(String, nullable=True)      # what the document says it is (its title)
+    entity      = Column(String, nullable=True)      # company / ticker it is about
+    period      = Column(String, nullable=True)      # e.g. FY2025, Q3 2025
+    tags        = Column(JSON, nullable=False, default=list)
+    visibility  = Column(String, nullable=False, default="private")   # private | workspace
+    status      = Column(String, nullable=False, default="queued", index=True)  # queued | processing | needs_review | ready | failed
+    stage       = Column(String, nullable=True)
+    progress    = Column(JSON, nullable=False, default=dict)          # {"done": n, "total": n}
+    error       = Column(Text, nullable=True)
+    pages       = Column(Integer, nullable=False, default=0)
+    stats       = Column(JSON, nullable=False, default=dict)
+    reading     = Column(JSON, nullable=False, default=dict)          # how it was read (plan), for transparency
+    index_policy    = Column(String, nullable=False, default="after_review")
+    indexed_pages   = Column(JSON, nullable=False, default=list)      # page numbers whose chunks are in the index
+    chunk_count     = Column(Integer, nullable=False, default=0)
+    review_pending  = Column(Integer, nullable=False, default=0)
+    corrections     = Column(JSON, nullable=False, default=dict)      # {item id: {"original", "value"}}
+    confirmed       = Column(JSON, nullable=False, default=list)      # item ids a person confirmed as-is
+    created_at  = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

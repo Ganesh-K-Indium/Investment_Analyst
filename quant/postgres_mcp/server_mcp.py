@@ -37,14 +37,19 @@ postgres_server = FastMCP(
     """
 )
 
-async def _get_creds_async(integration_id: int) -> Optional[Dict]:
-    """Helper to fetch credentials asynchronously."""
+async def _get_creds_async(access_token: str) -> Optional[Dict]:
+    """Credentials for the integration named by a SIGNED token, and only if it belongs to the user the token was issued to."""
     from app.database.connection import SessionLocal
     from app.services.integration import IntegrationService
+    from app.services.mcp_auth import AuthError, verify_integration
 
+    try:
+        user_id, integration_id = verify_integration(access_token)
+    except AuthError:
+        return None
     async with SessionLocal() as db:
         integration = await IntegrationService.get_integration(db, integration_id)
-        if integration and integration.vendor == "postgresql":
+        if integration and integration.vendor == "postgresql" and str(integration.user_id) == user_id:
             return integration.credentials
         return None
 
@@ -55,10 +60,10 @@ async def _get_creds_async(integration_id: int) -> Optional[Dict]:
     List all user tables in the connected PostgreSQL database.
     
     Args:
-        integration_id: int - The integration ID for the Postgres database.
+        integration_id: str - The access token from the user's prompt ([SYSTEM: ... integration_id=...]). Pass it exactly as given.
     """
 )
-async def list_tables(integration_id: int) -> str:
+async def list_tables(integration_id: str) -> str:
     creds = await _get_creds_async(integration_id)
     if not creds:
         return "Error: Invalid or non-PostgreSQL integration."
@@ -69,7 +74,8 @@ async def list_tables(integration_id: int) -> str:
             port=creds.get("port"),
             dbname=creds.get("database"),
             user=creds.get("user"),
-            password=creds.get("password")
+            password=creds.get("password"),
+            options="-c default_transaction_read_only=on -c statement_timeout=15000", connect_timeout=10
         )
         cursor = conn.cursor()
         cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public';")
@@ -90,10 +96,13 @@ async def list_tables(integration_id: int) -> str:
     
     Args:
         table_name: str - The name of the table.
-        integration_id: int - The integration ID for the Postgres database.
+        integration_id: str - The access token from the user's prompt ([SYSTEM: ... integration_id=...]). Pass it exactly as given.
     """
 )
-async def get_schema_and_sample(table_name: str, integration_id: int) -> str:
+async def get_schema_and_sample(table_name: str, integration_id: str) -> str:
+    import re
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]{0,62}", table_name or ""):
+        return "Error: invalid table name."  # the name is placed in SQL below, so only plain identifiers are accepted
     creds = await _get_creds_async(integration_id)
     if not creds:
         return "Error: Invalid or non-PostgreSQL integration."
@@ -104,7 +113,8 @@ async def get_schema_and_sample(table_name: str, integration_id: int) -> str:
             port=creds.get("port"),
             dbname=creds.get("database"),
             user=creds.get("user"),
-            password=creds.get("password")
+            password=creds.get("password"),
+            options="-c default_transaction_read_only=on -c statement_timeout=15000", connect_timeout=10
         )
         cursor = conn.cursor()
         
@@ -171,15 +181,15 @@ async def get_schema_and_sample(table_name: str, integration_id: int) -> str:
     
     Args:
         query: str - The SQL query to execute.
-        integration_id: int - The integration ID for the Postgres database.
+        integration_id: str - The access token from the user's prompt ([SYSTEM: ... integration_id=...]). Pass it exactly as given.
     """
 )
-async def query_database(query: str, integration_id: int) -> str:
-    if not query.strip().upper().startswith("SELECT") and not query.strip().upper().startswith("WITH"):
-        return "Security Error: Only SELECT or WITH (CTEs) queries are allowed. DML/DDL is strictly prohibited."
-    
-    if "LIMIT " not in query.upper():
-        query = query.rstrip(";") + " LIMIT 100;"
+async def query_database(query: str, integration_id: str) -> str:
+    from app.services.mcp_auth import AuthError, check_select_only
+    try:
+        query = check_select_only(query)
+    except AuthError as e:
+        return f"Security Error: {e}"
 
     creds = await _get_creds_async(integration_id)
     if not creds:
@@ -192,7 +202,7 @@ async def query_database(query: str, integration_id: int) -> str:
             dbname=creds.get("database"),
             user=creds.get("user"),
             password=creds.get("password"),
-            options="-c default_transaction_read_only=on"
+            options="-c default_transaction_read_only=on -c statement_timeout=15000", connect_timeout=10
         )
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(query)
@@ -218,4 +228,6 @@ async def query_database(query: str, integration_id: int) -> str:
 
 if __name__ == "__main__":
     logger.info("Starting Postgres MCP Server...")
-    postgres_server.run(transport="streamable-http", host="0.0.0.0", port=8570)
+    from app.services import mcp_registry
+    _srv = mcp_registry.server("postgres")
+    postgres_server.run(transport="streamable-http", host=_srv["bind"], port=_srv["port"])

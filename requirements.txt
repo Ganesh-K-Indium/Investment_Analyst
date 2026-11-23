@@ -155,3 +155,8 @@ markdown>=3.6
 
 # SSL/Network utilities for corporate environments
 pip-system-certs>=5.3
+pymupdf>=1.24.0
+openpyxl>=3.1.0
+python-docx>=1.1.0
+python-pptx>=1.0.0
+pyyaml>=6.0

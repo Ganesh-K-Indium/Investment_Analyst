@@ -162,4 +162,6 @@ async def get_options_expiration_dates(ticker: str) -> dict:
 # ─── Entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    options_server.run(transport="streamable-http", host="0.0.0.0", port=8568)
+    from app.services import mcp_registry
+    _srv = mcp_registry.server("options")
+    options_server.run(transport="streamable-http", host=_srv["bind"], port=_srv["port"])

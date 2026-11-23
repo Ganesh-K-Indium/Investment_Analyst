@@ -12,13 +12,12 @@ from rag.graph.nodes import (web_search, retrieve,
                          show_result, integrate_web_search,
                          preprocess_and_analyze_query,
                          generate_comparison_chart,
-                         detect_alpha_query, alpha_dimension_retrieve, alpha_generate_report,
-                         detect_scenario_query, scenario_data_retrieve, scenario_generate_report, scenario_load_notes,
-                         detect_macro_query, macro_analyze_query,
-                         macro_fetch_and_calculate, macro_format_answer)
-from rag.graph.edges import (route_question, decide_to_generate,
-                         decide_chart_generation,
-                         route_alpha_workflow,
+                         alpha_dimension_retrieve, alpha_generate_report,
+                         scenario_data_retrieve, scenario_generate_report, scenario_load_notes,
+                         macro_analyze_query, macro_fetch_and_calculate, macro_format_answer)
+from rag.graph.extras import (route_query, route_workflow, clarify, rewrite_query, verify_answer,
+                         custom_retrieve, custom_generate, decide_after_grade)
+from rag.graph.edges import (route_question, decide_chart_generation,
                          route_after_retrieve,
                          route_after_alpha_retrieve)
 from rag.graph.benchmark import time_node, node_timer
@@ -26,8 +25,10 @@ from rag.graph.benchmark import time_node, node_timer
 logger = logging.getLogger("rag.graph.builder")
 
 load_dotenv()
-os.environ["GROQ_API_KEY"]=os.getenv("GROQ_API_KEY")
-os.environ["TAVILY_API_KEY"]=os.getenv("TAVILY_API_KEY")
+# Provider keys are optional: set them only when present, so a missing key fails where it is used instead of crashing at import.
+for _key in ("GROQ_API_KEY", "TAVILY_API_KEY"):
+    if os.getenv(_key):
+        os.environ[_key] = os.getenv(_key)
 
 class BuildingGraph:
     """
@@ -50,131 +51,86 @@ class BuildingGraph:
         
         workflow = StateGraph(GraphState)
 
-        # Add preprocessing node FIRST - analyzes query for sub-queries
-        workflow.add_node("preprocess", time_node("preprocess")(preprocess_and_analyze_query))
-        
-        # Add ALPHA Framework nodes
-        workflow.add_node("detect_alpha", time_node("detect_alpha")(detect_alpha_query))
-        workflow.add_node("alpha_retrieve", time_node("alpha_retrieve")(alpha_dimension_retrieve))
-        workflow.add_node("alpha_generate", time_node("alpha_generate")(alpha_generate_report))
+        # --- nodes -------------------------------------------------------------------------------------------------
+        def add(name, fn):
+            workflow.add_node(name, time_node(name)(fn))
 
-        # Add Scenario Framework nodes (Bull / Bear / Base)
-        workflow.add_node("detect_scenario", time_node("detect_scenario")(detect_scenario_query))
-        workflow.add_node("scenario_retrieve", time_node("scenario_retrieve")(scenario_data_retrieve))
-        workflow.add_node("scenario_notes", time_node("scenario_notes")(scenario_load_notes))
-        workflow.add_node("scenario_generate", time_node("scenario_generate")(scenario_generate_report))
-        
-        # Add Macro Framework nodes (3-step pipeline)
-        workflow.add_node("detect_macro", time_node("detect_macro")(detect_macro_query))
-        workflow.add_node("macro_analyze", time_node("macro_analyze")(macro_analyze_query))
-        workflow.add_node("macro_calculate", time_node("macro_calculate")(macro_fetch_and_calculate))
-        workflow.add_node("macro_format", time_node("macro_format")(macro_format_answer))
-        
-        # Add nodes with timing decorators
-        workflow.add_node("web_search", time_node("web_search")(web_search))
-        workflow.add_node("retrieve", time_node("retrieve")(retrieve))
-        workflow.add_node("grade_documents", time_node("grade_documents")(grade_documents))
-        workflow.add_node("generate", time_node("generate")(generate))
-        workflow.add_node("show_result", time_node("show_result")(show_result))
-        workflow.add_node("integrate_web_search", time_node("integrate_web_search")(integrate_web_search))
-        workflow.add_node("generate_chart", time_node("generate_chart")(generate_comparison_chart))
-        
-        # START -> detect_alpha (first: check for ALPHA buy-timing queries)
-        workflow.add_edge(START, "detect_alpha")
+        add("route_query", route_query)          # one decision: ALPHA | scenario | macro | the user's own framework | standard RAG
+        add("clarify", clarify)                  # optional pause to ask which company (human in the loop)
+        add("preprocess", preprocess_and_analyze_query)
 
-        # detect_alpha -> detect_scenario (second: check for Bull/Bear/Base scenario queries)
-        workflow.add_edge("detect_alpha", "detect_scenario")
+        # built-in frameworks
+        add("alpha_retrieve", alpha_dimension_retrieve)
+        add("alpha_generate", alpha_generate_report)
+        add("scenario_retrieve", scenario_data_retrieve)
+        add("scenario_notes", scenario_load_notes)
+        add("scenario_generate", scenario_generate_report)
+        add("macro_analyze", macro_analyze_query)
+        add("macro_calculate", macro_fetch_and_calculate)
+        add("macro_format", macro_format_answer)
 
-        # detect_scenario -> detect_macro (third: check for Macro queries)
-        workflow.add_edge("detect_scenario", "detect_macro")
+        # the user's own frameworks
+        add("custom_retrieve", custom_retrieve)
+        add("custom_generate", custom_generate)
 
-        # detect_macro -> route_alpha_workflow: alpha | scenario | macro | normal
+        # standard pipeline
+        add("web_search", web_search)
+        add("retrieve", retrieve)
+        add("grade_documents", grade_documents)
+        add("rewrite_query", rewrite_query)      # corrective retrieval
+        add("generate", generate)
+        add("verify_answer", verify_answer)      # figures in the answer vs the evidence
+        add("integrate_web_search", integrate_web_search)
+        add("generate_chart", generate_comparison_chart)
+        add("show_result", show_result)
+
+        # --- edges -------------------------------------------------------------------------------------------------
+        workflow.add_edge(START, "route_query")
         workflow.add_conditional_edges(
-            "detect_macro",
-            route_alpha_workflow,
-            {
-                "alpha": "alpha_retrieve",
-                "scenario": "scenario_retrieve",
-                "macro": "macro_analyze",
-                "normal": "preprocess",
-            },
+            "route_query", route_workflow,
+            {"alpha": "alpha_retrieve", "scenario": "scenario_retrieve", "macro": "macro_analyze", "custom": "custom_retrieve", "normal": "clarify"},
         )
+        workflow.add_edge("clarify", "preprocess")
 
-        # ALPHA workflow: alpha_retrieve -> conditional -> alpha_generate / generate
+        # ALPHA: retrieve -> alpha_generate | generate (single pillar) | show_result (insider trading is pre-built)
         workflow.add_conditional_edges(
-            "alpha_retrieve",
-            route_after_alpha_retrieve,
-            {
-                "alpha_generate": "alpha_generate",
-                "generate": "generate",
-                "show_result": "show_result",   # insider_trading bypasses generate
-            }
+            "alpha_retrieve", route_after_alpha_retrieve,
+            {"alpha_generate": "alpha_generate", "generate": "generate", "show_result": "show_result"},
         )
         workflow.add_edge("alpha_generate", "show_result")
 
-        # Scenario workflow: scenario_retrieve -> scenario_generate -> show_result -> END
         workflow.add_edge("scenario_retrieve", "scenario_notes")
         workflow.add_edge("scenario_notes", "scenario_generate")
         workflow.add_edge("scenario_generate", "show_result")
-        
-        # Macro workflow: macro_analyze -> macro_calculate -> macro_format -> show_result -> END
+
         workflow.add_edge("macro_analyze", "macro_calculate")
         workflow.add_edge("macro_calculate", "macro_format")
         workflow.add_edge("macro_format", "show_result")
-        
-        # Preprocess -> Router (Vectorstore vs WebSearch)
-        workflow.add_conditional_edges(
-            "preprocess",
-            route_question,
-            {
-                "vectorstore": "retrieve",
-                "web_search": "web_search",
-            },
-        )
 
-        # Retrieve: comparison mode skips grading, normal mode grades documents
-        workflow.add_conditional_edges(
-            "retrieve",
-            route_after_retrieve,
-            {
-                "generate": "generate",
-                "grade_documents": "grade_documents",
-            },
-        )
+        workflow.add_edge("custom_retrieve", "custom_generate")
+        workflow.add_edge("custom_generate", "verify_answer")
 
+        # standard: preprocess -> vectorstore | web
+        workflow.add_conditional_edges("preprocess", route_question, {"vectorstore": "retrieve", "web_search": "web_search"})
+        workflow.add_conditional_edges("retrieve", route_after_retrieve, {"generate": "generate", "grade_documents": "grade_documents"})
         workflow.add_edge("web_search", "generate")
 
+        # grade -> generate | rewrite and search again (user's retry count) | web fallback (if the user allows it)
         workflow.add_conditional_edges(
-            "grade_documents",
-            decide_to_generate,
-            {
-                "generate": "generate",
-                "integrate_web_search": "integrate_web_search",
-            },
+            "grade_documents", decide_after_grade,
+            {"generate": "generate", "rewrite": "rewrite_query", "integrate_web_search": "integrate_web_search"},
         )
-
-        # integrate_web_search → generate directly (no re-grading)
+        workflow.add_edge("rewrite_query", "retrieve")
         workflow.add_edge("integrate_web_search", "generate")
 
-        # Generate -> chart decision
-        workflow.add_edge("generate", "decide_chart")
-
-        # Add a decision node that routes to either chart generation or show_result
-        workflow.add_node("decide_chart", lambda state: state)  # Pass-through node
+        workflow.add_edge("generate", "verify_answer")
         workflow.add_conditional_edges(
-            "decide_chart",
-            decide_chart_generation,
-            {
-                "generate_chart": "generate_chart",
-                "show_result": "show_result"
-            }
+            "verify_answer", decide_chart_generation,
+            {"generate_chart": "generate_chart", "show_result": "show_result"},
         )
-        
-        # Chart generation goes to show_result after completing
         workflow.add_edge("generate_chart", "show_result")
-        
         workflow.add_edge("show_result", END)
-        
+
         # Compile with checkpointer for memory and HITL interrupts
         # Compile with checkpointer for memory
         if checkpointer:
@@ -212,7 +168,6 @@ async def main():
             "web_searched": False,
             "vectorstore_quality": "none",
             "needs_web_fallback": False,
-            "retry_count": 0,
             "retry_count": 0,
             "document_sources": {},
             "citation_info": [],

@@ -7,6 +7,8 @@ import aiohttp
 import logging
 from datetime import datetime
 from langchain_openai import ChatOpenAI
+from app.services import mcp_registry
+from app.services.quant_runtime import RoleChatModel, harden_tools
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain.agents import create_agent
 from mcp import ClientSession
@@ -183,8 +185,8 @@ User: "RSI for AAPL"
 → Call get_stock_rsi(ticker="AAPL", start_date="{date_1_year_ago}", end_date="{today}")
 """
     
-    model = ChatOpenAI(model="gpt-4o", temperature=0)
-    MCP_HTTP_STREAM_URL = "http://localhost:8566/mcp"  # Technical Analysis MCP server
+    model = RoleChatModel(role="quant_agent")  # the model follows the user's settings, per request
+    MCP_HTTP_STREAM_URL = mcp_registry.url_for("technical")  # Technical Analysis MCP server
     
     # Keep the client and session open for the lifetime of the agent
     client = streamablehttp_client(MCP_HTTP_STREAM_URL)
@@ -192,7 +194,7 @@ User: "RSI for AAPL"
     session = ClientSession(read_stream, write_stream)
     await session.__aenter__()
     await session.initialize()
-    tools = await load_mcp_tools(session)
+    tools = harden_tools(await load_mcp_tools(session), "technical_analysis_agent")
     
     agent = create_agent(
         model=model,

@@ -4,8 +4,9 @@ RAG endpoints (ask and compare) with portfolio integration and chat persistence
 import logging
 import time
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import HumanMessage
@@ -20,6 +21,9 @@ from app.services.vectordb_manager import get_vectordb_manager
 from app.utils.company_mapping import get_ticker
 from app.utils.time import to_iso_z
 from app.utils.usage_tracker import track_usage
+from app.services import app_settings, usage_ledger
+from app.services.graph_stream import stream_graph
+from app.services.app_settings import store as settings_store
 import asyncio
 import uuid
 import json
@@ -50,28 +54,37 @@ def _maybe_save_debug_response(response_data: dict, prefix: str) -> None:
         logger.warning("Failed to save debug response: %s", e)
 
 
-async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str):
-    """Run one LangGraph query end-to-end while capturing total tokens (via
-    LangChain's get_openai_callback, which aggregates every ChatOpenAI call
-    made anywhere in the graph during this invoke — main RAG generation,
-    grading, verification, and — for ALPHA — all 5 dimension chains plus the
-    combiner) and wall-clock time. Isolated per call via a contextvar
-    (app/utils/usage_tracker.track_usage), so concurrent requests (e.g. one
-    ainvoke per ticker in an ALPHA portfolio run) don't interfere with each
-    other's totals.
+async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str, settings: dict = None, db=None, user_id=None, emit=None):
+    """Run one LangGraph query end-to-end while capturing tokens and wall-clock time.
+
+    `settings` are the user's effective settings (app/services/app_settings): they are made current for the whole run, so every
+    node builds its models and reads its options from them. Every model call reports to the usage tracker through the model
+    registry's callback; with `db` and `user_id` the per-role totals are also stored for the monthly budget.
 
     Returns (result, usage_summary_dict).
     """
-    with track_usage(run_label) as tracker:
+    with track_usage(run_label) as tracker, app_settings.use(settings):
         start = time.perf_counter()
         with get_openai_callback() as cb:
-            result = await agent.ainvoke(inputs, config)
+            if emit is None:
+                result = await agent.ainvoke(inputs, config)
+            else:
+                result = await stream_graph(agent, inputs, config, emit, _ANSWER_NODES)
         tracker.record(
             stage="graph_total", model="gpt-4o/gpt-4o-mini (all nodes)",
             prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
             total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - start,
         )
-    return result, tracker.summary()
+    summary = tracker.summary()
+    if db is not None and user_id is not None:
+        try:
+            summary["cost"] = await usage_ledger.persist(db, user_id, tracker)
+        except Exception:
+            logger.exception("Could not store usage for %s", run_label)
+    return result, summary
+
+
+_ANSWER_NODES = {"generate", "custom_generate", "alpha_generate", "scenario_generate", "macro_format"}
 
 
 def _saved_document(doc, answer: str) -> dict:
@@ -134,6 +147,10 @@ def _build_citation_info(result: dict) -> list:
 class AskInput(BaseModel):
     query: str = Field(..., description="User query")
     thread_id: str = Field(..., description="Session thread_id (required for portfolio context)")
+    framework: Optional[str] = Field(None, description="Id of one of the user's own analysis frameworks to run")
+    document_ids: Optional[List[str]] = Field(None, description="Restrict the search of the user's uploaded documents to these ids")
+    clarification: Optional[str] = Field(None, description="The user's answer to a clarification question the previous call returned")
+    settings_override: Optional[Dict[str, Any]] = Field(None, description="Per-request settings that win over the saved ones (same shape as /settings)")
 
 
 class CompareInput(BaseModel):
@@ -191,6 +208,7 @@ async def ask_core(
     payload: AskInput,
     db: AsyncSession,
     current_user: User,
+    emit=None,
 ) -> dict:
     """
     Core /ask logic, factored out so both the synchronous HTTP route and the
@@ -241,13 +259,14 @@ async def ask_core(
             }
         )
 
-        # Save user message
-        await ChatService.add_message(
-            db=db,
-            session_id=thread_id,
-            role=MessageRole.USER,
-            content=query
-        )
+        # Save user message (not again when this call only answers a clarification question)
+        if not payload.clarification:
+            await ChatService.add_message(
+                db=db,
+                session_id=thread_id,
+                role=MessageRole.USER,
+                content=query
+            )
 
         # Register session with VectorDBManager (for context tracking)
         vectordb_mgr = get_vectordb_manager()
@@ -287,9 +306,25 @@ async def ask_core(
             "year_start": None,
             "year_end": None,
             "chart_url": None,
-            "chart_filename": None
+            "chart_filename": None,
+            "module_id": payload.framework,
+            "document_ids": payload.document_ids or [],
+            "custom_module": None,
+            "rewrite_count": 0,
+            "verification": {},
+            "clarified": False,
         }
-        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"ask:{thread_id}")
+        settings = await settings_store.effective(db, current_user.id, portfolio.id, payload.settings_override)
+        if payload.clarification:
+            from langgraph.types import Command
+            inputs = Command(resume=payload.clarification)       # continue the paused run with the user's answer
+        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"ask:{thread_id}", settings, db, current_user.id, emit)
+
+        pending = result.get("__interrupt__")
+        if pending:
+            ask = getattr(pending[0], "value", pending[0])
+            return {"clarification_needed": True, "question": (ask or {}).get("question", "Can you clarify?"), "thread_id": thread_id,
+                    "portfolio_id": portfolio.id, "usage": usage_summary}
 
         # Extract answer
         answer = result["messages"][-1].content
@@ -321,6 +356,7 @@ async def ask_core(
                 "sub_query_results": result.get("sub_query_results", {}),
                 "intermediate_message": result.get("Intermediate_message", ""),
                 "ticker": result.get("ticker"),
+                "verification": result.get("verification", {}),
                 "usage": usage_summary
             },
             token_count=usage_summary["total_tokens"]
@@ -356,7 +392,9 @@ async def ask_core(
             "citation_info": _build_citation_info(result),
             "summary_strategy": result.get("summary_strategy", "single_source"),
             "sub_query_analysis": result.get("sub_query_analysis", {}),
-            "sub_query_results": result.get("sub_query_results", {})
+            "sub_query_results": result.get("sub_query_results", {}),
+            "verification": result.get("verification", {}),
+            "usage": usage_summary,
         }
         
         _maybe_save_debug_response(response_data, "ask")
@@ -368,6 +406,48 @@ async def ask_core(
     except Exception as e:
         logger.error("Error in /ask: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ask/stream")
+async def ask_stream(
+    payload: AskInput,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Server-sent events: {"type":"step","node"} as each stage finishes, {"type":"token","text"} while the answer is written, then
+    {"type":"done","result":{...same as /ask...}} (or {"type":"error"}). The final answer in "done" replaces the streamed text:
+    verification may add a note after the last token."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def emit(event: dict):
+        await queue.put(event)
+
+    async def run():
+        try:
+            result = await ask_core(payload, db, current_user, emit=emit)
+            await queue.put({"type": "done", "result": result})
+        except HTTPException as e:
+            await queue.put({"type": "error", "status": e.status_code, "detail": e.detail})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Streaming ask failed")
+            await queue.put({"type": "error", "status": 500, "detail": str(e)})
+        finally:
+            await queue.put(None)
+
+    task = asyncio.create_task(run())
+
+    async def events():
+        try:
+            while True:
+                ev = await queue.get()
+                if ev is None:
+                    break
+                yield f"data: {json.dumps(ev, default=str)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.post("/compare")
@@ -529,7 +609,8 @@ Compare {comparison_str} {year_str}:
         }
         
         # Invoke with memory
-        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"compare:{thread_id}")
+        settings = await settings_store.effective(db, current_user.id, portfolio_id)
+        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"compare:{thread_id}", settings, db, current_user.id)
 
         # Extract answer and chart URL
         answer = result["messages"][-1].content
@@ -661,6 +742,7 @@ async def alpha_core(
         verify_owner(session.user_id, current_user)
 
         portfolio = session.portfolio
+        alpha_settings = await settings_store.effective(db, current_user.id, portfolio.id)
 
         resolved_tickers = []
         for t in payload.tickers:
@@ -728,7 +810,7 @@ async def alpha_core(
                 }
 
                 result, usage_summary = await _run_agent_tracked(
-                    agent, inputs, config, f"alpha:{thread_id}:{ticker}")
+                    agent, inputs, config, f"alpha:{thread_id}:{ticker}", alpha_settings)
                 report = result.get("alpha_report") or result["messages"][-1].content
 
                 if on_ticker_done is not None:

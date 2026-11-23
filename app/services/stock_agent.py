@@ -4,6 +4,8 @@ Manages initialization and lifecycle of the stock analysis multi-agent system
 """
 import asyncio
 import socket
+from app.services import mcp_registry
+from app.services.quant_runtime import RoleChatModel
 import logging
 from urllib.parse import urlparse
 from typing import Optional
@@ -90,12 +92,7 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
 
         # Wait for MCP servers to be ready (with timeout)
         logger.info("Checking MCP servers...")
-        servers = [
-            ("http://localhost:8565/mcp", "Stock Information"),
-            ("http://localhost:8566/mcp", "Technical Analysis"),
-            ("http://localhost:8567/mcp", "Research"),
-            ("http://localhost:8568/mcp", "Options Intelligence"),
-        ]
+        servers = [(m["url"], m["label"]) for m in mcp_registry.all_servers() if m["enabled"] and m["key"] != "postgres"]
         
         server_status = {}
         servers_ready = []
@@ -109,10 +106,8 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
         if not all(servers_ready):
             logger.warning("WARNING: Some MCP servers are not ready. Stock analysis may have limited functionality.")
             logger.warning("   To enable full functionality, start the MCP servers:")
-            logger.warning("   - Stock Information: port 8565")
-            logger.warning("   - Technical Analysis: port 8566")
-            logger.warning("   - Research: port 8567")
-            logger.warning("   - Options Intelligence: port 8568")
+            for m in mcp_registry.all_servers():
+                logger.warning("   - %s: %s", m["label"], m["url"])
         
         # Import here to avoid circular dependencies
         try:
@@ -128,6 +123,7 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             from stock_exchange_agent.subagents.research_agent.langgraph_agent import create_research_agent
             from stock_exchange_agent.subagents.options_agent.langgraph_agent import create_options_agent
             from stock_exchange_agent.subagents.postgres_agent.langgraph_agent import create_postgres_agent
+            from stock_exchange_agent.subagents.documents_agent.langgraph_agent import create_documents_agent
             from langgraph_supervisor import create_supervisor
         except ImportError as e:
             logger.error(f"ERROR: Failed to import stock agent modules: {e}")
@@ -220,10 +216,18 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             logger.warning(f"   WARNING: Failed to create postgres_agent: {e}")
             postgres_agent = None
 
-        logger.info(f"Created {len(agents_created)}/6 sub-agents: {', '.join(agents_created)}")
+        # Documents Agent (the user's uploaded files; runs in this process, no MCP server)
+        try:
+            documents_agent = await create_documents_agent(checkpointer=_stock_saver)
+            agents_created.append("documents")
+        except Exception as e:
+            logger.warning(f"   WARNING: Failed to create documents_agent: {e}")
+            documents_agent = None
+
+        logger.info(f"Created {len(agents_created)}/7 sub-agents: {', '.join(agents_created)}")
         
         # Check if we have at least one working agent
-        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent, postgres_agent] if a is not None]
+        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent, postgres_agent, documents_agent] if a is not None]
         
         if len(available_agents) == 0:
             logger.error("ERROR: No agents were successfully created")
@@ -247,6 +251,8 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             agent_names.append("options_intelligence_agent")
         if postgres_agent:
             agent_names.append("postgres_agent")
+        if documents_agent:
+            agent_names.append("documents_agent")
 
         supervisor_prompt = f"""You are a stock analysis supervisor managing {len(available_agents)} agents:
 
@@ -261,6 +267,7 @@ CAPABILITIES:
 - options_intelligence_agent: Options chain analysis — put/call ratio, OI concentration zones, max pain,
   smart money signals, unusual activity, support/resistance from OI, OI visualization charts
 - postgres_agent: Analyzes user's private PostgreSQL database, schema, and executes read-only SQL queries
+- documents_agent: The user's OWN uploaded files (statements, broker notes, models, scans, decks): search them, list them, read their tables
 
 ROUTING RULES:
 - Company name mentioned -> ticker_finder_agent FIRST (if available)
@@ -271,6 +278,7 @@ ROUTING RULES:
 - Options chain / put-call ratio / max pain / OI distribution / open interest analysis /
   smart money options / unusual options activity / options positioning -> options_intelligence_agent (if available)
 - "my database", "SQL", "query my data", "table", "schema", private postgres data -> postgres_agent (if available)
+- "my document", "my file", "the model I uploaded", "my broker note", "my statement", "in the PDF/spreadsheet I gave you" -> documents_agent (if available). To compare an uploaded model with live market data, use documents_agent for the figures first, then the market agents; always keep the document's stated units
 - CROSS-AGENT SYNERGY: If a user asks to query their database for tickers/companies and then analyze them, route to postgres_agent FIRST, then hand off the results to the appropriate stock/research agents.
 - MISSING DATA / MISMATCH: If an agent cannot find matching data (e.g. portfolio companies do not match database tickers), ALWAYS POLITELY ASK THE USER a clarifying question to resolve the mismatch or ask them how they want to proceed, rather than just stating an error occurred.
 - If an agent is not available, apologize and suggest alternatives
@@ -284,7 +292,7 @@ CRITICAL:
 - Preserve all source attribution with dates and URLs"""
         
         supervisor_graph = create_supervisor(
-            model=ChatOpenAI(temperature=0, model_name="gpt-4o"),
+            model=RoleChatModel(role="quant_supervisor"),  # follows the requesting user's settings
             agents=available_agents,
             prompt=supervisor_prompt,
             add_handoff_back_messages=True,
@@ -293,7 +301,7 @@ CRITICAL:
         _stock_supervisor = supervisor_graph.compile(checkpointer=_stock_saver)
         
         # Set recursion limit to prevent infinite loops
-        _stock_supervisor.recursion_limit = 50
+        # (the per-run limit comes from the user's settings, passed in the run config by the API)
         
         _agents_initialized = True
         logger.info("Stock Analysis Supervisor initialized successfully")

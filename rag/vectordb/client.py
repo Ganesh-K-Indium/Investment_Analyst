@@ -45,7 +45,7 @@ class load_vector_database():
         Initialize unified vector database loader with hybrid search.
         
         Args:
-            use_hybrid_search: If True, use hybrid search with dense, sparse (BM25), and ColBERT vectors.
+            use_hybrid_search: If True, use hybrid search: dense + sparse (BM25) fused with RRF. (Re-ranking happens after retrieval, see rag/retrieval/rerank.py.)
             collection_name: Name of the collection to use. If None, uses default unified collection.
             create_if_missing: If True, creates the collection if it doesn't exist.
         """

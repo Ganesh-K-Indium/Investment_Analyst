@@ -19,7 +19,7 @@ from langchain_openai import OpenAIEmbeddings
 from rag.vectordb.client import load_vector_database
 from image_data_prep import ImageDescription
 from table_extractor import extract_tables_markdown_for_page
-from chunking import chunk_page_documents, make_text_splitter
+from chunking import chunk_page_documents, embed_text, make_text_splitter
 from dotenv import load_dotenv
 
 # Import company mapping utility
@@ -95,7 +95,7 @@ async def ingest_documents_with_hybrid_vectors(db_loader, documents, doc_ids, la
             by both the text and image ingestion paths.
     """
     # Extract text content from documents
-    texts = [doc.page_content for doc in documents]
+    texts = [embed_text(doc) for doc in documents]   # context header (when present) + text; the stored text stays clean
 
     # Generate all embeddings (dense + sparse)
     embeddings_dict = await db_loader.generate_embeddings_for_ingestion(texts, label=label)
@@ -822,7 +822,8 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                 _banner("TEXT 2/3", "Splitting extracted text into chunks...")
                 text_splitter = make_text_splitter()
                 # tiktoken encoding of the full document is CPU-bound — offload.
-                text_chunks = await asyncio.to_thread(chunk_page_documents, documents, text_splitter)
+                text_chunks = await asyncio.to_thread(chunk_page_documents, documents, text_splitter,
+                                                      os.getenv("CONTEXTUAL_PREFIX", "1").lower() not in ("0", "false", "no"))
                 logger.info("Created %d text chunks", len(text_chunks))
 
                 # Generate deterministic UUIDs using the common function

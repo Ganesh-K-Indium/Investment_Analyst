@@ -10,6 +10,7 @@ from app.utils.time import to_iso_z
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from langchain_openai import ChatOpenAI
+from app.services.app_settings import get_llm
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import json
@@ -166,7 +167,7 @@ class ChatService:
         conversation_text = "\n\n".join(conversation[-20:])
 
         # 3. LLM Setup
-        llm = ChatOpenAI(model=llm_model, temperature=0.1)
+        llm = get_llm("summarizer", temperature=0.1, **({} if llm_model == "gpt-4o-mini" else {"model": llm_model}))
         prompt = ChatPromptTemplate.from_template("""
             Generate a structured report summarizing this investment analysis conversation.
 
@@ -307,7 +308,7 @@ class ChatService:
         else:
             focus = "document-based research, portfolio analysis, and knowledge base insights"
 
-        llm = ChatOpenAI(model=llm_model, temperature=0.1)
+        llm = get_llm("summarizer", temperature=0.1, **({} if llm_model == "gpt-4o-mini" else {"model": llm_model}))
         prompt = ChatPromptTemplate.from_template("""
             Generate a consolidated investment analysis report from multiple chat sessions.
             Focus on: {focus}

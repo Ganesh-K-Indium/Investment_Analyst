@@ -6,6 +6,8 @@ import asyncio
 import aiohttp
 import logging
 from langchain_openai import ChatOpenAI
+from app.services import mcp_registry
+from app.services.quant_runtime import RoleChatModel, harden_tools
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain.agents import create_agent
 from mcp import ClientSession
@@ -111,8 +113,8 @@ User: "Show me TSLA holder info"
 You: "Which holder information would you like? Options: major_holders, institutional_holders, mutualfund_holders, insider_transactions, insider_purchases, insider_roster_holders"
 """
     
-    model = ChatOpenAI(model="gpt-4o", temperature=0)
-    MCP_HTTP_STREAM_URL = "http://localhost:8565/mcp"
+    model = RoleChatModel(role="quant_agent")  # the model follows the user's settings, per request
+    MCP_HTTP_STREAM_URL = mcp_registry.url_for("stock_info")
     
     # Keep the client and session open for the lifetime of the agent
     client = streamablehttp_client(MCP_HTTP_STREAM_URL)
@@ -120,7 +122,7 @@ You: "Which holder information would you like? Options: major_holders, instituti
     session = ClientSession(read_stream, write_stream)
     await session.__aenter__()
     await session.initialize()
-    tools = await load_mcp_tools(session)
+    tools = harden_tools(await load_mcp_tools(session), "stock_information")
     
     agent = create_agent(
         model=model,
