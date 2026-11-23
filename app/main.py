@@ -112,9 +112,16 @@ _default_origins = "http://localhost:5173,http://127.0.0.1:5173"
 _cors_origins = [
     o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()
 ]
+# Vite bumps to 5174, 5175... when 5173 is busy, so by default also accept
+# localhost/127.0.0.1 on ANY port (dev convenience). In production set
+# CORS_ALLOWED_ORIGIN_REGEX="" (empty) to rely on the explicit list only.
+_cors_origin_regex = os.getenv(
+    "CORS_ALLOWED_ORIGIN_REGEX", r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+) or None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
