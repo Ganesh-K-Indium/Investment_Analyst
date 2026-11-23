@@ -12,7 +12,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from app.core.paths import MACRO_DIR
+from app.core.paths import BACKEND_ROOT, MACRO_DIR
 
 DATA_DIR = MACRO_DIR
 METADATA_FILE = DATA_DIR / "metadata.json"
@@ -111,7 +111,7 @@ def trigger_auto_reingestion_if_stale():
     import subprocess
     import sys
     
-    ingestion_script = PROJECT_ROOT / "ingestion" / "ingest_macro_data.py"
+    ingestion_script = BACKEND_ROOT / "ingestion" / "ingest_macro_data.py"
     if not ingestion_script.exists():
         logger.warning(f"Ingestion script not found at {ingestion_script}")
         return
@@ -119,10 +119,10 @@ def trigger_auto_reingestion_if_stale():
     try:
         logger.info("Macro data is stale. Triggering background re-ingestion...")
         _reingestion_process = subprocess.Popen(
-            [sys.executable, str(ingestion_script)],
+            [sys.executable, "-m", "ingestion.ingest_macro_data"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            cwd=str(PROJECT_ROOT)
+            cwd=str(BACKEND_ROOT)
         )
     except Exception as e:
         logger.error(f"Failed to trigger macro data re-ingestion: {e}")

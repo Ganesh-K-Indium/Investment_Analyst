@@ -3,7 +3,6 @@ File import service for downloading and ingesting files from integrations
 """
 import asyncio
 import os
-import sys
 from typing import List, Dict
 from sqlalchemy.ext.asyncio import AsyncSession
 

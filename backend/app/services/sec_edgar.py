@@ -5,7 +5,6 @@ import asyncio
 from typing import List, Dict, Optional, Sequence
 from datetime import date
 from sqlalchemy.ext.asyncio import AsyncSession
-import sys
 import os
 
 from ingestion.edgar_fetcher import SecEdgarFetcher, DEFAULT_FORM_TYPES, VALID_FORM_TYPES
