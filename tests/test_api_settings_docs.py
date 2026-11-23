@@ -132,6 +132,9 @@ def test_documents_upload_list_review_content_delete(client):
     asyncio.run(ingest())
 
     d = client.get(f"/user-documents/{doc_id}").json()
+    assert d["status"] == "awaiting_approval" and d["pages_indexed"] == 0 and d["approved"] is False       # held until the owner approves
+    assert client.post(f"/user-documents/{doc_id}/approve").json()["status"] == "ready"
+    d = client.get(f"/user-documents/{doc_id}").json()
     assert d["status"] == "ready" and d["pages"] == 1 and d["pages_indexed"] == 1 and d["doc_type"] == "model" and d["review_pending"] == 0
     assert client.get("/user-documents?status=ready").json()["documents"][0]["id"] == doc_id
     assert client.get("/user-documents?q=pnl").json()["documents"] and not client.get("/user-documents?q=zzz").json()["documents"]

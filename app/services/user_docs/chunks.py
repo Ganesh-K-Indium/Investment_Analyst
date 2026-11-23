@@ -130,12 +130,17 @@ def arithmetic_items(result: Dict[str, Any], corrections: Dict[str, Any]) -> Lis
 
 
 SKIP_PREFIX = "skip:"
+APPROVED = "approved"        # in the confirmed list once the owner has looked at the extraction and said it may be indexed
 UNREADABLE_RATIO, UNREADABLE_MIN_LINES = 0.6, 6
 
 
 def skipped_pages(confirmed: Iterable[str]) -> set:
     """Pages a person chose to leave out ("skip:3" in the confirmed list). They are neither indexed nor counted as waiting for review."""
     return {int(c[len(SKIP_PREFIX):]) for c in confirmed if str(c).startswith(SKIP_PREFIX) and str(c)[len(SKIP_PREFIX):].isdigit()}
+
+
+def is_approved(confirmed: Iterable[str]) -> bool:
+    return APPROVED in list(confirmed)
 
 
 def pending_by_page(items: Iterable[Dict[str, Any]], corrections: Dict[str, Any], confirmed: Iterable[str]) -> Dict[int, List[Dict[str, Any]]]:

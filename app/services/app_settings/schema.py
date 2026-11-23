@@ -104,6 +104,7 @@ SECTIONS: Dict[str, Dict[str, Any]] = {
             "token_cap": _f("int", 0, "Token cap per document", "0 = no cap.", min=0, max=5_000_000),
             "vision_model_primary": _f("model", "openai:gpt-4.1", "Vision model for scans", "Reads pages local OCR is unsure of. Needs a model that accepts images."),
             "vision_model_secondary": _f("model", "openai:gpt-4.1-mini", "Second vision model", "Cross-checks the first. Choose a different model from the first: two copies of the same model can make the same mistake and agree on it."),
+            "require_approval": _f("bool", True, "Hold uploads for my approval", "Nothing you upload is searchable until you have opened the extraction and approved it. Turn off to index as soon as reading finishes."),
             "index_policy": _f("enum", "after_review", "Index low-confidence text", "after_review = only once a person confirms it (recommended); flagged = index now, marked low confidence; never = keep out of search.", options=["after_review", "flagged", "never"]),
             "auto_detect_type": _f("bool", True, "Detect document type automatically", ""),
             "max_upload_mb": _f("int", 50, "Largest file (MB)", "", min=1, max=500),

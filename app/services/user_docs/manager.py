@@ -115,6 +115,9 @@ async def sync_index(db: AsyncSession, doc: UserDocument, result: Optional[Dict[
     result = result or load_result(doc.id)
     if result is None:
         return doc
+    if doc.indexed_pages and not chunkmod.is_approved(doc.confirmed or []):
+        doc.confirmed = sorted(set(doc.confirmed or []) | {chunkmod.APPROVED})      # indexed before approval existed: keep it searchable
+        flag_modified(doc, "confirmed")
     items = chunkmod.review_items(result, doc.corrections or {})
     pending = chunkmod.pending_by_page(items, doc.corrections or {}, doc.confirmed or [])
     skipped = chunkmod.skipped_pages(doc.confirmed or [])
@@ -123,7 +126,10 @@ async def sync_index(db: AsyncSession, doc: UserDocument, result: Optional[Dict[
     meta = base_meta(doc, result)
     indexed = set(doc.indexed_pages or [])
     total = 0
+    held = not chunkmod.is_approved(doc.confirmed or [])     # nothing user-uploaded is searchable until its owner has seen the extraction and approved it
     for pg in pages:
+        if held:
+            break
         waiting = pg in pending
         if waiting and policy == "never":
             continue
@@ -142,11 +148,11 @@ async def sync_index(db: AsyncSession, doc: UserDocument, result: Optional[Dict[
         doc.stats = stats
     # pages that fell back into review (policy changed) or were skipped by a person leave the index again
     for pg in sorted(indexed):
-        if pg in skipped or (pg in pending and policy in ("after_review", "never")):
+        if held or pg in skipped or (pg in pending and policy in ("after_review", "never")):
             await store.delete_page(doc.id, pg)
             indexed.discard(pg)
     n_pending = sum(len(v) for v in pending.values())
-    status = "ready" if not n_pending else "needs_review"
+    status = "awaiting_approval" if held else ("ready" if not n_pending else "needs_review")
     if not pages:
         status = "failed"
     doc.indexed_pages = sorted(indexed)
@@ -186,7 +192,7 @@ async def create_document(db: AsyncSession, user_id: Any, filename: str, data: b
     doc = UserDocument(id=uuid.uuid4().hex, user_id=str(user_id), filename=Path(filename).name[:255], ext=ext, sha256=sha, size_bytes=len(data), doc_type=None if doc_type == "auto" else doc_type,
                        entity=(entity or "").strip().upper() or None, period=(period or "").strip() or None, tags=list(tags or []),
                        visibility=visibility or d["default_visibility"], status="queued", stage="queued", progress={"done": 0, "total": 0},
-                       index_policy=d["index_policy"], indexed_pages=[], corrections={}, confirmed=[], stats={},
+                       index_policy=d["index_policy"], indexed_pages=[], corrections={}, confirmed=[] if d.get("require_approval", True) else [chunkmod.APPROVED], stats={},
                        reading={"strategy": reading or d["reading_strategy"]})
     db.add(doc)
     await db.commit()
@@ -333,6 +339,17 @@ async def apply_review(db: AsyncSession, doc: UserDocument, edits: Dict[str, Any
         conf.discard(f"{chunkmod.SKIP_PREFIX}{pg}")
     doc.corrections, doc.confirmed = corr, sorted(conf)
     flag_modified(doc, "corrections"); flag_modified(doc, "confirmed")
+    await db.commit()
+    return await sync_index(db, doc, result)
+
+
+async def approve(db: AsyncSession, doc: UserDocument) -> UserDocument:
+    """The owner has looked at the extraction: index it (pages with unresolved doubtful text still wait, per the policy)."""
+    result = load_result(doc.id)
+    if result is None:
+        raise ValueError("This document has no extraction to approve.")
+    doc.confirmed = sorted(set(doc.confirmed or []) | {chunkmod.APPROVED})
+    flag_modified(doc, "confirmed")
     await db.commit()
     return await sync_index(db, doc, result)
 

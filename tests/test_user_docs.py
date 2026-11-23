@@ -178,7 +178,7 @@ def db_and_doc(tmp_path, monkeypatch):
             await c.run_sync(lambda sc: Base.metadata.create_all(sc, tables=[UserDocument.__table__]))
         db = async_sessionmaker(eng, expire_on_commit=False)()
         doc = UserDocument(id="d1", user_id="7", filename="scan.pdf", ext="pdf", sha256="x", doc_type="financial_statement", entity="ACME", tags=[], index_policy=policy,
-                           indexed_pages=[], corrections={}, confirmed=[], stats={}, progress={}, reading={})
+                           indexed_pages=[], corrections={}, confirmed=["approved"], stats={}, progress={}, reading={})
         db.add(doc)
         await db.commit()
         r = _scan_result()
@@ -347,4 +347,18 @@ def test_arithmetic_items_hold_the_page_under_the_default_policy(db_and_doc):
         await manager.apply_review(db, doc, {"t1.0[1].1": "800"}, [], [])
         assert doc.status == "ready" and sorted(fake.pages) == [1]
         assert any("| Receivables | 800 |" in c["text"] for c in fake.pages[1])
+    asyncio.run(go())
+
+
+def test_nothing_is_indexed_until_the_owner_approves(db_and_doc):
+    """Even a clean extraction is held for the owner to look at; approving indexes it, and a doubtful page still waits for its review."""
+    make, fake = db_and_doc
+
+    async def go():
+        db, doc, r = await make("after_review")
+        doc.confirmed = []                                           # as a fresh upload
+        await manager.sync_index(db, doc, r)
+        assert doc.status == "awaiting_approval" and fake.pages == {} and doc.indexed_pages == []
+        await manager.approve(db, doc)
+        assert sorted(fake.pages) == [2] and doc.status == "needs_review"        # clean page searchable now, doubtful page still waits
     asyncio.run(go())

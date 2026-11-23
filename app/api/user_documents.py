@@ -9,6 +9,7 @@ PATCH  /user-documents/{id}            owner: type, entity, period, tags, visibi
 DELETE /user-documents/{id}            owner: removes the file and everything indexed from it
 POST   /user-documents/{id}/reread     owner: read it again (optionally another reading strategy, or a better look at some pages)
 GET    /user-documents/{id}/review     what a person still needs to check
+POST   /user-documents/{id}/approve    owner: accept the extraction as it stands; only then is the document indexed
 POST   /user-documents/{id}/review     owner: correct or confirm items; pages with nothing left to check become searchable
 GET    /user-documents/{id}/content    the extracted pages (text, blocks, tables)
 GET    /user-documents/{id}/file       the original file;   GET /user-documents/{id}/pdf   the PDF the pages were read from
@@ -39,7 +40,7 @@ def _view(d: UserDocument, me: User) -> Dict[str, Any]:
     return {"id": d.id, "filename": d.filename, "ext": d.ext, "size_bytes": d.size_bytes, "doc_type": d.doc_type, "doc_type_label": manager.DOC_TYPES.get(d.doc_type or "", d.doc_type),
             "label": d.label, "entity": d.entity, "period": d.period, "tags": d.tags or [], "visibility": d.visibility, "status": d.status, "stage": d.stage,
             "progress": d.progress or {}, "error": d.error, "pages": d.pages, "pages_indexed": len(d.indexed_pages or []), "review_pending": d.review_pending,
-            "index_policy": d.index_policy, "stats": stats, "reading": d.reading or {}, "has_pdf": manager.source_pdf(d.id) is not None,
+            "index_policy": d.index_policy, "approved": chunkmod.is_approved(d.confirmed or []), "stats": stats, "reading": d.reading or {}, "has_pdf": manager.source_pdf(d.id) is not None,
             "owner": str(d.user_id) == str(me.id), "created_at": d.created_at.isoformat() if d.created_at else None,
             "updated_at": d.updated_at.isoformat() if d.updated_at else None}
 
@@ -106,7 +107,7 @@ async def list_documents(status: Optional[str] = None, doc_type: Optional[str] =
                          mine: bool = False, limit: int = Query(100, ge=1, le=500), db: AsyncSession = Depends(get_db_session), user: User = Depends(get_current_user)):
     cond = [UserDocument.user_id == str(user.id)] if mine else [or_(UserDocument.user_id == str(user.id), UserDocument.visibility == "workspace")]
     if status:
-        cond.append(UserDocument.status == status)
+        cond.append(UserDocument.status.in_(("needs_review", "awaiting_approval")) if status == "needs_review" else UserDocument.status == status)   # "needs_review" = anything waiting on the owner
     if doc_type:
         cond.append(UserDocument.doc_type == doc_type)
     if entity:
@@ -116,7 +117,7 @@ async def list_documents(status: Optional[str] = None, doc_type: Optional[str] =
         cond.append(or_(UserDocument.filename.ilike(like), UserDocument.label.ilike(like), UserDocument.entity.ilike(like)))
     rows = (await db.execute(select(UserDocument).where(*cond).order_by(UserDocument.created_at.desc()).limit(limit))).scalars().all()
     return {"documents": [_view(d, user) for d in rows],
-            "needs_review": sum(1 for d in rows if d.status == "needs_review" and str(d.user_id) == str(user.id))}
+            "needs_review": sum(1 for d in rows if d.status in ("needs_review", "awaiting_approval") and str(d.user_id) == str(user.id))}
 
 
 @router.get("/{doc_id}")
@@ -166,6 +167,9 @@ async def reread(doc_id: str, body: RereadBody = Body(default_factory=RereadBody
     if body.reading:
         d.reading = {**(d.reading or {}), "strategy": body.reading}
     d.status, d.stage, d.error = "queued", "queued", None
+    if settings["documents"].get("require_approval", True):        # a new reading is a new extraction: look at it again
+        d.confirmed = [c for c in (d.confirmed or []) if c != chunkmod.APPROVED]
+        manager.flag_modified(d, "confirmed")
     await db.commit()
     manager.start(d.id, str(user.id), settings, await _known_entities(db, user), body.better_pages)
     return _view(d, user)
@@ -211,6 +215,19 @@ async def apply_review(doc_id: str, body: ReviewBody, db: AsyncSession = Depends
         await manager.apply_review(db, d, body.edits, body.confirm, body.confirm_pages, body.skip_pages, body.unskip_pages)
     except KeyError as e:
         raise HTTPException(422, str(e).strip("'\""))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return _view(d, user)
+
+
+@router.post("/{doc_id}/approve")
+async def approve(doc_id: str, db: AsyncSession = Depends(get_db_session), user: User = Depends(get_current_user)):
+    """Owner: the extraction looks right; index it so it can be searched."""
+    d = await _get(db, doc_id, user, write=True)
+    if d.status in ("processing", "queued"):
+        raise HTTPException(409, "Wait until the document has been read.")
+    try:
+        await manager.approve(db, d)
     except ValueError as e:
         raise HTTPException(409, str(e))
     return _view(d, user)
