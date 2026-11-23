@@ -171,6 +171,8 @@ Or run everything (Postgres + Qdrant + Redis + API + both workers + all MCP serv
 docker compose up --build
 ```
 
+**Your own MCP servers.** Under Settings > Quant agent > Your tools a user can connect remote MCP servers (an `https://…/mcp` address, optional sign-in header). The quant agent then has a "Your Tools" sub-agent that can list and call their tools. Only remote servers are accepted (nothing is started on this machine), tools that are not read-only stay blocked until the user allows actions for that server, and servers on this machine or a private network are refused unless `MCP_ALLOW_PRIVATE_URLS=1` (turn it on for a single-user install). Run `alembic upgrade head` once to create the table.
+
 ### 7. Start the web UI
 
 ```bash

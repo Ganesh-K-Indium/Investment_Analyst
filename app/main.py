@@ -222,6 +222,8 @@ app.include_router(analysis_tasks_router)
 app.include_router(settings_router)
 app.include_router(user_documents_router)
 app.include_router(providers_router)
+from app.api.mcp_servers import router as mcp_servers_router
+app.include_router(mcp_servers_router)
 app.include_router(reading_engines_router)
 app.include_router(documents_router)
 app.include_router(notes_router)

@@ -425,3 +425,21 @@ class ProviderCredential(Base):
     name       = Column(String, primary_key=True)
     value_enc  = Column(Text, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class UserMcpServer(Base):
+    """An MCP server a user connected for the quant agent. `auth_enc` (Fernet) holds the optional auth header and is never returned by any API."""
+    __tablename__ = "user_mcp_servers"
+
+    id            = Column(String, primary_key=True)
+    user_id       = Column(String, nullable=False, index=True)
+    name          = Column(String, nullable=False)
+    url           = Column(String, nullable=False)
+    description   = Column(Text, nullable=True)       # tells the supervisor when to use it
+    auth_enc      = Column(Text, nullable=True)
+    enabled       = Column(Boolean, nullable=False, default=True)
+    allow_actions = Column(Boolean, nullable=False, default=False)   # tools that change something outside stay blocked until the user allows it
+    tools         = Column(JSON, nullable=True)       # [{name, description, read_only, schema}] from the last connection test
+    last_error    = Column(Text, nullable=True)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

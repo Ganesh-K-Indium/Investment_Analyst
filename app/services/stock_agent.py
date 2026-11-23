@@ -124,6 +124,7 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             from stock_exchange_agent.subagents.options_agent.langgraph_agent import create_options_agent
             from stock_exchange_agent.subagents.postgres_agent.langgraph_agent import create_postgres_agent
             from stock_exchange_agent.subagents.documents_agent.langgraph_agent import create_documents_agent
+            from stock_exchange_agent.subagents.custom_tools_agent.langgraph_agent import create_custom_tools_agent
             from langgraph_supervisor import create_supervisor
         except ImportError as e:
             logger.error(f"ERROR: Failed to import stock agent modules: {e}")
@@ -224,10 +225,18 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             logger.warning(f"   WARNING: Failed to create documents_agent: {e}")
             documents_agent = None
 
-        logger.info(f"Created {len(agents_created)}/7 sub-agents: {', '.join(agents_created)}")
+        # Your Tools Agent (MCP servers each user connected themselves; resolved per request, so one agent serves everyone)
+        try:
+            custom_tools_agent = await create_custom_tools_agent(checkpointer=_stock_saver)
+            agents_created.append("custom_tools")
+        except Exception as e:
+            logger.warning(f"   WARNING: Failed to create custom_tools_agent: {e}")
+            custom_tools_agent = None
+
+        logger.info(f"Created {len(agents_created)}/8 sub-agents: {', '.join(agents_created)}")
         
         # Check if we have at least one working agent
-        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent, postgres_agent, documents_agent] if a is not None]
+        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent, postgres_agent, documents_agent, custom_tools_agent] if a is not None]
         
         if len(available_agents) == 0:
             logger.error("ERROR: No agents were successfully created")
@@ -253,6 +262,8 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             agent_names.append("postgres_agent")
         if documents_agent:
             agent_names.append("documents_agent")
+        if custom_tools_agent:
+            agent_names.append("custom_tools_agent")
 
         supervisor_prompt = f"""You are a stock analysis supervisor managing {len(available_agents)} agents:
 
@@ -269,7 +280,10 @@ CAPABILITIES:
 - postgres_agent: Analyzes user's private PostgreSQL database, schema, and executes read-only SQL queries
 - documents_agent: The user's OWN uploaded files (statements, broker notes, models, scans, decks): search them, list them, read their tables
 
+- custom_tools_agent: Servers the user connected themselves (their own MCP tools: internal models, data feeds, other systems)
+
 ROUTING RULES:
+- The user's own connected tools / servers / "my tool X" / their internal systems -> custom_tools_agent (if available); it says plainly when the user has connected none
 - Company name mentioned -> ticker_finder_agent FIRST (if available)
 - A ticker lookup is only a STEP, never the answer. As soon as ticker_finder_agent returns a ticker, immediately call the transfer tool for the specialist agent that handles the user's ACTUAL request, in the same turn. Do not stop after the ticker lookup
 - Price/financials/news/fundamentals -> stock_information_agent (if available)
