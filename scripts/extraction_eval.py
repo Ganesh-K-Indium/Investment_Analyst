@@ -134,13 +134,14 @@ async def run_one(pdf_path):
 
 
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("--out"); ap.add_argument("--keep-dir")
+    ap = argparse.ArgumentParser(); ap.add_argument("--out"); ap.add_argument("--keep-dir"); ap.add_argument("--variants", help="comma-separated subset, e.g. scan_noisy_skew,scan_fax")
     a = ap.parse_args()
     work = Path(a.keep_dir or tempfile.mkdtemp()); work.mkdir(parents=True, exist_ok=True)
+    variants = [v for v in VARIANTS if not a.variants or v[0] in a.variants.split(",")]
     report, totals = {}, {}
     for sname, (title, header, rows) in STATEMENTS.items():
         base = work / f"{sname}.pdf"; draw_statement(str(base), title, header, rows)
-        for vname, dpi, mode in VARIANTS:
+        for vname, dpi, mode in variants:
             if dpi is None:
                 src = base
             else:

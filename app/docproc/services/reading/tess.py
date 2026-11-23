@@ -130,7 +130,10 @@ def deskewed(png: bytes) -> bytes:
     """The page image straightened when it is visibly tilted, otherwise unchanged. A tilt of even a degree makes OCR break rows apart, so a
     label and its figures land on different lines."""
     from io import BytesIO
+    import os
     from PIL import Image
+    if os.getenv("DOCPROC_DESKEW", "1").lower() in ("0", "false", "no"):
+        return png
     angle = skew_angle(png)
     if angle is None:
         return png
