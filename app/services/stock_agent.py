@@ -125,6 +125,7 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             from stock_exchange_agent.subagents.postgres_agent.langgraph_agent import create_postgres_agent
             from stock_exchange_agent.subagents.documents_agent.langgraph_agent import create_documents_agent
             from stock_exchange_agent.subagents.custom_tools_agent.langgraph_agent import create_custom_tools_agent
+            from stock_exchange_agent.subagents.data_sources_agent.langgraph_agent import create_data_sources_agent
             from langgraph_supervisor import create_supervisor
         except ImportError as e:
             logger.error(f"ERROR: Failed to import stock agent modules: {e}")
@@ -233,10 +234,18 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             logger.warning(f"   WARNING: Failed to create custom_tools_agent: {e}")
             custom_tools_agent = None
 
-        logger.info(f"Created {len(agents_created)}/8 sub-agents: {', '.join(agents_created)}")
+        # Data Sources Agent (market-data providers each user connected: Alpha Vantage, Polygon, Finnhub, ...; resolved per request)
+        try:
+            data_sources_agent = await create_data_sources_agent(checkpointer=_stock_saver)
+            agents_created.append("data_sources")
+        except Exception as e:
+            logger.warning(f"   WARNING: Failed to create data_sources_agent: {e}")
+            data_sources_agent = None
+
+        logger.info(f"Created {len(agents_created)}/9 sub-agents: {', '.join(agents_created)}")
         
         # Check if we have at least one working agent
-        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent, postgres_agent, documents_agent, custom_tools_agent] if a is not None]
+        available_agents = [a for a in [stock_info_agent, technical_agent, ticker_finder, research_agent, options_agent, postgres_agent, documents_agent, custom_tools_agent, data_sources_agent] if a is not None]
         
         if len(available_agents) == 0:
             logger.error("ERROR: No agents were successfully created")
@@ -264,6 +273,8 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             agent_names.append("documents_agent")
         if custom_tools_agent:
             agent_names.append("custom_tools_agent")
+        if data_sources_agent:
+            agent_names.append("data_sources_agent")
 
         supervisor_prompt = f"""You are a stock analysis supervisor managing {len(available_agents)} agents:
 
@@ -282,7 +293,10 @@ CAPABILITIES:
 
 - custom_tools_agent: Servers the user connected themselves (their own MCP tools: internal models, data feeds, other systems)
 
+- data_sources_agent: Market data from providers the user connected (Alpha Vantage, Polygon, Finnhub, Twelve Data, Financial Modeling Prep, or their own API)
+
 ROUTING RULES:
+- The user names one of their connected data providers ("use my Alpha Vantage / Polygon / ... key", "from my data source"), or asks for data from a provider the built-in agents do not cover -> data_sources_agent (if available); it says plainly when none is connected
 - The user's own connected tools / servers / "my tool X" / their internal systems -> custom_tools_agent (if available); it says plainly when the user has connected none
 - Company name mentioned -> ticker_finder_agent FIRST (if available)
 - A ticker lookup is only a STEP, never the answer. As soon as ticker_finder_agent returns a ticker, immediately call the transfer tool for the specialist agent that handles the user's ACTUAL request, in the same turn. Do not stop after the ticker lookup

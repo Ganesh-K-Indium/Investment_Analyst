@@ -443,3 +443,21 @@ class UserMcpServer(Base):
     last_error    = Column(Text, nullable=True)
     created_at    = Column(DateTime, default=datetime.utcnow)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class UserDataSource(Base):
+    """A market-data provider a user connected (Alpha Vantage, Polygon, Finnhub, Twelve Data, FMP, or their own REST API) for the quant agent.
+    `auth_enc` (Fernet) holds the key; no API returns it."""
+    __tablename__ = "user_data_sources"
+
+    id          = Column(String, primary_key=True)
+    user_id     = Column(String, nullable=False, index=True)
+    provider    = Column(String, nullable=False)
+    name        = Column(String, nullable=False)
+    base_url    = Column(String, nullable=True)       # custom APIs only; the others have a fixed address
+    auth_enc    = Column(Text, nullable=True)         # JSON {"value": key, "name": header/param name, "in": "header"|"query"} for custom APIs
+    description = Column(Text, nullable=True)
+    enabled     = Column(Boolean, nullable=False, default=True)
+    last_error  = Column(Text, nullable=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
