@@ -17,6 +17,8 @@ with, the PDF itself is the source.
 """
 import asyncio
 import json
+
+import pymupdf as fitz
 import logging
 import re
 from collections import Counter
@@ -429,7 +431,7 @@ def _words_in(path: str, page_num: int, bbox: List[float]) -> List[str]:
     x0, y0, x1, y1 = bbox
     spans: List[Tuple[str, float]] = []
     with pdf_pages.FITZ_LOCK, pdf_pages.open_pdf(path) as pdf:
-        for b in pdf[page_num - 1].get_text("dict")["blocks"]:
+        for b in pdf[page_num - 1].get_text("dict", flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)["blocks"]:
             for line in b.get("lines", []):
                 for sp in line["spans"]:
                     bx0, by0, bx1, by1 = sp["bbox"]

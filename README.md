@@ -31,13 +31,13 @@ FastAPI app (app/main.py)
 ├── Async SQLAlchemy + Postgres (all routes; Alembic-managed schema)
 │
 ├── RAG subsystem (rag/, ingestion/)
-│   ├── LangGraph graph (rag/graph/builder.py): START routes through
-│   │   detect_alpha → detect_scenario → detect_macro, then branches into
-│   │   one of: ALPHA (alpha_retrieve → alpha_generate), Scenario
-│   │   (Bull/Bear/Base), Macro (macro_analyze → macro_calculate →
-│   │   macro_format), or the standard path — retrieve → grade_documents →
-│   │   web_search (fallback) → generate → decide_chart
-│   │   → (generate_chart) → show_result
+│   ├── LangGraph graph (rag/graph/builder.py): START → route_query (one
+│   │   node: ALPHA | Scenario | Macro | one of the user's own frameworks |
+│   │   standard), then standard = clarify (optional pause) → preprocess →
+│   │   retrieve (hybrid search → cross-encoder re-rank, plus the user's
+│   │   notes and uploaded documents) → grade_documents → rewrite_query
+│   │   (corrective retry) or web_search (fallback) → generate →
+│   │   verify_answer (figures vs evidence) → (generate_chart) → show_result
 │   ├── Qdrant: one hybrid collection per ticker (dense + BM25 + RRF,
 │   │   `ticker_{ticker}`), filtered further by filing-type/period
 │   │   metadata; falls back to a shared `unified_rag_db_hybrid`
@@ -54,6 +54,17 @@ FastAPI app (app/main.py)
 │       Options :8568, and Postgres :8570 (only active when a Postgres
 │       integration is connected)
 │
+├── Settings + model registry (app/services/app_settings/, app/api/settings.py) — every
+│   option lives in one schema (defaults → admin → user → portfolio → per-request);
+│   every model call goes through get_llm(role)
+├── Bring-your-own LLM providers (app/services/llm_providers/, app/api/providers.py) —
+│   OpenAI, Anthropic, Gemini, Ollama, any OpenAI-compatible server; per-user
+│   encrypted keys; UI: Settings → AI providers
+├── User documents (app/services/user_docs/, app/docproc/, app/api/user_documents.py) —
+│   PDF/scans/images, Excel/CSV, Word, PowerPoint, HTML, text → read, checked (finance
+│   arithmetic), reviewed by a person where doubtful, indexed in the `user_documents`
+│   Qdrant collection. app/docproc/ is the folded-in extraction engine
+│   (local OCR first, vision model only where doubtful)
 ├── Form4 insider-trading pipeline (ingestion/Form4_Ingestion/, rag/utils/Insights_Form4/)
 ├── Macro data pipeline (ingestion/ingest_macro_data.py — FRED + BLS)
 ├── Integrations (app/api/integrations.py, app/services/connectors/) —
@@ -72,7 +83,9 @@ See [docs/TECHNICAL_GUIDE.md](docs/TECHNICAL_GUIDE.md) for the full breakdown of
 
 ### Prerequisites
 - Python 3.11+
+- **Tesseract OCR** (the default local OCR engine that reads scanned documents): `brew install tesseract` (macOS) · `sudo apt install tesseract-ocr` (Debian/Ubuntu) · Windows: the UB-Mannheim installer, then set `TESSERACT_CMD`. Check with `tesseract --version`. Without it, scans cannot be read locally (the Docker image already includes it).
 - Docker (for Postgres + Qdrant + Redis via `docker-compose`) — or your own instances
+- Node 18+ for the web UI (a separate repository, `investment-analyst-ui`)
 - API keys: OpenAI (required), Google (required — Gemini chart-summary vision), Tavily (optional — web search), Groq (optional — alt LLM), FRED (required for macro data), BLS (optional — additional macro series)
 
 ### 1. Clone and set up the environment
@@ -90,6 +103,23 @@ cp .env.example .env
 # Edit .env — see Environment Variables below for the full set
 ```
 
+`requirements.txt` covers everything the app needs, including PyMuPDF **2.x** (`pymupdf>=2.1`, with `pymupdf-layout`; PyMuPDF 1.x finds tables differently and the extraction tests will fail) and the LLM provider libraries (`langchain-openai`, `langchain-anthropic`, `langchain-google-genai`, `langchain-ollama`). If you install by hand instead:
+
+```bash
+pip install "pymupdf>=2.1" "pymupdf-layout>=2.1" openpyxl python-docx python-pptx beautifulsoup4 lxml \
+            langchain-anthropic langchain-google-genai langchain-ollama arq fastembed
+```
+
+**Optional OCR engines** (Tesseract is enough to start; add any of these for better results on difficult scans, then restart the API):
+
+| Engine | Install | Size |
+|---|---|---|
+| RapidOCR | `pip install rapidocr-onnxruntime` | ~100 MB, models included |
+| PaddleOCR | `pip install paddlepaddle paddleocr` | ~430 MB + ~130 MB models |
+| docTR | `pip install "python-doctr[torch]"` | ~630 MB + ~125 MB models |
+
+Once installed, an administrator opens **Settings → Your documents → Reading engines** to download models, test an engine on a sample page, and choose it. From a terminal: `python -m app.docproc.engines.warmup --status` (what is on disk) and `python -m app.docproc.engines.warmup` (download models now). Installing the Python packages is deliberately not offered from the web UI: a web request should not change the server's own software.
+
 ### 2. Start Postgres + Qdrant + Redis
 
 ```bash
@@ -103,6 +133,8 @@ This publishes Postgres on host port **5433** (not 5432 — avoids clashing with
 ```bash
 alembic upgrade head
 ```
+
+(The API also runs `alembic upgrade head` on startup.) The schema is at revision `023_provider_credentials`. **Switching to an older branch?** An older branch cannot start on a database already migrated past its own newest revision. Keep a separate database per branch, or `alembic downgrade <that branch's revision>` first. This branch's `docker-compose.yml` uses its own Compose project name (`investment_analyst_new`, override with `COMPOSE_PROJECT_NAME`), so its Postgres/Redis volumes are separate from the older branch's.
 
 ### 4. Start the API
 
@@ -123,6 +155,8 @@ arq app.worker.BatchWorkerSettings &          # long-running / batch queue
 
 ### 6. (Optional) Start the quant MCP servers
 
+Easiest: `./scripts/start_mcp_servers.sh` (start | stop | status; it sets `PYTHONPATH` so the servers can import the app). By hand:
+
 ```bash
 cd quant/yahoo-finance-mcp && python server.py &      # Stock Information — :8565
 cd quant/Stock_Analysis && python server_mcp.py &     # Technical Analysis — :8566
@@ -137,7 +171,18 @@ Or run everything (Postgres + Qdrant + Redis + API + both workers + all MCP serv
 docker compose up --build
 ```
 
-### 7. Ingest some filings to test with
+### 7. Start the web UI
+
+```bash
+git clone <ui-repo-url> investment-analyst-ui && cd investment-analyst-ui
+npm install
+echo "VITE_API_BASE_URL=http://localhost:8000" > .env      # where the API is
+npm run dev                                                # http://localhost:5173
+```
+
+The API allows `localhost`/`127.0.0.1` on any port by default (Vite moves to 5174 if 5173 is busy); in production set `CORS_ALLOWED_ORIGIN_REGEX=` (empty) and list origins in `CORS_ALLOWED_ORIGINS`.
+
+### 8. Ingest some filings to test with
 
 ```bash
 python scripts/ingest_ticker.py AAPL
@@ -145,7 +190,7 @@ python scripts/ingest_ticker.py AAPL
 # (e.g. "FY2024", "2025Q3"), lets you pick which to pull in and ingest.
 ```
 
-### 8. Access
+### 9. Access
 
 | URL | Purpose |
 |---|---|
@@ -160,7 +205,17 @@ python scripts/ingest_ticker.py AAPL
 
 | Variable | Required? | Purpose |
 |---|---|---|
-| `OPENAI_API_KEY` | Required | Primary LLM (RAG generation, ingestion GPT-4o vision, quant supervisor, chat summaries) |
+| `OPENAI_API_KEY` | Required for search | **Embeddings** (`text-embedding-3-large`, shared by every user's search), SEC ingestion captions and handwritten notes, and the default chat models. Users can bring other providers for chat/agents (below), but search still needs this key. |
+| `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OLLAMA_BASE_URL`, `LLM_CUSTOM_BASE_URL` / `LLM_CUSTOM_API_KEY` / `OPENAI_BASE_URL` | Optional | Server-wide fallback for providers (used by anyone who saves no key of their own). Users add their own under **Settings → AI providers**. |
+| `APP_SECRET_KEY` | Recommended (required for shared deployments) | Encrypts the provider keys users save. Without it a random key is created once in `data/docproc/secret.key`. Changing it makes saved keys unreadable (users re-enter them). |
+| `MCP_SHARED_SECRET` | Required in production | Signs the per-request token the Postgres MCP tool verifies (so a model cannot query another user's database). Falls back to `JWT_SECRET_KEY`; in development a random one is kept in `data/.mcp_secret`. |
+| `LOCAL_ONLY` | Optional | `1` = nothing leaves the machine: cloud models and model downloads are switched off; local OCR and Ollama/self-hosted still work. |
+| `LOCK_SETTINGS` | Optional | `1` = the provider screen is read-only (configuration managed through the environment). |
+| `LLM_ALLOW_PRIVATE_URLS` | Optional | `0` = refuse localhost / private-network model addresses (set on a shared server; cloud-metadata addresses are always refused). |
+| `COHERE_API_KEY`, `RERANK_LOCAL_MODEL` | Optional | Re-ranker: local cross-encoder by default (model downloads on first use, ~90 MB); Cohere only if a user chooses it. |
+| `CONTEXTUAL_PREFIX` | Optional | `0` turns off the company/filing/period/section header added to each chunk's embedding text at ingestion (default on). |
+| `DOCPROC_DATA_DIR` | Optional | Where the document-reading engine keeps OCR models and logs (default `data/docproc`). |
+| `MCP_<STOCK_INFO\|TECHNICAL\|RESEARCH\|OPTIONS\|POSTGRES>_URL` / `_ENABLED` / `_BIND`, `MCP_HOST` | Optional | Where each quant MCP server lives; defaults to `127.0.0.1` and the usual ports. |
 | `QDRANT_URL`, `QDRANT_API_KEY` | Required | Vector database (Qdrant Cloud or self-hosted) |
 | `GOOGLE_API_KEY` | Required | Gemini vision, used for quant chart-summary generation (distinct from the GPT-4o vision used in filing ingestion) |
 | `DATABASE_URL` | Required | Postgres connection string (one URL, translated internally to asyncpg at runtime / psycopg2 for Alembic) |
@@ -187,14 +242,29 @@ Generate an integration secret: `python -c "import secrets; print(secrets.token_
 
 ---
 
+## Testing
+
+```bash
+pytest tests --ignore=tests/test_api_v2.py        # ~2.5 min (the extraction engine's tests run OCR); tests/docproc can be skipped for a quick run
+python scripts/extraction_eval.py                 # finance extraction accuracy (local OCR, no LLM calls)
+EVAL_TOKEN=… EVAL_THREAD_ID=… python scripts/rag_eval.py   # question set against a running API (uses your LLM provider)
+```
+
+`tests/test_api_v2.py` needs a running Postgres. Fill in `expected` answers in `tests/rag_eval/golden.jsonl` for the RAG evaluation to measure accuracy.
+
+---
+
 ## Repository layout
 
 ```
-app/                   FastAPI app: routers (api/), services (services/),
+app/                   FastAPI app: routers (api/), services (services/ — incl. app_settings/,
+                        llm_providers/, user_docs/), docproc/ (document-reading engine: OCR,
+                        layout, tables, finance checks), mcp registry/auth,
                         auth (auth/), DB models + connection (database/),
                         background job workers (worker.py, jobs/),
                         external connectors (services/connectors/)
-rag/                    LangGraph RAG pipeline, Qdrant client, prompts, semantic cache
+rag/                    LangGraph RAG pipeline (graph/), Qdrant client, prompts (+ editable prompt
+                        registry), retrieval/rerank.py, verify/numbers.py, eval/metrics.py
 ingestion/              PDF/table/image processing, EDGAR fetcher, Form4 pipeline,
                         macro data ingestion, table_extractor.py
 quant/                  Stock-agent supervisor + sub-agents, 5 MCP servers
@@ -204,7 +274,10 @@ schemas/                Pydantic models (LLM structured outputs, request/respons
 alembic/versions/       Database migrations (Postgres-target)
 scripts/                ingest_ticker.py (interactive EDGAR ingestion CLI), utilities
 static/                 Minimal web UI (index.html, integrations.html, test.html)
-tests/                  API tests
+tests/                  pytest suite (tests/docproc/ = the extraction engine's tests)
+scripts/                (above) + rag_eval.py (question set → accuracy report),
+                        extraction_eval.py (finance statements × scan quality, no LLM cost),
+                        start_mcp_servers.sh
 docs/                   TECHNICAL_GUIDE.md — the full architectural reference
 ```
 
@@ -213,7 +286,9 @@ docs/                   TECHNICAL_GUIDE.md — the full architectural reference
 ## Known limitations (see the technical guide for detail)
 
 - Native-PDF tables now extract with real column structure (`ingestion/table_extractor.py`); image-embedded charts/tables go through OCR + GPT-4o vision. Flattened prose extraction is still the fallback when neither applies.
-- The semantic cache (`rag/graph/semantic_cache.py`) exists and is correctness-fixed but isn't wired into any live code path yet.
+- Document search is built on OpenAI embeddings shared by all users, so those stay on the server's OpenAI key whatever chat provider a user picks; changing the embedding model means re-indexing every collection.
+- Vision models can invent plausible text on very poor scans. Doubtful pages are held for review by default (Settings → Your documents → "Index low-confidence text"), and a second, *different* vision model should be used to cross-check; see `scripts/extraction_eval.py` for measured behaviour on financial statements.
+- Chat answers are checked against their sources for figures and units only, not for claims or reasoning.
 - Auth is enforced **per-route** (`Depends(get_current_user)` on individual endpoints), not via a global middleware — by design, since login/signup/token-refresh and a handful of health/capabilities endpoints must stay public. Nearly every other endpoint requires a valid JWT; see `docs/TECHNICAL_GUIDE.md` for the exact per-router breakdown.
 - `alembic/versions/` contains a few differently-named migrations that appear to add the same "chat summary fields" — worth a history sanity check before assuming a clean linear chain.
 

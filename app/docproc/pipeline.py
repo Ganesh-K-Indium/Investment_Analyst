@@ -101,9 +101,9 @@ async def _page(path: str, work: str, n: int, models: List[str], use_llm: bool, 
     async with sem:
         base: Dict[str, Any] = {"page": n}
         try:
-            original = await asyncio.to_thread(pdf_pages.analyze_page, path, n)
+            original = await asyncio.to_thread(pdf_pages.analyze_page, path, n, False)            # profile only: no table detection yet
             route = router.decide_reader(router.profile_page(original), use_llm, plan.local_engine is not None, mode)
-            info = await asyncio.to_thread(pdf_pages.analyze_page, work, n)  # geometry from the work PDF (has OCR layer on scans)
+            info = await asyncio.to_thread(pdf_pages.analyze_page, work, n, not original["scanned"])  # geometry from the work PDF (has OCR layer on scans); a scan has no tables for the detector to find
             lines_meta: Dict[str, Any] = {}
             layout, reference = None, None
             jpeg = None

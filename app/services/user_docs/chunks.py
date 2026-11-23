@@ -101,7 +101,7 @@ def review_items(result: Dict[str, Any], corrections: Optional[Dict[str, Any]] =
 SCANNED_SOURCES = ("ocr", "ocr-local", "text-layer-unverified")
 _RULE_TITLE = {"total_does_not_add_up": "A total does not add up", "balance_sheet_does_not_balance": "The balance sheet does not balance",
                "gross_profit_does_not_match": "Gross profit does not match", "operating_income_does_not_match": "Operating income does not match",
-               "cash_does_not_reconcile": "Cash does not reconcile"}
+               "cash_does_not_reconcile": "Cash does not reconcile", "unreadable_figure": "A figure is not a valid number"}
 
 
 def arithmetic_items(result: Dict[str, Any], corrections: Dict[str, Any]) -> List[Dict[str, Any]]:

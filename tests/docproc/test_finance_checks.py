@@ -80,3 +80,27 @@ def test_cash_reconciliation():
 
 def test_unknown_tables_with_no_totals_produce_nothing():
     assert checks.check_table([["Broker", "Rating", "Target"], ["NorthPeak", "Overweight", "142"]])["findings"] == []
+
+
+def test_a_malformed_figure_is_reported_as_misread():
+    assert parse("2.000.800").kind == "malformed" and parse("1,2,34").kind == "malformed" and parse("Revenue").kind == "text" and parse("12").kind == "amount"
+    rows = [["Cash", "100", "90"], ["Retained earnings", "2.000.800", "1,751,550"], ["Total", "2,000,900", "1,751,640"]]
+    f = [x for x in checks.check_table(rows)["findings"] if x["rule"] == "unreadable_figure"]
+    assert len(f) == 1 and f[0]["cells"] == [(1, 0)] and "2.000.800" in f[0]["detail"]
+
+
+def test_deskew_straightens_a_tilted_scan_and_leaves_a_straight_one_alone():
+    import io
+    import fitz
+    from PIL import Image
+    from app.docproc.services.reading import tess
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=300)
+    for k in range(12):
+        page.insert_text((50, 40 + k * 20), f"Line {k} revenue 1,234,567 costs 987,654", fontsize=10)
+    png = page.get_pixmap(dpi=150).tobytes("png")
+    assert tess.skew_angle(png) is None and tess.deskewed(png) == png                       # straight: byte-for-byte unchanged
+    buf = io.BytesIO()
+    Image.open(io.BytesIO(png)).convert("L").rotate(1.2, fillcolor=255).save(buf, format="PNG")
+    angle = tess.skew_angle(buf.getvalue())
+    assert angle is not None and -1.5 <= angle <= -0.9                                        # rotating by about -1.2 degrees undoes the tilt

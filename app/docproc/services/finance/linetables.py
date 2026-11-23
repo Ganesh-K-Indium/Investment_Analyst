@@ -27,7 +27,7 @@ def _is_data_row(cells: List[str]) -> bool:
     if len(cells) < 2 or not cells[0] or parse(cells[0]).kind != "text":
         return False
     vals = cells[1:]
-    return sum(1 for c in vals if parse(c).kind in ("amount", "percent", "multiple")) >= max(1, len(vals) // 2 + (len(vals) % 2))
+    return sum(1 for c in vals if parse(c).kind in ("amount", "percent", "multiple", "malformed")) >= max(1, len(vals) // 2 + (len(vals) % 2))
 
 
 def _is_header(cells: List[str], width: int) -> bool:

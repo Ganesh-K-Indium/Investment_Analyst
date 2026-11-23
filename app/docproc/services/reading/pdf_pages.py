@@ -288,7 +288,7 @@ def _sideways(page: "fitz.Page") -> "list[tuple[list[float], str]]":
     reading order and, taken as lines of text, spoil titles ("Aug") and tables. When most of a page is turned (a landscape page
     saved sideways) none are returned: that text is the page."""
     try:
-        d = page.get_text("dict")
+        d = page.get_text("dict", flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)
     except Exception:
         return []
     turned, total, kept = [], 0, 0
@@ -313,8 +313,9 @@ def _without(text: str, lines: "list[str]") -> str:
     return "\n".join(l for l in text.splitlines() if " ".join(l.split()) not in gone)
 
 
-def analyze_page(path: str, page_num: int) -> Dict[str, Any]:
-    """Embedded-text view of one page. `scanned` means a picture covers most of the page, so any text layer is a
+def analyze_page(path: str, page_num: int, with_tables: bool = True) -> Dict[str, Any]:
+    """Embedded-text view of one page. `with_tables=False` skips table detection, which on PyMuPDF 2.x runs a neural layout model (seconds per
+    page) and finds nothing on a scan anyway (a scan has no ruling lines or text of its own to detect a table from). `scanned` means a picture covers most of the page, so any text layer is a
     scanner's OCR and should not be trusted as the page text (it is still used to place bounding boxes)."""
     with FITZ_LOCK, open_pdf(path) as pdf:
         page = pdf[page_num - 1]
@@ -326,7 +327,7 @@ def analyze_page(path: str, page_num: int) -> Dict[str, Any]:
                  for w in page.get_text("words") if w[4].strip() and not turned(w)]
         blocks = [{"id": f"b{b[5]}", "bbox": round_rect(b[:4]), "text": b[4].strip()}
                   for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]
-        tables = _tables(page, page_num)
+        tables = _tables(page, page_num) if with_tables else []
         widgets, every = [], []
         try:  # fillable-form fields: a digitally filled form has its values here, exact
             for w in page.widgets() or []:
@@ -377,7 +378,7 @@ def render_jpeg(path: str, page_num: int) -> bytes:
     with FITZ_LOCK, open_pdf(path) as pdf:
         png = pdf[page_num - 1].get_pixmap(dpi=ocr.RENDER_DPI).tobytes("png")
     from app.docproc.services.reading import tess
-    return ocr.normalize_image(tess.evened(png))
+    return ocr.normalize_image(tess.deskewed(tess.evened(png)))
 
 
 def search_rects(path: str, page_num: int, needle: str) -> List[List[float]]:

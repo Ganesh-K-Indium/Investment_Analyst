@@ -111,7 +111,7 @@ def reconstruct_table_with_ruling_lines(page, table_obj, v_lines: list, page_num
             y_vals.add(round(r.y1, 1))
     row_bounds = sorted(y_vals)
 
-    all_blocks = page.get_text("dict")["blocks"]
+    all_blocks = page.get_text("dict", flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)["blocks"]
 
     grid = []
     for i in range(len(row_bounds) - 1):

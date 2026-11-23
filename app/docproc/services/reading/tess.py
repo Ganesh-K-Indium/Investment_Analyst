@@ -97,6 +97,53 @@ def evened(png: bytes) -> bytes:
         return png
 
 
+def skew_angle(png: bytes, max_deg: float = 4.0) -> Optional[float]:
+    """The rotation (degrees, counter-clockwise) that straightens a slightly tilted scan, or None when the page is already straight enough
+    that it must not be touched. Projection profile: the right angle makes text lines line up, so the row sums become most uneven."""
+    from io import BytesIO
+    import numpy as np
+    from PIL import Image
+    try:
+        im = Image.open(BytesIO(png)).convert("L")
+        scale = 900 / max(im.width, 1)
+        small = im.resize((900, max(1, int(im.height * scale))))
+        arr = np.asarray(small, dtype=np.uint8)
+        ink = (arr < max(60, int(arr.mean()) - 30)).astype(np.uint8)
+        if ink.sum() < 400:
+            return None
+        base = Image.fromarray(ink * 255)
+
+        def score(a: float) -> float:
+            rows = np.asarray(base.rotate(a, resample=Image.NEAREST, fillcolor=0), dtype=np.float32).sum(axis=1)
+            return float(np.var(rows))
+
+        coarse = max(np.arange(-max_deg, max_deg + 0.01, 0.25), key=score)
+        fine = max(np.arange(coarse - 0.25, coarse + 0.26, 0.05), key=score)
+        if abs(fine) < 0.3 or score(fine) < score(0.0) * 1.05:
+            return None                       # straight enough, or no clear gain: a clean scan is never altered
+        return round(float(fine), 2)
+    except Exception:
+        return None
+
+
+def deskewed(png: bytes) -> bytes:
+    """The page image straightened when it is visibly tilted, otherwise unchanged. A tilt of even a degree makes OCR break rows apart, so a
+    label and its figures land on different lines."""
+    from io import BytesIO
+    from PIL import Image
+    angle = skew_angle(png)
+    if angle is None:
+        return png
+    try:
+        im = Image.open(BytesIO(png))
+        fill = 255 if im.mode == "L" else (255, 255, 255)
+        out = BytesIO()
+        im.rotate(angle, resample=Image.BICUBIC, fillcolor=fill).save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return png
+
+
 def _run(png: bytes, psm: Optional[int] = None) -> "tuple[bytes, str]":
     """One page of picture + invisible text, and Tesseract's word table (TSV) from the same run."""
     exe = binary()
@@ -178,7 +225,7 @@ def render_png(page: "fitz.Page") -> bytes:
 
 def searchable_page_with_words(page: "fitz.Page") -> "tuple[fitz.Document, str]":
     """A one-page document: `page`'s picture with Tesseract's text laid over it, at `page`'s size; plus the word table."""
-    pdf_bytes, tsv = png_to_pdf_and_words(render_png(page))
+    pdf_bytes, tsv = png_to_pdf_and_words(deskewed(render_png(page)))
     ocr = fitz.open("pdf", pdf_bytes)
     out = fitz.open()
     new = out.new_page(width=page.rect.width, height=page.rect.height)

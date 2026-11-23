@@ -173,10 +173,20 @@ def check_identities(table, kind: Optional[str]) -> List[Dict[str, Any]]:
     return out
 
 
+def check_malformed(table) -> List[Dict[str, Any]]:
+    """A figure that is not a valid number (digits and punctuation in an impossible arrangement) is a misread: it cannot be added up, so say so."""
+    out = []
+    for i, (label, vals) in enumerate(table):
+        for j, p in enumerate(vals):
+            if p.kind == "malformed":
+                out.append(_finding("unreadable_figure", i, j, label, 0.0, 0.0, f'"{label}": {p.raw.strip()!r} is not a valid number, so it was probably misread.', [(i, j)]))
+    return out
+
+
 def check_table(rows: List[List[Any]]) -> Dict[str, Any]:
     """{"statement": type|None, "findings": [...]} for one table given as rows of cells (first cell of each row is the label)."""
     t = _table(rows)
     kind = statement_type(rows)
     # "checked" says whether there was anything to check: a table with no totals and no recognisable statement is simply not covered
     checked = kind is not None or any(_TOTAL.match(label) for label, _ in t)
-    return {"statement": kind, "checked": checked, "findings": check_totals(t) + check_identities(t, kind)}
+    return {"statement": kind, "checked": checked, "findings": check_malformed(t) + check_totals(t) + check_identities(t, kind)}

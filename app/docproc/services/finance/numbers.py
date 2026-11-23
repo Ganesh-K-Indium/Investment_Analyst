@@ -16,7 +16,7 @@ _NUMBER = re.compile(r"^\d{1,3}(?:,\d{3})+(?:\.\d+)?$|^\d+(?:\.\d+)?$|^\.\d+$")
 
 @dataclass(frozen=True)
 class Parsed:
-    kind: str                 # amount | percent | multiple | empty | text
+    kind: str                 # amount | percent | multiple | empty | malformed | text
     value: Optional[float]    # signed; None for empty/text
     decimals: int = 0         # digits after the point as printed (the precision of the number)
     raw: str = ""
@@ -48,6 +48,9 @@ def parse(cell) -> Parsed:
     elif s.lower().endswith("x") and len(s) > 1:
         kind, s = "multiple", s[:-1].strip()
     if not _NUMBER.match(s):
+        # made of digits and number punctuation but not a valid number ("2.000.800", "1,2,34", "1 234"): a misread, not a word
+        if re.fullmatch(r"[\d.,\s]*\d[\d.,\s]*", s) and sum(c.isdigit() for c in s) >= 3:
+            return Parsed("malformed", None, 0, raw)
         return Parsed("text", None, 0, raw)
     v = float(s.replace(",", ""))
     return Parsed(kind, -v if neg else v, len(s.split(".")[1]) if "." in s else 0, raw)

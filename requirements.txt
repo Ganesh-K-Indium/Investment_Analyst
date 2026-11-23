@@ -155,7 +155,8 @@ markdown>=3.6
 
 # SSL/Network utilities for corporate environments
 pip-system-certs>=5.3
-pymupdf>=1.24.0
+pymupdf>=2.1.0           # 2.x required: the table detector the extraction engine and its tests rely on differs from 1.x
+pymupdf-layout>=2.1.0     # PyMuPDF's neural layout analysis, used by its table detector
 openpyxl>=3.1.0
 python-docx>=1.1.0
 python-pptx>=1.0.0
