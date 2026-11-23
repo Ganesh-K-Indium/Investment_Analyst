@@ -31,7 +31,7 @@ from statistics import median
 
 import pymupdf as fitz
 
-logger = logging.getLogger("ingestion.table_extractor")
+logger = logging.getLogger("app.docproc.reading.table_extractor")
 
 
 def get_vertical_lines(page) -> list:

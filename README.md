@@ -271,7 +271,7 @@ backend/                 all Python code (run commands from here)
   rag/                   LangGraph RAG pipeline (graph/), Qdrant client, prompts (+ editable prompt
                          registry), retrieval/rerank.py, verify/numbers.py, eval/metrics.py
   ingestion/             PDF/table/image processing, EDGAR fetcher, form4/ pipeline,
-                         macro data ingestion, table_extractor.py
+                         macro data ingestion
   quant/                 Stock-agent supervisor + sub-agents (stock_agent/), 5 MCP servers
                          (yahoo_mcp, technical_mcp, research_mcp, options_mcp, postgres_mcp)
   schemas/               Pydantic models (LLM structured outputs, request/response shapes)
@@ -293,7 +293,7 @@ docker-compose.yml, .env, .env.example
 
 ## Known limitations (see the technical guide for detail)
 
-- Native-PDF tables now extract with real column structure (`ingestion/table_extractor.py`); image-embedded charts/tables go through OCR + GPT-4o vision. Flattened prose extraction is still the fallback when neither applies.
+- Native-PDF tables now extract with real column structure (`app/docproc/services/reading/table_extractor.py`); image-embedded charts/tables go through OCR + GPT-4o vision. Flattened prose extraction is still the fallback when neither applies.
 - Document search is built on OpenAI embeddings shared by all users, so those stay on the server's OpenAI key whatever chat provider a user picks; changing the embedding model means re-indexing every collection.
 - Vision models can invent plausible text on very poor scans. Doubtful pages are held for review by default (Settings → Your documents → "Index low-confidence text"), and a second, *different* vision model should be used to cross-check; see `scripts/extraction_eval.py` for measured behaviour on financial statements.
 - Chat answers are checked against their sources for figures and units only, not for claims or reasoning.

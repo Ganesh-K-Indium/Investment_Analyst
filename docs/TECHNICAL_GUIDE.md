@@ -211,7 +211,7 @@ A `SemanticCache` class exists (embedding-similarity cache keyed on query text) 
 
 ## 5. Ingestion pipeline
 
-**Core files:** `backend/ingestion/pdf_processor.py`, `backend/ingestion/table_extractor.py`, `backend/ingestion/image_data_prep.py`, `backend/ingestion/ingest_pdf.py`, `backend/ingestion/edgar_fetcher.py`, `backend/ingestion/batch_ingest.py`, `scripts/ingest_ticker.py`
+**Core files:** `backend/ingestion/pdf_processor.py`, `backend/app/docproc/services/reading/table_extractor.py`, `backend/ingestion/image_data_prep.py`, `backend/ingestion/ingest_pdf.py`, `backend/ingestion/edgar_fetcher.py`, `backend/ingestion/batch_ingest.py`, `scripts/ingest_ticker.py`
 
 ### Resolution priority for filing metadata
 
@@ -450,7 +450,7 @@ A global library of every document ingested into Qdrant plus a per-document insp
 - **Endpoints** (`backend/app/api/documents.py`, all authenticated): `GET /documents` (filters, cursor paging, facets), `/documents/{id}`, `/pages`, `/pages/{n}` (page JSON + PyMuPDF geometry), `/pages/{n}/locate?q=` (cited text -> rects; exact search, then fuzzy word-window match), `/pdf` (Range + ETag), `POST /ensure-pdf` + `GET /pdf-status` (re-download from SEC EDGAR into `sec_filings/{TICKER}/`).
 - **Alignment check**: a re-downloaded PDF is rendered from HTML, so pagination can differ; per-page text fingerprints decide `aligned`, and the UI warns / searches adjacent pages when false.
 - **Frontend** (`investment-analyst-ui/src/features/documents/`): `/documents` (URL-synced filters) and `/documents/:docId?page=&hl=&tab=&from=chat:<portfolio>:<session>`. pdf.js renders pages lazily; right pane has Text / JSON / Tables / Images tabs with block-hover mapping. Shortcuts: `j`/`k` page, `/` search, `+`/`-` zoom, `1`-`4` tabs, `Esc` clear highlight.
-- **Table ingestion** (`backend/ingestion/table_extractor.py`, `backend/ingestion/chunking.py`): financial tables are rebuilt from word positions (columns from the numbers' right edges, row labels and wrapped labels kept, multi-row headers flattened, statement caption added); a completeness guard falls back to ruling-line extraction if any printed number would be dropped. Tables are packed whole into separate `[TABLES]` chunks (`chunk_kind: table`) instead of being cut mid-row by the text splitter. `scripts/reextract_tables.py` (dry run by default, `--apply` to write) upgrades already-ingested filings: it re-chunks only pages that have tables, re-embeds them and replaces that page's old text chunks.
+- **Table ingestion** (`backend/app/docproc/services/reading/table_extractor.py`, `backend/ingestion/chunking.py`): financial tables are rebuilt from word positions (columns from the numbers' right edges, row labels and wrapped labels kept, multi-row headers flattened, statement caption added); a completeness guard falls back to ruling-line extraction if any printed number would be dropped. Tables are packed whole into separate `[TABLES]` chunks (`chunk_kind: table`) instead of being cut mid-row by the text splitter. `scripts/reextract_tables.py` (dry run by default, `--apply` to write) upgrades already-ingested filings: it re-chunks only pages that have tables, re-embeds them and replaces that page's old text chunks.
 - **Citations**: chat citation page pills link to the Inspector; `features/documents/citations.ts` picks the best-matching sentence on the cited page (no LLM) as the highlight quote. Stored chat history keeps only metadata, so older sessions open the right page without a highlight.
 
 ## 11. Services layer

@@ -61,7 +61,7 @@ def test_merge_text_chunks_orders_and_drops_overlap():
 
 
 def test_prose_blocks_are_not_data_tables_but_real_tables_are():
-    from ingestion.table_extractor import _is_data_table
+    from app.docproc.services.reading.table_extractor import _is_data_table
     prose = {"headers": ["Line item", "Col 1", "Col 2"], "rows": [
         ["As of", "", "December 31, 2025, there were approximately 5,861 and 1,611 stockholders of record of our Class A stock"],
         ["December", "31,", "2025, there were approximately 57 stockholders of record of our Class B stock."]]}

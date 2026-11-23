@@ -18,7 +18,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from rag.vectordb.client import load_vector_database
 from ingestion.image_data_prep import ImageDescription
-from ingestion.table_extractor import extract_tables_markdown_for_page
+from app.docproc.services.reading.table_extractor import extract_tables_markdown_for_page
 from ingestion.chunking import chunk_page_documents, embed_text, make_text_splitter
 from dotenv import load_dotenv
 

@@ -3,7 +3,7 @@ Re-chunk the tables of documents that are already ingested, without re-running i
 
 Older ingestions stored lossy table markdown (row labels dropped, headers split) inside page chunks and let the
 text splitter cut tables mid-row. For every page that has tables this rebuilds the page's chunks with the current
-extractor + table-aware chunker (ingestion/table_extractor.py, ingestion/chunking.py), re-embeds them, upserts the
+extractor + table-aware chunker (app/docproc/services/reading/table_extractor.py, ingestion/chunking.py), re-embeds them, upserts the
 new chunks and deletes that page's old text chunks. Image chunks and pages without tables are not touched.
 
 A page is skipped (never guessed at) unless:
@@ -31,7 +31,7 @@ from app.core.paths import SEC_FILINGS_DIR  # noqa: E402
 from langchain_core.documents import Document  # noqa: E402
 from qdrant_client import models  # noqa: E402
 
-from ingestion.table_extractor import extract_tables_markdown_for_page  # noqa: E402
+from app.docproc.services.reading.table_extractor import extract_tables_markdown_for_page  # noqa: E402
 
 MARKER = "\n\n[TABLES]\n"
 SEC_DIR = SEC_FILINGS_DIR

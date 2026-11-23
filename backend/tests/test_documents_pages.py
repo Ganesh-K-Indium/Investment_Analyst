@@ -160,7 +160,7 @@ def test_financial_table_rebuilt_from_word_positions(tmp_path):
     """Row labels, wrapped labels and a spanning header survive; numbers land in the right columns."""
     import fitz
     import sys
-    from ingestion.table_extractor import reconstruct_table_by_words
+    from app.docproc.services.reading.table_extractor import reconstruct_table_by_words
 
     d = fitz.open()
     page = d.new_page()
@@ -205,7 +205,7 @@ def _equity_style_page():
 
 def test_totals_row_below_detected_edge_and_caption_title(tmp_path):
     import sys
-    from ingestion.table_extractor import reconstruct_table_by_words, _loses_numbers
+    from app.docproc.services.reading.table_extractor import reconstruct_table_by_words, _loses_numbers
     page = _equity_style_page()
     # find_tables' bottom edge stops above the last ("Total") row
     built = reconstruct_table_by_words(page, (40, 95, 520, 128), 0.0, 1)

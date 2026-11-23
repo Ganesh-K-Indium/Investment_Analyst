@@ -126,7 +126,7 @@ def _live_tables(page, page_num: int) -> List[Dict[str, Any]]:
     Used for display so the Inspector shows full row labels / multi-row headers even for pages indexed with the
     older, lossier extraction."""
     try:
-        from ingestion.table_extractor import _numbers, extract_page_tables_with_bbox, table_to_markdown
+        from app.docproc.services.reading.table_extractor import _numbers, extract_page_tables_with_bbox, table_to_markdown
         out = []
         for t, bb in extract_page_tables_with_bbox(page, page_num):
             # Accuracy check: every number printed inside the table area must appear in the extracted cells.
