@@ -101,41 +101,6 @@ class BrowseFilesResponse(BaseModel):
     portfolio_name: Optional[str] = Field(None, description="Portfolio name if available")
 
 
-# File import schemas
-class FileImportRequest(BaseModel):
-    """Schema for importing files from an integration"""
-    integration_id: int = Field(..., description="Integration ID to import from")
-    file_paths: List[str] = Field(..., description="List of file paths to import")
-    ticker: str = Field(..., description="Ticker symbol for these files (e.g., AAPL, GOOGL)")
-    portfolio_id: Optional[int] = Field(None, description="Optional portfolio to associate files with")
-    filing_type: Optional[str] = Field(None, description="SEC filing type ('10-K', '10-Q', '8-K', '20-F', '6-K')")
-    period_end_date: Optional[str] = Field(None, description="ISO date (YYYY-MM-DD) for period end")
-    year: Optional[int] = Field(None, description="Fiscal/Report year (e.g. 2024)")
-
-
-class FileImportStatus(BaseModel):
-    """Status of a single file import"""
-    file_path: str
-    status: Literal["pending", "downloading", "processing", "completed", "failed"]
-    success: bool
-    message: str
-    chunks_added: Optional[int] = None
-    ticker: Optional[str] = None
-    filing_type: Optional[str] = None
-    period_end_date: Optional[str] = None
-    year: Optional[int] = None
-    error: Optional[str] = None
-
-
-class FileImportResponse(BaseModel):
-    """Schema for file import response"""
-    integration_id: int
-    total_files: int
-    successful: int
-    failed: int
-    file_results: List[FileImportStatus]
-
-
 # Connection test schema
 class ConnectionTestResponse(BaseModel):
     """Schema for connection test response"""

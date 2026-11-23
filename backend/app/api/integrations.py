@@ -2,19 +2,14 @@
 Integration management and file import endpoints
 """
 import logging
-import json
-import asyncio
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 
 from app.database.connection import get_db_session
 from app.services.integration import IntegrationService
 from app.services.connectors.base import BaseConnector
-from app.services.file_import import FileImportService
 from app.services.portfolio import PortfolioService
-from app.utils.log_capture import sse_log_context
 from app.database.models import User
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from schemas.integrations import (
@@ -23,8 +18,6 @@ from schemas.integrations import (
     IntegrationResponse,
     BrowseFilesRequest,
     BrowseFilesResponse,
-    FileImportRequest,
-    FileImportResponse,
     ConnectionTestResponse,
     RemoteFile
 )
@@ -394,94 +387,3 @@ async def browse_integration_files(
         logger.error(error_detail)
         logger.error("=== End Error ===")
         raise HTTPException(status_code=500, detail=f"Failed to browse files: {str(e)}")
-
-
-# ========== File Import Endpoints ==========
-
-@router.post("/import", response_model=FileImportResponse)
-async def import_files(
-    payload: FileImportRequest,
-    db: AsyncSession = Depends(get_db_session),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Import and ingest files from an integration
-
-    This endpoint:
-    1. Downloads files from the connected data source
-    2. Processes them (PDF extraction, image analysis, etc.)
-    3. Ingests them into the vector database for RAG under the specified ticker collection
-
-    Note: All files in a single import request will be ingested to the same ticker collection.
-    """
-    integration = await IntegrationService.get_integration(db, payload.integration_id)
-    if not integration:
-        raise HTTPException(status_code=404, detail="Integration not found")
-    verify_owner(integration.user_id, current_user)
-
-    if payload.portfolio_id:
-        portfolio_check = await PortfolioService.get_portfolio(db, payload.portfolio_id)
-        if portfolio_check:
-            verify_owner(portfolio_check.user_id, current_user)
-
-    try:
-        # Validate ticker format (should be uppercase alphanumeric)
-        ticker = payload.ticker.upper().strip()
-        if not ticker:
-            raise HTTPException(status_code=400, detail="Ticker symbol is required")
-
-        async def event_generator():
-            log_queue = asyncio.Queue()
-            loop = asyncio.get_running_loop()
-            token = sse_log_context.set((loop, log_queue))
-            main_queue = asyncio.Queue()
-
-            async def run_import():
-                try:
-                    async for event in FileImportService.import_files_stream(
-                        db=db,
-                        integration_id=payload.integration_id,
-                        file_paths=payload.file_paths,
-                        ticker=ticker,
-                        filing_type=payload.filing_type,
-                        period_end_date=payload.period_end_date,
-                        year=payload.year,
-                    ):
-                        await main_queue.put(event)
-                except ValueError as e:
-                    await main_queue.put({"event": "error", "data": {"detail": str(e)}})
-                except Exception as e:
-                    await main_queue.put({"event": "error", "data": {"detail": f"Failed to import files: {str(e)}"}})
-                finally:
-                    await main_queue.put(None)
-
-            async def run_log_drainer():
-                try:
-                    while True:
-                        msg = await log_queue.get()
-                        if msg is None:
-                            break
-                        await main_queue.put({"event": "log", "data": {"message": msg}})
-                except asyncio.CancelledError:
-                    pass
-
-            import_task = asyncio.create_task(run_import())
-            drainer_task = asyncio.create_task(run_log_drainer())
-
-            try:
-                while True:
-                    event = await main_queue.get()
-                    if event is None:
-                        break
-                    yield f"data: {json.dumps(event)}\n\n"
-            finally:
-                import_task.cancel()
-                drainer_task.cancel()
-                sse_log_context.reset(token)
-
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to import files: {str(e)}")

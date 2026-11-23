@@ -2,6 +2,7 @@
 User documents: files a user brings (statements, broker notes, models, scans...) read, reviewed and made searchable.
 
 POST   /user-documents                 upload one or more files (multipart); returns per-file status
+POST   /user-documents/import          bring files from a connected source (SharePoint, S3, ...); same review and approval as an upload
 GET    /user-documents                 my documents plus ones shared with the workspace (filters: status, doc_type, entity, q)
 GET    /user-documents/types           the document types a file can be filed under
 GET    /user-documents/{id}            one document (poll this for progress while status is processing)
@@ -24,6 +25,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import get_current_user, verify_owner
+from app.services.file_import import MAX_FILES_PER_IMPORT, FileImportService
+from app.services.integration import IntegrationService
 from app.database.connection import get_db_session
 from app.database.models import Portfolio, User, UserDocument
 from app.services.app_settings import store as settings_store
@@ -100,6 +103,38 @@ async def upload(files: List[UploadFile] = File(...), doc_type: str = Form("auto
         manager.start(doc.id, str(user.id), settings, known)
         results.append({"filename": f.filename, "ok": True, "document": _view(doc, user)})
     return {"results": results}
+
+
+class ImportBody(BaseModel):
+    integration_id: int
+    file_paths: List[str] = Field(..., min_length=1)
+    doc_type: str = "auto"
+    entity: Optional[str] = None
+    period: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    visibility: Optional[str] = None
+    reading: Optional[str] = None
+
+
+@router.post("/import", status_code=202)
+async def import_from_source(body: ImportBody, db: AsyncSession = Depends(get_db_session), user: User = Depends(get_current_user)):
+    """Download the chosen files from one of the user's connected sources and add them as documents, held for review like any upload."""
+    if len(body.file_paths) > MAX_FILES_PER_IMPORT:
+        raise HTTPException(422, f"Import at most {MAX_FILES_PER_IMPORT} files at a time.")
+    if body.visibility not in (None, "private", "workspace"):
+        raise HTTPException(422, "visibility must be private or workspace")
+    if body.reading not in (None, "economy", "balanced", "accuracy"):
+        raise HTTPException(422, "reading must be economy, balanced or accuracy")
+    integration = await IntegrationService.get_integration(db, body.integration_id)
+    if not integration:
+        raise HTTPException(404, "Source not found.")
+    verify_owner(integration.user_id, user)
+    settings = await settings_store.effective(db, user.id)
+    known = await _known_entities(db, user)
+    rows = await FileImportService.import_to_documents(db, user.id, body.integration_id, body.file_paths, settings, known_entities=known, doc_type=body.doc_type,
+                                                       entity=body.entity, period=body.period, tags=[t.strip() for t in body.tags if t.strip()],
+                                                       visibility=body.visibility, reading=body.reading)
+    return {"results": [{**{k: v for k, v in r.items() if k != "doc"}, **({"document": _view(r["doc"], user)} if "doc" in r else {})} for r in rows]}
 
 
 @router.get("")

@@ -16,7 +16,7 @@ For the full architectural deep-dive (every subsystem, every file, known gaps), 
 - **Quant multi-agent system** — A LangGraph supervisor routes to specialized sub-agents (ticker lookup, stock fundamentals, technical analysis, research/ratings, options intelligence, and — when a Postgres integration is connected — a Postgres query agent), each backed by its own MCP server.
 - **Options intelligence** — Deterministic (non-LLM) options-chain analytics: put/call ratio, support/resistance from strike concentration, IV skew, unusual-volume detection, "smart money" long-dated positioning.
 - **Insider trading advisory** — SEC Form 4 filings ingested and scored (role-weighted, dollar-weighted buy/sell signal) into a natural-language recommendation.
-- **External integrations** — Connect and import files from S3, SharePoint, Google Drive, Azure Blob, OneDrive, SFTP, and Confluence, plus query a connected Postgres database directly from the quant agent.
+- **External integrations** — Connect S3, SharePoint, Google Drive, Azure Blob, OneDrive, SFTP, and Confluence under Data Sources, then use **My documents > Import from a source** to bring files in. Imported files go through the same reading, review and approval as an upload. You can also query a connected Postgres database directly from the quant agent.
 - **Background analysis jobs** — Long-running RAG/ALPHA/quant analysis runs execute on Redis/Arq-backed job queues (separate "interactive" and "batch" workers) instead of blocking an HTTP request.
 - **Portfolios, chat history, analyst reports** — Portfolio-scoped conversations, per-session and cross-session AI summaries, a server-side report-drafting clipboard, publishing to a searchable Fund-Manager repository, and PDF export.
 
