@@ -1,0 +1,1032 @@
+"""
+RAG endpoints (ask and compare) with portfolio integration and chat persistence
+"""
+import logging
+import time
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from typing import Any, Dict, Optional, List
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.messages import HumanMessage
+from langchain_community.callbacks import get_openai_callback
+from app.database.connection import get_db_session
+from app.core.paths import OUTPUT_DIR
+from app.services.portfolio import PortfolioService
+from app.services.chat import ChatService
+from app.database.models import AgentType, MessageRole, User, ChatSession
+from app.services.documents.quotes import pick_quote
+from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
+from app.services.vectordb_manager import get_vectordb_manager
+from app.utils.company_mapping import get_ticker
+from app.utils.time import to_iso_z
+from app.utils.usage_tracker import track_usage
+from app.services import app_settings, usage_ledger, llm_providers, run_context
+from app.services.graph_stream import stream_graph
+from app.services.app_settings import store as settings_store
+import asyncio
+import uuid
+import json
+import datetime
+import os
+
+logger = logging.getLogger("api.rag")
+router = APIRouter(tags=["RAG"])
+
+# Debug-only: dump full response payloads to output/json/ on every /ask or
+# /compare call. Off by default — was previously unconditional, growing
+# output/json/ without bound on every request in any environment.
+_SAVE_DEBUG_RESPONSES = os.getenv("SAVE_DEBUG_RESPONSES", "false").lower() == "true"
+
+
+def _maybe_save_debug_response(response_data: dict, prefix: str) -> None:
+    if not _SAVE_DEBUG_RESPONSES:
+        return
+    try:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        json_dir = str(OUTPUT_DIR / "json")
+        os.makedirs(json_dir, exist_ok=True)
+        json_path = os.path.join(json_dir, f"{prefix}_{timestamp}.json")
+        with open(json_path, 'w') as f:
+            json.dump(response_data, f, indent=4)
+        logger.info("Debug response saved to: %s", json_path)
+    except Exception as e:
+        logger.warning("Failed to save debug response: %s", e)
+
+
+async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str, settings: dict = None, db=None, user_id=None, emit=None, creds: dict = None):
+    """Run one LangGraph query end-to-end while capturing tokens and wall-clock time.
+
+    `settings` are the user's effective settings (app/services/app_settings): they are made current for the whole run, so every
+    node builds its models and reads its options from them. Every model call reports to the usage tracker through the model
+    registry's callback; with `db` and `user_id` the per-role totals are also stored for the monthly budget.
+
+    Returns (result, usage_summary_dict).
+    """
+    with track_usage(run_label) as tracker, app_settings.use(settings), llm_providers.use_credentials(creds):
+        start = time.perf_counter()
+        with get_openai_callback() as cb:
+            if emit is None:
+                result = await agent.ainvoke(inputs, config)
+            else:
+                result = await stream_graph(agent, inputs, config, emit, _ANSWER_NODES)
+        # The per-role records (model registry callback) are the detail. The OpenAI callback's aggregate is only a fallback for runs
+        # where no role reported (a node still using a model built outside the registry): recording both would count every token twice.
+        if not any(e.stage != "graph_total" for e in tracker.entries):
+            tracker.record(
+                stage="graph_total", model="gpt-4o/gpt-4o-mini (all nodes)",
+                prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
+                total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - start,
+            )
+    summary = tracker.summary()
+    if db is not None and user_id is not None:
+        try:
+            summary["cost"] = await usage_ledger.persist(db, user_id, tracker)
+        except Exception:
+            logger.exception("Could not store usage for %s", run_label)
+    return result, summary
+
+
+_ANSWER_NODES = {"generate", "custom_generate", "alpha_generate", "scenario_generate", "macro_format"}
+
+
+def _saved_document(doc, answer: str) -> dict:
+    """Source entry kept in the saved chat message: metadata plus the one-sentence quote that supports the answer
+    (picked once, here), so the PDF highlight works after a reload without storing chunk text in chat history."""
+    meta = doc.metadata if hasattr(doc, "metadata") else {}
+    entry = {"metadata": meta}
+    if meta.get("content_type") != "image":
+        quote = pick_quote(getattr(doc, "page_content", "") or "", answer)
+        if quote:
+            entry["quote"] = quote
+    return entry
+
+
+def _response_document(doc, answer: str) -> dict:
+    """Source entry in the live response: full text (as before) plus the server-picked cited quote."""
+    entry = {
+        "content": doc.page_content if hasattr(doc, "page_content") else str(doc),
+        "metadata": doc.metadata if hasattr(doc, "metadata") else {},
+    }
+    saved = _saved_document(doc, answer)
+    if "quote" in saved:
+        entry["quote"] = saved["quote"]
+    return entry
+
+
+def _build_citation_info(result: dict) -> list:
+    """Build clean, structured citation info from document metadata if not present"""
+    citation_info = result.get("citation_info", [])
+    if citation_info:
+        return citation_info
+
+    docs = result.get("documents", [])
+    if not docs:
+        return []
+
+    seen = set()
+    built = []
+    for doc in docs:
+        meta = doc.metadata if hasattr(doc, "metadata") else {}
+        sf = meta.get("source_file", meta.get("source", ""))
+        pg = meta.get("page_num")
+        if sf:
+            key = (sf, pg)
+            if key not in seen:
+                seen.add(key)
+                built.append({
+                    "source_file": sf,
+                    "page_num": pg,
+                    "company": meta.get("company"),
+                    "ticker": meta.get("ticker"),
+                    "filing_type": meta.get("filing_type"),
+                    "period_end_date": meta.get("period_end_date"),
+                    "year": meta.get("year")
+                })
+    return built
+
+
+# Pydantic Models
+class AskInput(BaseModel):
+    query: str = Field(..., description="User query")
+    thread_id: str = Field(..., description="Session thread_id (required for portfolio context)")
+    framework: Optional[str] = Field(None, description="Id of one of the user's own analysis frameworks to run")
+    document_ids: Optional[List[str]] = Field(None, description="Restrict the search of the user's uploaded documents to these ids")
+    clarification: Optional[str] = Field(None, description="The user's answer to a clarification question the previous call returned")
+    settings_override: Optional[Dict[str, Any]] = Field(None, description="Per-request settings that win over the saved ones (same shape as /settings)")
+
+
+class CompareInput(BaseModel):
+    company1: str = Field(..., description="First company to compare")
+    company2: str = Field(..., description="Second company to compare")
+    company3: Optional[str] = Field(None, description="Optional third company")
+    user_id: str = Field(..., description="User identifier")
+    thread_id: Optional[str] = Field(None, description="Optional thread_id for conversation continuity")
+    year: Optional[int] = Field(None, description="Year for comparison (e.g. 2024)")
+
+
+class AlphaInput(BaseModel):
+    tickers: List[str] = Field(..., description="Ticker symbols to run the ALPHA framework for — no free-text query")
+    user_id: str = Field(..., description="User identifier")
+    thread_id: str = Field(..., description="Session thread_id (required for portfolio context)")
+
+
+class HealthStatusResponse(BaseModel):
+    status: str
+    agent_initialized: bool
+    timestamp: str
+
+
+class CapabilitiesResponse(BaseModel):
+    document_qa: List[str]
+    company_comparison: List[str]
+    data_sources: List[str]
+    intelligent_features: List[str]
+
+
+# Global references (set by main app)
+agent = None
+
+
+def set_agent(agent_instance):
+    """Set the global agent instance"""
+    global agent
+    agent = agent_instance
+
+
+@router.post("/ask")
+async def ask_agent(
+    payload: AskInput,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Handle RAG queries with portfolio-based filtering and chat persistence.
+    Uses ticker-based vector collections.
+    """
+    return await ask_core(payload, db, current_user)
+
+
+async def ask_core(
+    payload: AskInput,
+    db: AsyncSession,
+    current_user: User,
+    emit=None,
+) -> dict:
+    """
+    Core /ask logic, factored out so both the synchronous HTTP route and the
+    background job runner (app/jobs/rag_jobs.py) share one implementation.
+    """
+    try:
+        if not agent:
+            raise HTTPException(status_code=503, detail="Agent not initialized")
+
+        query = payload.query
+        thread_id = payload.thread_id
+
+        # Get session and associated portfolio
+        session = await PortfolioService.get_session(db, thread_id)
+        if not session:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session not found. Please create a portfolio session first."
+            )
+        verify_owner(session.user_id, current_user)
+
+        portfolio = session.portfolio
+
+        # Map portfolio companies to tickers for the filter
+        # This helps the agent know which tickers are valid for this portfolio
+        company_tickers = []
+        for company in portfolio.company_names:
+            t = get_ticker(company)
+            if t:
+                company_tickers.append(t)
+            else:
+                # Fallback to company name if no ticker found
+                company_tickers.append(company)
+
+        # Create or get chat session for persistence
+        chat_session = await ChatService.create_or_get_chat_session(
+            db=db,
+            session_id=thread_id,
+            user_id=session.user_id,
+            agent_type=AgentType.RAG,
+            portfolio_id=portfolio.id,
+            title=f"RAG: {portfolio.name}",
+            session_metadata={
+                "type": "ask",
+                "portfolio_name": portfolio.name,
+                "companies": portfolio.company_names,
+                "tickers": company_tickers
+            }
+        )
+
+        # Save user message (not again when this call only answers a clarification question)
+        if not payload.clarification:
+            await ChatService.add_message(
+                db=db,
+                session_id=thread_id,
+                role=MessageRole.USER,
+                content=query
+            )
+
+        # Register session with VectorDBManager (for context tracking)
+        vectordb_mgr = get_vectordb_manager()
+        vectordb_mgr.register_session(thread_id, portfolio.id)
+                
+        logger.info("Portfolio-scoped context: %s | Tickers: %s", portfolio.name, company_tickers)
+        
+        # user_id lets retrieve() add this user's analyst notes; it comes from the verified token, never the payload
+        config = {"configurable": {"thread_id": f"rag:{thread_id}", "user_id": str(current_user.id)}}
+
+        # Standard execution
+        inputs = {
+            "messages": [HumanMessage(content=query)],
+            "vectorstore_searched": False,
+            "web_searched": False,
+            "vectorstore_quality": "none",
+            "needs_web_fallback": False,
+            "retry_count": 0,
+            "documents": [],
+            "document_sources": {},
+            "citation_info": [],
+            "summary_strategy": "single_source",
+            "company_filter": company_tickers,  # Pass valid tickers for this portfolio
+            "ticker": None,  # Explicitly None, relying on company_filter
+            "sub_query_analysis": {},
+            "sub_query_results": {},
+            # Explicitly reset comparison-mode fields: the checkpointer merges
+            # each turn's inputs on top of the LAST checkpointed state for this
+            # thread_id, so if this thread was ever used for a /compare call
+            # (which sets these), they'd otherwise persist forever and silently
+            # route every future /ask question through the annual-only 10-K
+            # comparison templates instead of the real analyzer.
+            "is_comparison_mode": False,
+            "comparison_company1": None,
+            "comparison_company2": None,
+            "comparison_company3": None,
+            "year_start": None,
+            "year_end": None,
+            "chart_url": None,
+            "chart_filename": None,
+            "module_id": payload.framework,
+            "document_ids": payload.document_ids or [],
+            "custom_module": None,
+            "rewrite_count": 0,
+            "verification": {},
+            "clarified": False,
+        }
+        settings, creds = await run_context.load(db, current_user.id, portfolio.id, payload.settings_override)
+        run_context.preflight(settings, creds, run_context.RAG_ROLES)
+        if payload.clarification:
+            from langgraph.types import Command
+            inputs = Command(resume=payload.clarification)       # continue the paused run with the user's answer
+        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"ask:{thread_id}", settings, db, current_user.id, emit, creds)
+
+        pending = result.get("__interrupt__")
+        if pending:
+            ask = getattr(pending[0], "value", pending[0])
+            return {"clarification_needed": True, "question": (ask or {}).get("question", "Can you clarify?"), "thread_id": thread_id,
+                    "portfolio_id": portfolio.id, "usage": usage_summary}
+
+        # Extract answer
+        answer = result["messages"][-1].content
+        
+        # Save assistant message with metadata
+        await ChatService.add_message(
+            db=db,
+            session_id=thread_id,
+            role=MessageRole.ASSISTANT,
+            content=answer,
+            metadata={
+                "portfolio_id": portfolio.id,
+                "portfolio_name": portfolio.name,
+                "company_filter": company_tickers,
+                "chart_url": result.get("chart_url"),
+                "chart_filename": result.get("chart_filename"),
+                "vectorstore_searched": result.get("vectorstore_searched", False),
+                "web_searched": result.get("web_searched", False),
+                "vectorstore_quality": result.get("vectorstore_quality", "none"),
+                "needs_web_fallback": result.get("needs_web_fallback", False),
+                "retry_count": result.get("retry_count", 0),
+                "summary_strategy": result.get("summary_strategy", "single_source"),
+                "document_count": len(result.get("documents", [])),
+                "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5],
+                "citation_info": _build_citation_info(result),
+                "document_sources": result.get("document_sources", {}),
+                "documents": [_saved_document(doc, answer) for doc in result.get("documents", [])],
+                "sub_query_analysis": result.get("sub_query_analysis", {}),
+                "sub_query_results": result.get("sub_query_results", {}),
+                "intermediate_message": result.get("Intermediate_message", ""),
+                "ticker": result.get("ticker"),
+                "verification": result.get("verification", {}),
+                "usage": usage_summary
+            },
+            token_count=usage_summary["total_tokens"]
+        )
+
+        logger.info("Query: %s | Thread: %s | Answer: %.200s...", query, thread_id, answer)
+
+        # Prepare response
+        response_data = {
+            "answer": answer,
+            "thread_id": thread_id,
+            "portfolio_id": portfolio.id,
+            "portfolio_name": portfolio.name,
+            "company_filter": company_tickers,
+            "ticker": None,
+            "chart_url": result.get("chart_url"),
+            "chart_filename": result.get("chart_filename"),
+            "messages": [
+                {
+                    "type": msg.__class__.__name__,
+                    "content": msg.content if hasattr(msg, 'content') else str(msg)
+                }
+                for msg in result.get("messages", [])
+            ],
+            "intermediate_message": result.get("Intermediate_message", ""),
+            "documents": [_response_document(doc, answer) for doc in result.get("documents", [])],
+            "vectorstore_searched": result.get("vectorstore_searched", False),
+            "web_searched": result.get("web_searched", False),
+            "vectorstore_quality": result.get("vectorstore_quality", "none"),
+            "needs_web_fallback": result.get("needs_web_fallback", False),
+            "retry_count": result.get("retry_count", 0),
+            "document_sources": result.get("document_sources", {}),
+            "citation_info": _build_citation_info(result),
+            "summary_strategy": result.get("summary_strategy", "single_source"),
+            "sub_query_analysis": result.get("sub_query_analysis", {}),
+            "sub_query_results": result.get("sub_query_results", {}),
+            "verification": result.get("verification", {}),
+            "usage": usage_summary,
+        }
+        
+        _maybe_save_debug_response(response_data, "ask")
+
+        return response_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error in /ask: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ask/stream")
+async def ask_stream(
+    payload: AskInput,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Server-sent events: {"type":"step","node"} as each stage finishes, {"type":"token","text"} while the answer is written, then
+    {"type":"done","result":{...same as /ask...}} (or {"type":"error"}). The final answer in "done" replaces the streamed text:
+    verification may add a note after the last token."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def emit(event: dict):
+        await queue.put(event)
+
+    async def run():
+        try:
+            result = await ask_core(payload, db, current_user, emit=emit)
+            await queue.put({"type": "done", "result": result})
+        except HTTPException as e:
+            await queue.put({"type": "error", "status": e.status_code, "detail": e.detail})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Streaming ask failed")
+            await queue.put({"type": "error", "status": 500, "detail": str(e)})
+        finally:
+            await queue.put(None)
+
+    task = asyncio.create_task(run())
+
+    async def events():
+        try:
+            while True:
+                ev = await queue.get()
+                if ev is None:
+                    break
+                yield f"data: {json.dumps(ev, default=str)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/compare")
+async def compare_companies(
+    payload: CompareInput,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Handle company comparison queries with chat persistence.
+    Creates a TEMPORARY Vector DB instance with specified companies.
+    Does NOT affect portfolio-scoped DB instances.
+    """
+    return await compare_core(payload, db, current_user)
+
+
+async def compare_core(
+    payload: CompareInput,
+    db: AsyncSession,
+    current_user: User,
+) -> dict:
+    """Core /compare logic, shared by the HTTP route and the background job runner."""
+    verify_user_id_matches(payload.user_id, current_user)
+    try:
+        if not agent:
+            raise HTTPException(status_code=503, detail="Agent not initialized")
+
+        company1 = payload.company1
+        company2 = payload.company2
+        company3 = payload.company3
+        user_id = payload.user_id
+        
+        # Validate input
+        if not company1 or not company2:
+            raise HTTPException(status_code=400, detail="company1 and company2 are required")
+        
+        # Build company list and query
+        companies = [company1.lower(), company2.lower()]
+        comparison_str = f"{company1} vs {company2}"
+        
+        if company3:
+            companies.append(company3.lower())
+            comparison_str += f" vs {company3}"
+            
+        # Map companies to tickers
+        tickers = []
+        for company in companies:
+            t = get_ticker(company)
+            if t:
+                tickers.append(t)
+            else:
+                # If it looks like a ticker, use it
+                if len(company) <= 5 and " " not in company:
+                    tickers.append(company.upper())
+                else:
+                    # Fallback? Maybe just warn or ignore?
+                    # For now keep it as is, retrieve will fail to find collection and fallback to web search probably.
+                    pass
+        
+        logger.info("Mapped companies %s to tickers: %s", companies, tickers)
+        
+        # Generate a stable session ID based on user + companies if not provided.
+        # Using a deterministic hash ensures the same comparison always continues
+        # the same session rather than creating a new one on every call.
+        if payload.thread_id:
+            thread_id = payload.thread_id
+        else:
+            import hashlib
+            companies_key = "_".join(sorted(companies))  # sorted for order-independence
+            thread_id = f"compare_{user_id}_{hashlib.md5(companies_key.encode()).hexdigest()[:12]}"
+
+        # Compare isn't restricted to a portfolio's own tickers, but when
+        # it's run from within a portfolio's page (thread_id points at that
+        # portfolio's session), tag it with that portfolio_id anyway — same
+        # as ask/alpha — so it shows up in that portfolio's history instead
+        # of nowhere. Falls back to None when run without portfolio context.
+        portfolio_session = await PortfolioService.get_session(db, thread_id)
+        portfolio_id = portfolio_session.portfolio.id if portfolio_session else None
+
+        # Create or get chat session for persistence
+        chat_session = await ChatService.create_or_get_chat_session(
+            db=db,
+            session_id=thread_id,
+            user_id=user_id,
+            agent_type=AgentType.RAG,
+            portfolio_id=portfolio_id,
+            title=f"Comparison: {comparison_str}",
+            session_metadata={
+                "type": "compare",
+                "companies": companies,
+                "tickers": tickers,
+                "year": payload.year
+            }
+        )
+        # If payload.thread_id referenced a PRE-EXISTING session, guard against
+        # it belonging to a different user (create_or_get_chat_session returns
+        # the existing row rather than creating a new one in that case).
+        verify_owner(chat_session.user_id, current_user)
+
+        # Build year string for the query
+        # No hard-coded year here: a literal year would be read as an explicit year
+        # in the question and override each company's latest filed fiscal year.
+        year_str = str(payload.year) if payload.year else "(most recent fiscal year)"
+        
+        # Predefined comparison prompt
+        query = f"""
+Compare {comparison_str} {year_str}:
+- Financial performance (revenue, earnings growth, net income/loss, operating margin)
+- Investment & costs (Research and Development (R&D) expenses)
+- Financial position (total assets, total debts)
+- Business fundamentals (profit drivers, risk factors)
+"""
+        
+        # Save user message
+        await ChatService.add_message(
+            db=db,
+            session_id=thread_id,
+            role=MessageRole.USER,
+            content=f"Compare {comparison_str}"
+        )
+
+        # Create_temporary might be redundant if we use existing ticker collections.
+        # But for now we kept existing logic in vectordb_manager.
+        # Bypass using the returned company_filter and use our mapped tickers.
+        vectordb_mgr = get_vectordb_manager()
+        # db_instance, _ = vectordb_mgr.create_temporary(thread_id, companies) 
+        # Commenting out create_temporary as we want to use existing collections
+        # If we need ad-hoc ingestion for comparison, that's a separate feature.
+        
+        logger.info("Compare mode: tickers=%s session=%s", tickers, thread_id)
+        
+        config = {"configurable": {"thread_id": f"rag:{thread_id}", "user_id": str(current_user.id)}}
+        
+        # Prepare inputs with comparison mode enabled
+        inputs = {
+            "messages": [HumanMessage(content=query)],
+            "vectorstore_searched": False,
+            "web_searched": False,
+            "vectorstore_quality": "none",
+            "needs_web_fallback": False,
+            "retry_count": 0,
+            "documents": [],
+            "document_sources": {},
+            "citation_info": [],
+            "summary_strategy": "single_source",
+            #"vectordb_instance": db_instance,  # REMOVED: Retrieved dynamically in nodes
+            "company_filter": tickers,  # Pass TICKERS here
+            "ticker": None,  # Reset any ticker left over from a prior /ask turn on this thread_id
+            "sub_query_analysis": {},
+            "sub_query_results": {},
+            "is_comparison_mode": True,
+            "comparison_company1": company1,
+            "comparison_company2": company2,
+            "comparison_company3": company3,
+            "year_start": payload.year,
+            "year_end": payload.year,
+            "chart_url": None,
+            "chart_filename": None
+        }
+        
+        # Invoke with memory
+        settings, creds = await run_context.load(db, current_user.id, portfolio_id)
+        run_context.preflight(settings, creds, run_context.RAG_ROLES)
+        result, usage_summary = await _run_agent_tracked(agent, inputs, config, f"compare:{thread_id}", settings, db, current_user.id, None, creds)
+
+        # Extract answer and chart URL
+        answer = result["messages"][-1].content
+        chart_url = result.get("chart_url")
+        chart_filename = result.get("chart_filename")
+
+        # Save assistant message with metadata
+        await ChatService.add_message(
+            db=db,
+            session_id=thread_id,
+            role=MessageRole.ASSISTANT,
+            content=answer,
+            metadata={
+                "comparison_companies": companies,
+                "company1": company1,
+                "company2": company2,
+                "company3": company3,
+                "year": payload.year,
+                "chart_url": chart_url,
+                "chart_filename": chart_filename,
+                "vectorstore_searched": result.get("vectorstore_searched", False),
+                "web_searched": result.get("web_searched", False),
+                "vectorstore_quality": result.get("vectorstore_quality", "none"),
+                "needs_web_fallback": result.get("needs_web_fallback", False),
+                "retry_count": result.get("retry_count", 0),
+                "summary_strategy": result.get("summary_strategy", "single_source"),
+                "document_count": len(result.get("documents", [])),
+                "sources": [doc.metadata.get("source_file", "Unknown") for doc in result.get("documents", [])][:5],
+                "citation_info": _build_citation_info(result),
+                "document_sources": result.get("document_sources", {}),
+                "documents": [_saved_document(doc, answer) for doc in result.get("documents", [])],
+                "sub_query_analysis": result.get("sub_query_analysis", {}),
+                "sub_query_results": result.get("sub_query_results", {}),
+                "intermediate_message": result.get("Intermediate_message", ""),
+                "usage": usage_summary
+            },
+            token_count=usage_summary["total_tokens"]
+        )
+
+        logger.info("Comparison query: %s | Thread: %s | Chart: %s", comparison_str, thread_id, chart_url)
+        
+        # Prepare response
+        response_data = {
+            "answer": answer,
+            "thread_id": thread_id,
+            "company1": company1,
+            "company2": company2,
+            "company3": company3,
+            "company_filter": companies,
+            "chart_url": chart_url,
+            "chart_filename": chart_filename,
+            "messages": [
+                {
+                    "type": msg.__class__.__name__,
+                    "content": msg.content if hasattr(msg, 'content') else str(msg)
+                }
+                for msg in result.get("messages", [])
+            ],
+            "intermediate_message": result.get("Intermediate_message", ""),
+            "documents": [_response_document(doc, answer) for doc in result.get("documents", [])],
+            "vectorstore_searched": result.get("vectorstore_searched", False),
+            "web_searched": result.get("web_searched", False),
+            "vectorstore_quality": result.get("vectorstore_quality", "none"),
+            "needs_web_fallback": result.get("needs_web_fallback", False),
+            "retry_count": result.get("retry_count", 0),
+            "document_sources": result.get("document_sources", {}),
+            "citation_info": _build_citation_info(result),
+            "summary_strategy": result.get("summary_strategy", "single_source"),
+            "sub_query_analysis": result.get("sub_query_analysis", {}),
+            "sub_query_results": result.get("sub_query_results", {})
+        }
+        
+        _maybe_save_debug_response(response_data, "comparison")
+
+        return response_data
+
+    except Exception as e:
+        logger.error("Error in /compare: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/alpha")
+async def run_alpha(
+    payload: AlphaInput,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Run the ALPHA framework directly for a list of tickers — no free-text query.
+    Intended for the dedicated ALPHA button in the UI: it just passes the
+    portfolio's ticker symbols and triggers the full 5-dimension analysis
+    per ticker, bypassing the (now-disabled) keyword detection in general chat.
+    """
+    return await alpha_core(payload, db, current_user)
+
+
+# At most this many tickers run through the agent concurrently per /alpha
+# call. Each ticker is a full LangGraph run (multiple LLM calls) — unbounded
+# concurrency would spike LLM-provider rate limits on large portfolios.
+_ALPHA_TICKER_CONCURRENCY = 3
+
+
+async def alpha_core(
+    payload: AlphaInput,
+    db: AsyncSession,
+    current_user: User,
+    on_ticker_done=None,
+) -> dict:
+    """
+    Core /alpha logic, shared by the HTTP route and the background job runner.
+
+    on_ticker_done: optional async callback(ticker, index, total) invoked as
+    each ticker finishes, so the caller (the batch job) can push incremental
+    progress without this function knowing about AnalysisTask/SSE at all.
+    """
+    verify_user_id_matches(payload.user_id, current_user)
+    try:
+        if not agent:
+            raise HTTPException(status_code=503, detail="Agent not initialized")
+
+        thread_id = payload.thread_id
+
+        session = await PortfolioService.get_session(db, thread_id)
+        if not session:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session not found. Please create a portfolio session first."
+            )
+        verify_owner(session.user_id, current_user)
+
+        portfolio = session.portfolio
+        alpha_settings, alpha_creds = await run_context.load(db, current_user.id, portfolio.id)
+        run_context.preflight(alpha_settings, alpha_creds, run_context.RAG_ROLES)
+
+        resolved_tickers = []
+        for t in payload.tickers:
+            ticker = get_ticker(t) or t.upper()
+            resolved_tickers.append(ticker)
+
+        chat_session = await ChatService.create_or_get_chat_session(
+            db=db,
+            session_id=thread_id,
+            user_id=session.user_id,
+            agent_type=AgentType.RAG,
+            portfolio_id=portfolio.id,
+            title=f"ALPHA: {portfolio.name}",
+            session_metadata={
+                "type": "alpha",
+                "portfolio_name": portfolio.name,
+                "tickers": resolved_tickers
+            }
+        )
+
+        await ChatService.add_message(
+            db=db,
+            session_id=thread_id,
+            role=MessageRole.USER,
+            content=f"Provide 360 degree ALPHA analysis for {', '.join(resolved_tickers)} stock"
+        )
+
+        # Run the agent for every ticker concurrently (bounded — each run is a
+        # full multi-LLM-call LangGraph invocation, so unbounded concurrency
+        # would spike provider rate limits on large portfolios). This used to
+        # be a plain sequential `for` loop, so an N-ticker portfolio held the
+        # HTTP connection open for N full runs back-to-back.
+        semaphore = asyncio.Semaphore(_ALPHA_TICKER_CONCURRENCY)
+        total = len(resolved_tickers)
+
+        async def _run_one(index: int, ticker: str) -> dict:
+            async with semaphore:
+                logger.info("Running ALPHA for ticker: %s", ticker)
+
+                # Each ticker gets its own checkpointer thread so per-ticker
+                # alpha_dimensions/state don't leak into one another.
+                config = {"configurable": {"thread_id": f"rag:{thread_id}-alpha-{ticker}", "user_id": str(current_user.id)}}
+
+                inputs = {
+                    "messages": [HumanMessage(content=f"ALPHA analysis for {ticker}")],
+                    "vectorstore_searched": False,
+                    "web_searched": False,
+                    "vectorstore_quality": "none",
+                    "needs_web_fallback": False,
+                    "retry_count": 0,
+                    "documents": [],
+                    "document_sources": {},
+                    "citation_info": [],
+                    "summary_strategy": "single_source",
+                    "company_filter": [ticker],
+                    "sub_query_analysis": {},
+                    "sub_query_results": {},
+                    "alpha_mode": True,
+                    "alpha_pillar": None,
+                    "ticker": ticker,
+                    "alpha_dimensions": {},
+                    "alpha_report": "",
+                    "chart_url": None,
+                    "chart_filename": None
+                }
+
+                result, usage_summary = await _run_agent_tracked(
+                    agent, inputs, config, f"alpha:{thread_id}:{ticker}", alpha_settings, None, None, None, alpha_creds)
+                report = result.get("alpha_report") or result["messages"][-1].content
+
+                if on_ticker_done is not None:
+                    await on_ticker_done(ticker, index, total)
+
+                return {"ticker": ticker, "report": report, "usage": usage_summary}
+
+        results = await asyncio.gather(
+            *(_run_one(i, ticker) for i, ticker in enumerate(resolved_tickers))
+        )
+
+        # Persisting chat messages is fast (no LLM calls) and shares one
+        # AsyncSession, which isn't safe to use concurrently — do it
+        # sequentially now that every agent run has already completed.
+        for item in results:
+            await ChatService.add_message(
+                db=db,
+                session_id=thread_id,
+                role=MessageRole.ASSISTANT,
+                content=item["report"],
+                metadata={
+                    "portfolio_id": portfolio.id,
+                    "portfolio_name": portfolio.name,
+                    "ticker": item["ticker"],
+                    "alpha_pillar": None,
+                    "usage": item["usage"]
+                },
+                token_count=item["usage"]["total_tokens"]
+            )
+
+        return {
+            "thread_id": thread_id,
+            "portfolio_id": portfolio.id,
+            "portfolio_name": portfolio.name,
+            "tickers": resolved_tickers,
+            "results": results
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error in /alpha: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/health", response_model=HealthStatusResponse)
+async def health_check():
+    """
+    Health check for RAG system.
+    
+    Checks:
+    - RAG agent is initialized
+    - Semantic cache is initialized
+    - System is ready to handle queries
+    """
+    status = "healthy" if agent is not None else "unhealthy"
+
+    return HealthStatusResponse(
+        status=status,
+        agent_initialized=agent is not None,
+        timestamp=datetime.datetime.now().isoformat()
+    )
+
+
+@router.get("/capabilities", response_model=CapabilitiesResponse)
+async def get_capabilities():
+    """Get information about available RAG capabilities"""
+    return CapabilitiesResponse(
+        document_qa=[
+            "Portfolio-based document filtering",
+            "Financial report Q&A (10-Ks, earnings calls, annual reports)",
+            "Multi-document context synthesis",
+            "Source citations and document references",
+            "Web search fallback for missing information",
+            "Human-in-the-loop clarification requests",
+            "Sub-query decomposition for complex questions"
+        ],
+        company_comparison=[
+            "Multi-company financial comparison (2-3 companies)",
+            "Revenue and earnings growth analysis",
+            "R&D investment comparison",
+            "Financial position analysis (assets, debts)",
+            "Risk factor identification",
+            "Visual chart generation for comparisons",
+            "Side-by-side metric analysis"
+        ],
+        data_sources=[
+            "Financial documents (PDF, DOCX)",
+            "10-K annual reports",
+            "10-Q quarterly reports",
+            "20-F annual reports and 6-K interim reports (foreign private issuers)",
+            "Earnings call transcripts",
+            "Annual reports",
+            "Web search results (fallback)",
+            "Chroma vector database"
+        ],
+        intelligent_features=[
+            "Portfolio-scoped vector database filtering",
+            "Context-aware conversation memory (LangGraph)",
+            "Automatic quality assessment of retrieved documents",
+            "Intelligent web fallback when documents insufficient",
+            "Citation extraction and source tracking",
+            "Session-based conversation persistence",
+            "Semantic similarity caching",
+            "Multi-document summarization strategies"
+        ]
+    )
+
+
+@router.get("/sessions/{session_id}")
+async def get_session_history(
+    session_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get conversation history for a specific RAG session.
+
+    Returns the LangGraph conversation state including all messages
+    and intermediate states for this session.
+    """
+    if not agent:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG agent not initialized."
+        )
+
+    result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
+    chat_session = result.scalar_one_or_none()
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    verify_owner(chat_session.user_id, current_user)
+
+    try:
+        state = await agent.aget_state(
+            config={"configurable": {"thread_id": f"rag:{session_id}"}}
+        )
+        messages = state.values.get('messages', []) if state.values else []
+        
+        # Serialize messages
+        serialized_messages = []
+        for msg in messages:
+            serialized_messages.append({
+                "type": msg.type,
+                "content": msg.content,
+                "name": getattr(msg, 'name', None),
+                "id": getattr(msg, 'id', None)
+            })
+        
+        return {
+            "session_id": session_id,
+            "message_count": len(serialized_messages),
+            "messages": serialized_messages,
+            "vectorstore_searched": state.values.get("vectorstore_searched", False) if state.values else False,
+            "web_searched": state.values.get("web_searched", False) if state.values else False,
+            "company_filter": state.values.get("company_filter", []) if state.values else []
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving session: {str(e)}"
+        )
+
+
+@router.get("/portfolio/{portfolio_id}/sessions")
+async def get_portfolio_rag_sessions(
+    portfolio_id: int,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get all RAG sessions (ask + compare) linked to a portfolio.
+
+    Returns all chat sessions where agent_type='rag' and
+    portfolio_id matches the requested portfolio.
+    """
+    # Verify portfolio exists
+    portfolio = await PortfolioService.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    verify_owner(portfolio.user_id, current_user)
+
+    # Get all RAG sessions for this portfolio
+    sessions = await ChatService.get_portfolio_sessions(
+        db=db,
+        portfolio_id=portfolio_id,
+        agent_type=AgentType.RAG
+    )
+    
+    # Build response with message counts
+    result = []
+    for session in sessions:
+        message_count = len(session.messages)
+        result.append({
+            "session_id": session.session_id,
+            "user_id": session.user_id,
+            "agent_type": session.agent_type.value,
+            "portfolio_id": session.portfolio_id,
+            "title": session.title,
+            "is_active": session.is_active,
+            "message_count": message_count,
+            "created_at": to_iso_z(session.created_at),
+            "last_message_at": to_iso_z(session.last_message_at)
+        })
+    
+    return {
+        "portfolio_id": portfolio_id,
+        "portfolio_name": portfolio.name,
+        "companies": portfolio.company_names,
+        "session_count": len(result),
+        "sessions": result
+    }

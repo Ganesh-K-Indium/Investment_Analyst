@@ -50,8 +50,6 @@ htmlcov/
 
 # Data & Databases
 /data/
-/data/macro/
-/data/checkpoints*
 *.db
 *.sqlite
 *.sqlite3
@@ -96,14 +94,8 @@ output/
 
 # Project-specific
 *.png
-/xml_filings
-/pdf_filings
-/10k_7_companies
-/10q_filings
-/UI
 *.tmp
 *.temp
-/sec_filings
 
 # AWS & Infrastructure
 *.pem

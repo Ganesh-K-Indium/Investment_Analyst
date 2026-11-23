@@ -46,7 +46,7 @@ services:
       retries: 10
 
   api:
-    build: .
+    build: ./backend
     restart: unless-stopped
     env_file:
       - .env
@@ -75,7 +75,7 @@ services:
       - ./data:/app/data
 
   worker-interactive:
-    build: .
+    build: ./backend
     restart: unless-stopped
     env_file:
       - .env
@@ -83,11 +83,11 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://investment_analyst:investment_analyst@postgres:5432/investment_analyst}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    entrypoint: ["./docker-entrypoint-worker.sh"]
+    entrypoint: ["./docker/worker-entrypoint.sh"]
     command: ["app.worker.InteractiveWorkerSettings"]
     # Shares the api container's network namespace so this worker's
     # hardcoded http://localhost:856x/mcp calls reach the MCP servers the
-    # api container hosts — see docker-entrypoint-worker.sh. This also means
+    # api container hosts — see backend/docker/worker-entrypoint.sh. This also means
     # it inherits api's ports, so it must not declare its own `ports:`.
     network_mode: "service:api"
     depends_on:
@@ -101,7 +101,7 @@ services:
       - ./data:/app/data
 
   worker-batch:
-    build: .
+    build: ./backend
     restart: unless-stopped
     env_file:
       - .env
@@ -109,7 +109,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://investment_analyst:investment_analyst@postgres:5432/investment_analyst}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    entrypoint: ["./docker-entrypoint-worker.sh"]
+    entrypoint: ["./docker/worker-entrypoint.sh"]
     command: ["app.worker.BatchWorkerSettings"]
     network_mode: "service:api"
     depends_on:

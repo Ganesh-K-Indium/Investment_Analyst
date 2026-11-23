@@ -5,7 +5,7 @@ Complete reference for every subsystem in the backend. Written to be read top-to
 ## Table of contents
 
 1. [System overview](#1-system-overview)
-2. [Backend foundations (app/main.py)](#2-backend-foundations)
+2. [Backend foundations (backend/app/main.py)](#2-backend-foundations)
 3. [Database schema and migrations](#3-database-schema-and-migrations)
 4. [RAG pipeline](#4-rag-pipeline)
 5. [Ingestion pipeline](#5-ingestion-pipeline)
@@ -29,7 +29,7 @@ Investment Analyst is one FastAPI backend fronting three largely-independent sub
 - **Quant subsystem** — a separate LangGraph *supervisor* multi-agent system for live market/technical/options/research queries, each sub-agent backed by its own standalone MCP (Model Context Protocol) server process.
 - **Insider trading (Form 4) and macro data pipelines** — standalone ingestion jobs whose output is consumed by the RAG subsystem (as retrievable documents and as tool context, respectively), not by the quant supervisor.
 
-A **Redis/Arq background job system** (`app/worker.py`, `app/jobs/`) sits across both the RAG and Quant subsystems: `/ask`, `/compare`, `/alpha`, and `/quant/query` all have a queued equivalent under `/analysis-tasks/*` that runs the same underlying `*_core` logic asynchronously on a worker process instead of blocking the HTTP request — see [§7](#7-background-job-system-redisarq).
+A **Redis/Arq background job system** (`backend/app/worker.py`, `backend/app/jobs/`) sits across both the RAG and Quant subsystems: `/ask`, `/compare`, `/alpha`, and `/quant/query` all have a queued equivalent under `/analysis-tasks/*` that runs the same underlying `*_core` logic asynchronously on a worker process instead of blocking the HTTP request — see [§7](#7-background-job-system-redisarq).
 
 Everything else — portfolios, chat history, analyst report authoring/publishing, data-source integrations (SharePoint/Google Drive/S3/etc.) — is plain CRUD + service-layer business logic over the same Postgres database, largely independent of which "agent" produced the content being stored.
 
@@ -37,7 +37,7 @@ Everything else — portfolios, chat history, analyst report authoring/publishin
 
 ## 2. Backend foundations
 
-**File:** `app/main.py`
+**File:** `backend/app/main.py`
 
 FastAPI app (`title="Investment Analyst API"`, `version="2.1.0"`, `redirect_slashes=False`). Middleware: CORS locked to explicit origins (`CORS_ALLOWED_ORIGINS` env var, comma-separated; defaults to `http://localhost:5173,http://127.0.0.1:5173`) with `allow_credentials=True` (required for the credentialed refresh-token cookie — browsers reject `"*"` origins combined with credentials) and wildcarded methods/headers, plus a custom `RequestLoggingMiddleware` logging method/path/status/elapsed-ms for every request.
 
@@ -46,9 +46,9 @@ FastAPI app (`title="Investment Analyst API"`, `version="2.1.0"`, `redirect_slas
 1. `init_db()` — see [§3](#3-database-schema-and-migrations).
 2. Creates a single shared `AsyncPostgresSaver` LangGraph checkpointer (`langgraph.checkpoint.postgres.aio`), connected via the same `DATABASE_URL` as everything else (translated to a plain `postgresql://` psycopg3 connection string via `_to_sync_url()`), with `.setup()` called once to create/upgrade the `checkpoints`/`checkpoint_blobs`/`checkpoint_writes`/`checkpoint_migrations` tables. This is shared between the RAG graph and the Quant supervisor.
    - **Cross-agent isolation**: a checkpointer partitions stored state purely by `thread_id` — it has no concept of "which graph" wrote a checkpoint. Since this app's session model allows one portfolio session's ID to be attached to either a `rag` or `quant` `ChatSession`, RAG and Quant invocations always prefix the LangGraph `thread_id` they pass to the checkpointer (`f"rag:{thread_id}"` / `f"quant:{session_id}"`) so the two can never collide in the shared checkpoint tables, even if the same underlying session/thread ID were ever reused across both. Verified directly: invoking a compiled graph twice with the same underlying ID but different prefixes produces fully isolated state. Everywhere else (DB records, portfolio-session mapping, API responses) still uses the original unprefixed ID — only the checkpoint storage key is prefixed.
-3. Builds the RAG graph (`rag.graph.builder.BuildingGraph().get_graph(checkpointer=...)`) and injects the compiled agent into `app/api/rag.py`'s module state via `set_agent()`.
-4. Initializes the quant multi-agent system (`app.services.stock_agent.initialize_stock_agents(checkpointer=checkpointer)` — passed the same shared checkpointer instance), injecting the resulting supervisor/status into `app/api/quant.py` via `set_stock_supervisor()`/`set_agents_status()`. Failures here are caught and logged as warnings — non-fatal; quant endpoints then return 503 rather than crashing the whole app.
-5. Connects to the Redis/Arq job queue (`app/jobs/queue.py`'s `get_arq_pool()`) used to enqueue background analysis runs — see [§7](#7-background-job-system-redisarq).
+3. Builds the RAG graph (`rag.graph.builder.BuildingGraph().get_graph(checkpointer=...)`) and injects the compiled agent into `backend/app/api/rag.py`'s module state via `set_agent()`.
+4. Initializes the quant multi-agent system (`app.services.stock_agent.initialize_stock_agents(checkpointer=checkpointer)` — passed the same shared checkpointer instance), injecting the resulting supervisor/status into `backend/app/api/quant.py` via `set_stock_supervisor()`/`set_agents_status()`. Failures here are caught and logged as warnings — non-fatal; quant endpoints then return 503 rather than crashing the whole app.
+5. Connects to the Redis/Arq job queue (`backend/app/jobs/queue.py`'s `get_arq_pool()`) used to enqueue background analysis runs — see [§7](#7-background-job-system-redisarq).
 6. Checks `data/macro/metadata.json`; if missing, schedules a one-off background `run_ingestion()` task.
 7. Starts a permanent background task, `macro_sync_loop()` — sleeps 24h, then re-runs `run_ingestion()`, forever, wrapped in try/except so one failure doesn't kill the loop.
 
@@ -62,7 +62,7 @@ Calls `cleanup_stock_agents()`, exits the RAG checkpointer's async context manag
 
 Plus root routes: `GET /` (service directory), `GET /health` (aggregated RAG agent / stock supervisor / DB status) — neither requires auth.
 
-**Auth is enforced per-route (`Depends(get_current_user)`), not via a global middleware, and covers nearly every endpoint.** Resolved via `app/auth/deps.py`'s two verification helpers: `verify_user_id_matches(user_id, current_user)` for routes carrying an explicit `user_id` field (403 on mismatch), and `verify_owner(owner_user_id, current_user)` for resource-id-only routes, checked immediately after fetching the resource and before any mutation (404 on mismatch — deliberately, so another user's resource existence isn't leaked). Exact per-router coverage:
+**Auth is enforced per-route (`Depends(get_current_user)`), not via a global middleware, and covers nearly every endpoint.** Resolved via `backend/app/auth/deps.py`'s two verification helpers: `verify_user_id_matches(user_id, current_user)` for routes carrying an explicit `user_id` field (403 on mismatch), and `verify_owner(owner_user_id, current_user)` for resource-id-only routes, checked immediately after fetching the resource and before any mutation (404 on mismatch — deliberately, so another user's resource existence isn't leaked). Exact per-router coverage:
 
 | Router | Total routes | Authenticated | Unauthenticated (and why) |
 |---|---|---|---|
@@ -77,7 +77,7 @@ Verified live against a running server: unauthenticated requests → 401, authen
 
 ## 3. Database schema and migrations
 
-**Files:** `app/database/models.py`, `app/database/connection.py`, `alembic/versions/`
+**Files:** `backend/app/database/models.py`, `backend/app/database/connection.py`, `backend/alembic/versions/`
 
 ### Connection layer
 
@@ -94,9 +94,9 @@ Verified live against a running server: unauthenticated requests → 401, authen
 | `users` | `User` | Analyst/fund-manager accounts. `role` string default `"analyst"` (values: analyst/fund_manager/admin). **No enforced FK from other tables** — `user_id` elsewhere is a loose string, not referentially tied to `users.id`. |
 | `portfolios` | `Portfolio` | Named ticker collections for RAG scoping. `company_names` JSON list. Cascades to `sessions` and `chat_sessions`. |
 | `sessions` | `Session` | Legacy portfolio-session tracker (thread_id PK), kept for backwards compatibility. |
-| `chat_sessions` | `ChatSession` | One row per conversation thread (RAG or Quant). `agent_type` enum (rag/quant), `session_metadata` JSON, `summary`/`summary_updated_at` for cached LLM summaries. Cascades to `chat_messages`. |
+| `chat_sessions` | `ChatSession` | One row per conversation thread (RAG or Quant). `agent_type` enum (backend/rag/quant), `session_metadata` JSON, `summary`/`summary_updated_at` for cached LLM summaries. Cascades to `chat_messages`. |
 | `chat_messages` | `ChatMessage` | Individual turns. `role` enum (user/assistant/system), `message_metadata` JSON (renamed from `metadata` to avoid clashing with SQLAlchemy's reserved attribute). |
-| `consolidated_summaries` | `ConsolidatedSummary` | Cross-session AI-generated rollup summaries, `session_ids` JSON list, `detected_type` (rag/compare/quant). |
+| `consolidated_summaries` | `ConsolidatedSummary` | Cross-session AI-generated rollup summaries, `session_ids` JSON list, `detected_type` (backend/rag/compare/quant). |
 | `analyst_reports` | `AnalystReport` | Published/draft report records: `content_markdown` + `content_html` (dual storage — markdown is *derived* from HTML, not authoritative), `image_urls` JSON, `status` enum (draft/published, stored as plain string via `native_enum=False`), `search_vector` (Postgres `TSVECTOR`, added in migration 014). |
 | `report_draft_items` | `ReportDraftItem` | Server-side "clipboard" staging area for building a report before it's assembled (replaces what used to be browser localStorage). `item_type` (text/image/summary), `html` (sanitized), `sort_order` for drag-reorder. |
 | `integrations` | `Integration` | External connector configs — `vendor` (sharepoint/google_drive/onedrive/confluence/azure_blob/aws_s3/sftp), `credentials` JSON, `status`. |
@@ -132,11 +132,11 @@ Notes: `aca5bd3b31cf`/`1578dc4794bb`/`20b80069323a` are three differently-hashed
 
 ## 4. RAG pipeline
 
-**Core files:** `rag/graph/{builder,nodes,edges,state}.py`, `rag/vectordb/client.py`, `rag/prompts/prompts.py`, `rag/graph/semantic_cache.py`, `app/services/vectordb_manager.py`
+**Core files:** `backend/rag/graph/{builder,nodes,edges,state}.py`, `backend/rag/vectordb/client.py`, `backend/rag/prompts/prompts.py`, `backend/rag/graph/semantic_cache.py`, `backend/app/services/vectordb_manager.py`
 
 ### Graph shape
 
-The RAG pipeline is a LangGraph state machine (state defined in `rag/graph/state.py`'s `GraphState` TypedDict). Rough flow for a standard `/ask` query:
+The RAG pipeline is a LangGraph state machine (state defined in `backend/rag/graph/state.py`'s `GraphState` TypedDict). Rough flow for a standard `/ask` query:
 
 ```
 preprocess_and_analyze_query → retrieve → grade_documents
@@ -175,11 +175,11 @@ When more than one filing type is combined (e.g. `["10-K", "10-Q"]`), the union 
 
 **Fiscal-quarter filtering** uses a safety-net wrapper (`_hybrid_search_with_quarter_fallback`): tries the exact `fiscal_quarter` filter first, and if that returns zero results (e.g. older data ingested before fiscal_quarter tagging existed), transparently retries without the filter rather than silently returning nothing.
 
-**Cross-company fiscal-quarter misalignment detection**: when a query targets multiple tickers and one or more specific fiscal quarters, if those tickers have different fiscal-year-end months (`app/utils/company_mapping.py`'s `TICKER_TO_FISCAL_YEAR_END_MONTH` table, ~130 explicitly-enumerated large-cap tickers, default 12 for unlisted ones), `comparison_spans_multiple_filings` is set with one concrete note per misaligned quarter (e.g. *"AAPL (October-December), AMZN (January-March)"*) — this threads into the generation prompt's anti-hallucination clause so the LLM explicitly warns the user rather than presenting a clean comparison.
+**Cross-company fiscal-quarter misalignment detection**: when a query targets multiple tickers and one or more specific fiscal quarters, if those tickers have different fiscal-year-end months (`backend/app/utils/company_mapping.py`'s `TICKER_TO_FISCAL_YEAR_END_MONTH` table, ~130 explicitly-enumerated large-cap tickers, default 12 for unlisted ones), `comparison_spans_multiple_filings` is set with one concrete note per misaligned quarter (e.g. *"AAPL (October-December), AMZN (January-March)"*) — this threads into the generation prompt's anti-hallucination clause so the LLM explicitly warns the user rather than presenting a clean comparison.
 
 **Per-sub-query company scoping** (`detect_tickers_in_query`) checks *every* known alias for a ticker (`get_company_aliases()`, e.g. `googl` → `["google", "alphabet"]`), not just the single canonical `TICKER_TO_COMPANY` name — otherwise a sub-query worded "Alphabet total revenues..." wouldn't match ticker `googl` and would fall back to querying every company in the request for every sub-query.
 
-### Fiscal calendar utilities (`app/utils/company_mapping.py`)
+### Fiscal calendar utilities (`backend/app/utils/company_mapping.py`)
 
 - `get_fiscal_year_end_month(ticker)` — lookup, default 12 (calendar year).
 - `get_most_recent_filed_fiscal_year(ticker, as_of=None)` — replaces the old blanket `current_year - 1` assumption; accounts for non-calendar filers and a ~4-month filing-lag buffer.
@@ -187,31 +187,31 @@ When more than one filing type is combined (e.g. `["10-K", "10-Q"]`), the union 
 - `get_fiscal_quarter_calendar_span(ticker, fiscal_quarter)` — human-readable month range (e.g. "October-December") for prompt explanations.
 - `get_company_aliases(ticker)` — every known company-name alias for a ticker (e.g. `googl` → `["google", "alphabet"]`), for callers matching free text against a company name. `TICKER_TO_COMPANY`/`get_company_name()` only store one canonical name per ticker; `COMPANY_TO_TICKER` (its reverse) gets extra manual aliases added where a company has more than one commonly-used name. A prior duplicate dict key (`'googl'` defined twice in `TICKER_TO_COMPANY`) silently dropped the `'alphabet'` mapping entirely — Python keeps only the last literal key with no warning — so "Alphabet" as a company name resolved to no ticker at all until fixed.
 
-### Vector search (`rag/vectordb/client.py`)
+### Vector search (`backend/rag/vectordb/client.py`)
 
 - One Qdrant collection per ticker (`ticker_{ticker}`), **not** fragmented further by filing type — filtering happens via payload indexes, keeping cross-filing-type queries ("reconcile Q3 actuals against the last 10-K guidance") in a single search.
 - Hybrid search: dense (OpenAI `text-embedding-3-large`, 3072-dim) + sparse (BM25 via FastEmbed) prefetch, fused with Qdrant's RRF (Reciprocal Rank Fusion).
 - Payload indexes: `source_file`, `company`, `content_type`, `content_hash`, `image_content_hash`, `page_num` (INTEGER), `year` (INTEGER), `ingestion_timestamp`, `filing_type` (KEYWORD), `period_end_date` (KEYWORD), `fiscal_quarter` (INTEGER) — new collections get all of these at creation; existing collections get missing ones backfilled automatically (`ensure_collection_exists()`).
 - `generate_embeddings_for_ingestion()` batches embedding calls concurrently for ingestion throughput.
 
-### Semantic cache (`rag/graph/semantic_cache.py`)
+### Semantic cache (`backend/rag/graph/semantic_cache.py`)
 
 A `SemanticCache` class exists (embedding-similarity cache keyed on query text) but **is not currently wired into any live code path** — it's dead code today. It was fixed for correctness anyway (folding `ticker`/`requested_years`/`filing_type` into both the embedded cache key and a stored `filter_signature` checked on lookup) so that if it's wired in later, it won't serve a stale answer across different resolved filters.
 
-### Prompts (`rag/prompts/prompts.py`)
+### Prompts (`backend/rag/prompts/prompts.py`)
 
 - Base RAG generation prompt explicitly distinguishes 10-K (annual, audited, 3-year comparative) / 10-Q (quarterly, unaudited, no comparative table) / 8-K (single event, not a financial-statement source), plus a conditional anti-hallucination clause that only appears when `comparison_spans_multiple_filings` is set (to avoid diluting normal single-period answers with unnecessary caveats).
 - The universal sub-query analyzer's `optimized_query` rewrite (used only in direct-mode retrieval) preserves filing-type-implying language ("latest quarter", "recent announcement") rather than stripping it during query expansion, and stays consistent with whatever `filing_type_hints` it set.
 - `get_alpha_performance_chain()` computes its fiscal-year anchor via `get_most_recent_filed_fiscal_year(ticker)` rather than a blanket `current_year - 1`.
 - Web-search fallback query (in `nodes.py`'s `web_search()`) varies its SEC filing-type literal by detected/inferred filing type instead of always assuming "10-K".
 - `integrate_web_search()`'s query construction avoids duplicating the company name when it's already embedded in the grader's `missing_data_summary` (previously produced queries like "Google Google Q2 2026 net income..."), appends "earnings report" to bias toward an actual reporting article, and excludes `investopedia.com` specifically for this fallback (its content skews toward "what is net income"-style definitional explainers rather than a company's actual reported figures — a risk other `TRUSTED_FINANCIAL_DOMAINS` uses don't share, so it stays in the list everywhere else).
-- **`is_comparison_mode` checkpointer leak (fixed)**: the graph's Postgres checkpointer persists state per `thread_id` across turns, merging each turn's input dict on top of the last checkpoint rather than replacing it. `/compare` (`app/api/rag.py`) sets `is_comparison_mode: True` plus `comparison_company1/2/3` and `year_start`/`year_end`; `/ask`'s input dict never reset these, so if a thread was ever used for `/compare`, every later `/ask` question on that same thread silently routed through the annual-only 10-K comparison templates instead of the real analyzer. `/ask` now explicitly resets all of these fields (and `/compare` resets `ticker`) on every call.
+- **`is_comparison_mode` checkpointer leak (fixed)**: the graph's Postgres checkpointer persists state per `thread_id` across turns, merging each turn's input dict on top of the last checkpoint rather than replacing it. `/compare` (`backend/app/api/rag.py`) sets `is_comparison_mode: True` plus `comparison_company1/2/3` and `year_start`/`year_end`; `/ask`'s input dict never reset these, so if a thread was ever used for `/compare`, every later `/ask` question on that same thread silently routed through the annual-only 10-K comparison templates instead of the real analyzer. `/ask` now explicitly resets all of these fields (and `/compare` resets `ticker`) on every call.
 
 ---
 
 ## 5. Ingestion pipeline
 
-**Core files:** `ingestion/pdf_processor1.py`, `ingestion/table_extractor.py`, `ingestion/image_data_prep.py`, `ingestion/ingest_pdf.py`, `ingestion/edgar_fetcher.py`, `ingestion/batch_ingest.py`, `scripts/ingest_ticker.py`
+**Core files:** `backend/ingestion/pdf_processor.py`, `backend/ingestion/table_extractor.py`, `backend/ingestion/image_data_prep.py`, `backend/ingestion/ingest_pdf.py`, `backend/ingestion/edgar_fetcher.py`, `backend/ingestion/batch_ingest.py`, `scripts/ingest_ticker.py`
 
 ### Resolution priority for filing metadata
 
@@ -225,7 +225,7 @@ For every filing (whether EDGAR-fetched or user-uploaded), three fields are reso
 
 `year` (the Qdrant filter field) is derived from `period_end_date`'s calendar year, **not** the EDGAR filename's filing date — this was a real bug found and fixed: EDGAR filenames embed the *filing* date, and a 10-K covering fiscal year 2025 is typically filed in *2026*, so tagging it `year=2026` made it invisible to any query about "2025" data.
 
-### Text extraction (`pdf_processor1.py`)
+### Text extraction (`pdf_processor.py`)
 
 - Plain `page.get_text("text")` per page, chunked via `RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=1024, chunk_overlap=300)`.
 - **Table extraction** (`table_extractor.py`, adapted from a prior internal parser): `page.find_tables()` (PyMuPDF) locates table areas; vertical ruling lines from the PDF's own drawing paths determine true column boundaries (more accurate than `find_tables()` alone, which can miss a column whose divider only spans part of the table height); cell text is pulled from each `[col_x0..col_x1] × [row_y0..row_y1]` rectangle. Falls back to `find_tables()`'s own cell extraction for borderless/text-only tables. Detected tables are rendered as a GitHub-flavored markdown block and appended to the page's chunk text (`[TABLES]\n| Metric | 2024 | 2023 |...`), preserving column alignment that plain text extraction would otherwise flatten and lose.
@@ -256,38 +256,38 @@ python scripts/ingest_ticker.py AAPL --all --no-ingest
 
 Lists available filings with a **Period** column (`FY2024` for 10-Ks, `2025Q3` for 10-Qs — the latter using the ticker's *own* fiscal calendar, not a naive calendar-quarter assumption) and an availability summary line. Selection accepts row numbers (`3`), ranges (`1-4`), period labels (`FY2024`, `2025Q1`) — mixed freely, comma-separated — plus `all`/`q`.
 
-### Batch ingestion (`ingestion/batch_ingest.py`)
+### Batch ingestion (`backend/ingestion/batch_ingest.py`)
 
 Resumable CLI for many-PDF ingestion with a persistent JSON progress file (`--manifest`/`--dir` modes); re-running the same command skips already-succeeded files and (optionally, via `--retry-failed`) retries only the failed ones.
 
-### Token/timing usage tracking (`app/utils/usage_tracker.py`)
+### Token/timing usage tracking (`backend/app/utils/usage_tracker.py`)
 
-A contextvar-based tracker (`track_usage(run_label)` context manager + a free `record_usage(...)` function) records per-call token counts (from the real OpenAI `response.usage`, not an estimate — except embeddings, which are tiktoken-counted since `OpenAIEmbeddings` doesn't return usage) and wall-clock durations for every LLM/embedding/OCR call in a run, then logs a summary on exit. Because it's contextvar-based rather than a passed-in object, deeply nested code (the vision call in `image_data_prep.py`, the embeddings call in `rag/vectordb/client.py`) can call `record_usage()` without a tracker parameter threaded through every intermediate function — and because contextvars are copied per-`asyncio.Task`, concurrent runs (e.g. one `ainvoke` per ALPHA ticker via `asyncio.gather`) each get an isolated tracker automatically. Wired into: per-image OCR + GPT-4o vision calls and embedding generation during ingestion (`process_pdf_and_stream` in `pdf_processor1.py` yields a final `[usage] Total ingestion time: ...` line, and the number is also plumbed back through `process_pdf_and_get_result` → `ingest_pdf` → `edgar_fetcher.fetch_filings`'s per-filing result dict, so `scripts/ingest_ticker.py` can print it directly instead of relying on log visibility); and the RAG/ALPHA generation side, where `app/api/rag.py`'s `ask_core`/`compare_core`/`alpha_core` each wrap their `agent.ainvoke(...)` in `track_usage(...)` + LangChain's `get_openai_callback()` (captures every `ChatOpenAI` call anywhere in that graph run), and `alpha_generate_report` in `rag/graph/nodes.py` additionally wraps each of its 5 dimension chains and the combiner chain individually for a per-dimension token/time breakdown. Usage summaries are saved into the persisted chat message's `metadata.usage` field and the previously-unused `ChatMessage.token_count` column.
+A contextvar-based tracker (`track_usage(run_label)` context manager + a free `record_usage(...)` function) records per-call token counts (from the real OpenAI `response.usage`, not an estimate — except embeddings, which are tiktoken-counted since `OpenAIEmbeddings` doesn't return usage) and wall-clock durations for every LLM/embedding/OCR call in a run, then logs a summary on exit. Because it's contextvar-based rather than a passed-in object, deeply nested code (the vision call in `image_data_prep.py`, the embeddings call in `backend/rag/vectordb/client.py`) can call `record_usage()` without a tracker parameter threaded through every intermediate function — and because contextvars are copied per-`asyncio.Task`, concurrent runs (e.g. one `ainvoke` per ALPHA ticker via `asyncio.gather`) each get an isolated tracker automatically. Wired into: per-image OCR + GPT-4o vision calls and embedding generation during ingestion (`process_pdf_and_stream` in `pdf_processor.py` yields a final `[usage] Total ingestion time: ...` line, and the number is also plumbed back through `process_pdf_and_get_result` → `ingest_pdf` → `edgar_fetcher.fetch_filings`'s per-filing result dict, so `scripts/ingest_ticker.py` can print it directly instead of relying on log visibility); and the RAG/ALPHA generation side, where `backend/app/api/rag.py`'s `ask_core`/`compare_core`/`alpha_core` each wrap their `agent.ainvoke(...)` in `track_usage(...)` + LangChain's `get_openai_callback()` (captures every `ChatOpenAI` call anywhere in that graph run), and `alpha_generate_report` in `backend/rag/graph/nodes.py` additionally wraps each of its 5 dimension chains and the combiner chain individually for a per-dimension token/time breakdown. Usage summaries are saved into the persisted chat message's `metadata.usage` field and the previously-unused `ChatMessage.token_count` column.
 
 ---
 
 ## 6. Quant subsystem
 
-**Core files:** `quant/stock_agent/{main_agent,api_server}.py`, `quant/stock_agent/stock_exchange_agent/subagents/*/langgraph_agent.py`, `quant/{options_mcp,Stock_Analysis,research_mcp,yahoo-finance-mcp}/`
+**Core files:** `backend/quant/stock_agent/stock_exchange_agent/subagents/*/langgraph_agent.py`, `backend/quant/{options_mcp,technical_mcp,research_mcp,yahoo_mcp}/`
 
-A separate LangGraph **supervisor** (`langgraph_supervisor.create_supervisor`, `app/services/stock_agent.py`) routes user queries to up to 6 specialized sub-agents, each a LangGraph react-agent (`create_agent`); 4 of them connect to their own standalone MCP server over `streamable-http`.
+A separate LangGraph **supervisor** (`langgraph_supervisor.create_supervisor`, `backend/app/services/stock_agent.py`) routes user queries to up to 6 specialized sub-agents, each a LangGraph react-agent (`create_agent`); 4 of them connect to their own standalone MCP server over `streamable-http`.
 
 | Sub-agent | MCP server / port | Backing tech |
 |---|---|---|
 | `ticker_finder_tool` | none — Tavily search scoped to finance.yahoo.com | Converts company names → ticker symbols |
-| `stock_information` | `yahoo-finance-mcp` :8565 | 14 tools: price/historicals/news/actions/financial statements/holder info/options/recommendations/target price/sentiment+prediction/5yr projection/P-E ratios |
-| `technical_analysis_agent` | `Stock_Analysis/server_mcp.py` :8566 | 14 tools: SMA/RSI/MACD/Bollinger/volume/support-resistance (single + multi-stock comparison variants), composite chart, GPT-4o/Gemini chart-summary |
+| `stock_information` | `yahoo_mcp` :8565 | 14 tools: price/historicals/news/actions/financial statements/holder info/options/recommendations/target price/sentiment+prediction/5yr projection/P-E ratios |
+| `technical_analysis_agent` | `technical_mcp/server_mcp.py` :8566 | 14 tools: SMA/RSI/MACD/Bollinger/volume/support-resistance (single + multi-stock comparison variants), composite chart, GPT-4o/Gemini chart-summary |
 | `research_agent` | `research_mcp/server_mcp.py` :8567 | 9 tools: web search, analyst-rating aggregation, sentiment (TextBlob), MD&A sentiment, scenario generation (Bull/Bear/Base), in-memory TTL cache |
 | `options_agent` | `options_mcp/server_mcp.py` :8568 | 3 tools: `analyze_options_chain` (deterministic analytics, no LLM reasoning over raw data), `get_oi_chart`, `get_options_expiration_dates` |
 | `postgres_agent` | `postgres_mcp/server_mcp.py` :8570 | Lets a user query their own connected Postgres database ("my database", "SQL", "query my data", "table", "schema" routes here) via the Integrations feature |
 
 The 4 core MCP servers (8565-8568) are built on **FastMCP**, run as independent processes (`transport="streamable-http"`), and are started together by `docker-entrypoint.sh` in a container deployment, or manually per the README quick-start. **`postgres_mcp` (:8570) is not part of that startup set** — it isn't started by `docker-entrypoint.sh`, isn't in `docker-compose.yml`'s exposed ports, and isn't checked by `/quant/health` — it must be started manually if the Postgres-integration query feature is needed.
 
-### Options intelligence deep-dive (`quant/options_mcp/analytics.py`)
+### Options intelligence deep-dive (`backend/quant/options_mcp/analytics.py`)
 
 Pure deterministic Python analytics (explicitly documented as "the LLM's role is ONLY to convert pre-computed structured analytics into natural language" — no LLM reasoning over raw option-chain tables): pulls Yahoo Finance chains (~15min delay) across up to 6 expirations; computes call/put notional, put/call ratio with sentiment bands, biggest trades by notional, support/resistance from strike concentration, IV skew, ATM concentration (pinning vs. breakout signal), unusual-volume detection (volume > 3× OI and > 500 contracts — OI itself is unreliable/often-zero from Yahoo, so volume is the effective signal), and "smart money" long-dated (>90 DTE) positioning classification. Documented limitations: no real intraday OI, no max pain, no Greeks, no dark-pool data.
 
-### Supervisor initialization (`app/services/stock_agent.py`)
+### Supervisor initialization (`backend/app/services/stock_agent.py`)
 
 `initialize_stock_agents()` is idempotent, waits (5s timeout each) for the 4 core MCP servers (8565-8568 — `postgres_mcp` :8570 is not in this readiness list at all) with per-server readiness tracking (not fail-hard), and gates `stock_information`/`technical_analysis_agent`/`research_agent`/`options_agent` on their respective server actually being reachable. `ticker_finder_tool` and `postgres_agent` are created **unconditionally** (each in its own try/except, not gated on any MCP-server readiness check — `postgres_agent`'s own tool calls presumably check per-user Postgres-integration state at call time, not at supervisor-build time). The supervisor is built only from whichever sub-agents actually came up. Requires a `checkpointer` to be passed in (raises if `None`) — uses the same shared `AsyncPostgresSaver` instance as the RAG graph (see [§2](#2-backend-foundations)), with `thread_id`s prefixed `quant:` at every invocation site to keep its checkpoint history fully isolated from RAG's.
 
@@ -295,13 +295,13 @@ Pure deterministic Python analytics (explicitly documented as "the LLM's role is
 
 ## 7. Background job system (Redis/Arq)
 
-**Files:** `app/worker.py`, `app/jobs/queue.py`, `app/jobs/rag_jobs.py`, `app/jobs/quant_jobs.py`, `app/api/analysis_tasks.py`, `docker-entrypoint-worker.sh`. See also [BACKGROUND_ANALYSIS_GUIDE.md](../BACKGROUND_ANALYSIS_GUIDE.md) at the repo root.
+**Files:** `backend/app/worker.py`, `backend/app/jobs/queue.py`, `backend/app/jobs/rag_jobs.py`, `backend/app/jobs/quant_jobs.py`, `backend/app/api/analysis_tasks.py`, `docker-entrypoint-worker.sh`. See also [BACKGROUND_ANALYSIS_GUIDE.md](../BACKGROUND_ANALYSIS_GUIDE.md) at the repo root.
 
 `/ask`, `/compare`, `/alpha`, and `/quant/query` are all synchronous — the HTTP request blocks until the full LangGraph run finishes, which can be minutes for a multi-ticker ALPHA run. `/analysis-tasks/*` provides a queued equivalent of each: enqueue a job, get a task ID back immediately, poll or stream its status/result separately.
 
 ### Queue split
 
-`app/jobs/queue.py` defines two named Arq queues: `QUEUE_INTERACTIVE` and `QUEUE_BATCH`, both backed by the same Redis instance (`REDIS_URL`). Which queue a job goes to is a **hardcoded per-route choice**, not dynamic:
+`backend/app/jobs/queue.py` defines two named Arq queues: `QUEUE_INTERACTIVE` and `QUEUE_BATCH`, both backed by the same Redis instance (`REDIS_URL`). Which queue a job goes to is a **hardcoded per-route choice**, not dynamic:
 
 | Route | Queue |
 |---|---|
@@ -310,15 +310,15 @@ Pure deterministic Python analytics (explicitly documented as "the LLM's role is
 | `POST /analysis-tasks/rag/alpha` | **batch** |
 | `POST /analysis-tasks/quant/query` | interactive |
 
-`app/worker.py` defines `InteractiveWorkerSettings` (`max_jobs=20` — reserved concurrency, never queued behind batch work) and `BatchWorkerSettings` (`max_jobs=5`); both run the same function list (`run_rag_ask`, `run_rag_compare`, `run_rag_alpha`, `run_quant_query`) and the same startup/shutdown hooks (each worker process builds its own full `AgentBundle` — RAG graph + quant supervisor — on boot, same as the API process). In `docker-compose.yml` these run as two separate containers (`worker-interactive`, `worker-batch`), both `network_mode: "service:api"` so their hardcoded `http://localhost:856x/mcp` calls reach the MCP servers the `api` container hosts.
+`backend/app/worker.py` defines `InteractiveWorkerSettings` (`max_jobs=20` — reserved concurrency, never queued behind batch work) and `BatchWorkerSettings` (`max_jobs=5`); both run the same function list (`run_rag_ask`, `run_rag_compare`, `run_rag_alpha`, `run_quant_query`) and the same startup/shutdown hooks (each worker process builds its own full `AgentBundle` — RAG graph + quant supervisor — on boot, same as the API process). In `docker-compose.yml` these run as two separate containers (`worker-interactive`, `worker-batch`), both `network_mode: "service:api"` so their hardcoded `http://localhost:856x/mcp` calls reach the MCP servers the `api` container hosts.
 
-### Job functions (`app/jobs/rag_jobs.py`, `app/jobs/quant_jobs.py`)
+### Job functions (`backend/app/jobs/rag_jobs.py`, `backend/app/jobs/quant_jobs.py`)
 
-Each is a thin wrapper: marks the job's `AnalysisTask` row `RUNNING`, calls the **same** `*_core` function the synchronous HTTP route uses (`ask_core`/`compare_core`/`alpha_core` in `app/api/rag.py`, `query_core` in `app/api/quant.py` — so queued and direct execution share one code path, not two), then marks `COMPLETED` with `result_metadata={"response": result}` or `FAILED` with the exception string. `run_rag_alpha` additionally streams per-ticker progress via an `on_ticker_done` callback into `progress_message` (e.g. `"3/8 tickers done (AAPL)"`).
+Each is a thin wrapper: marks the job's `AnalysisTask` row `RUNNING`, calls the **same** `*_core` function the synchronous HTTP route uses (`ask_core`/`compare_core`/`alpha_core` in `backend/app/api/rag.py`, `query_core` in `backend/app/api/quant.py` — so queued and direct execution share one code path, not two), then marks `COMPLETED` with `result_metadata={"response": result}` or `FAILED` with the exception string. `run_rag_alpha` additionally streams per-ticker progress via an `on_ticker_done` callback into `progress_message` (e.g. `"3/8 tickers done (AAPL)"`).
 
 ### Status tracking and API
 
-`AnalysisTask` (`app/database/models.py`, table `analysis_tasks`): `id` (UUID PK), `user_id`, `portfolio_id` (nullable FK), `agent_type` (`rag`/`quant`), `task_type` (free string — 'alpha'/'compare'/'ask'/'query'), `status` (`TaskStatus`: PENDING/RUNNING/COMPLETED/FAILED), `progress_message`, `result_metadata` (JSON), timestamps. `AnalysisTaskService.update_status()` writes this row **and** publishes to a Redis pub/sub channel (per-portfolio and per-user) that the SSE routes consume.
+`AnalysisTask` (`backend/app/database/models.py`, table `analysis_tasks`): `id` (UUID PK), `user_id`, `portfolio_id` (nullable FK), `agent_type` (`rag`/`quant`), `task_type` (free string — 'alpha'/'compare'/'ask'/'query'), `status` (`TaskStatus`: PENDING/RUNNING/COMPLETED/FAILED), `progress_message`, `result_metadata` (JSON), timestamps. `AnalysisTaskService.update_status()` writes this row **and** publishes to a Redis pub/sub channel (per-portfolio and per-user) that the SSE routes consume.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -337,9 +337,9 @@ All 8 routes require auth. Every enqueue route also accepts an optional `schedul
 
 ## 8. Form 4 insider-trading pipeline
 
-**Files:** `ingestion/Form4_Ingestion/{fetch,parse,save_xml,ingest}.py`, `rag/utils/Insights_Form4/{database,advisory_hub,advisory_analyst}.py`
+**Files:** `backend/ingestion/form4/{fetch,parse,save_xml,ingest}.py`, `backend/rag/utils/form4_insights/{database,advisory_hub,advisory_analyst}.py`
 
-A standalone pipeline (not part of the LangGraph supervisor) consumed from the RAG side, sharing the main app's async Postgres engine (`rag/utils/Insights_Form4/database.py` is a thin re-export shim over `app.database.connection`/`models`, not a separate database).
+A standalone pipeline (not part of the LangGraph supervisor) consumed from the RAG side, sharing the main app's async Postgres engine (`backend/rag/utils/form4_insights/database.py` is a thin re-export shim over `app.database.connection`/`models`, not a separate database).
 
 **Ingestion**: `SecEdgarFetcher` (Form4-specific, distinct from the filing-ingestion `edgar_fetcher.py`) paginates SEC EDGAR's Form 4 ATOM feed, resolves each filing to its XML document, parses it (`Form4Parser`) into issuer/reporting-owner/transaction records, filters to **common-stock-only** transactions (excludes preferred/warrant/option/note/convertible), dedups by SEC accession number, and handles **4/A amendments** by deleting prior rows for the same reporter+period before inserting the amendment's rows. A "dummy" placeholder row is inserted for filings with zero qualifying transactions, to avoid reprocessing them every run. `run_form4_ingestion`/`run_form4_ingestion_multi` accept an optional `progress_cb(dict)` (events `ticker_start`, `fetched`, `filing`, `ticker_done`) that the SSE endpoint maps to its event stream; the callback fires from a `finally` so skipped and failed filings still advance progress.
 
@@ -349,11 +349,11 @@ A standalone pipeline (not part of the LangGraph supervisor) consumed from the R
 
 ## 9. Macro data pipeline
 
-**Files:** `ingestion/ingest_macro_data.py`, `rag/utils/macro_tool.py`, `app/utils/macro_utils.py`
+**Files:** `backend/ingestion/ingest_macro_data.py`, `backend/rag/utils/macro_tool.py`, `backend/app/utils/macro_utils.py`
 
 Fetches ~17 FRED series concurrently (`asyncio.Semaphore(5)`) — GDP (quarterly + annual), CPI, PCE, PPI, ECI, Fed Funds rate, and the full Treasury yield curve (GS1M through GS30). Each series is written atomically (`.tmp` + rename) to `data/macro/{indicator}.csv`, with `data/macro/metadata.json` tracking `last_sync`. An `fcntl`-based file lock prevents concurrent-process races (skipped gracefully on Windows).
 
-`rag/utils/macro_tool.py` exposes this as a plain LangChain `@tool` (not MCP, not agent-wrapped) that a RAG-side chat agent can call directly — supporting flexible period strings ("Q2 2025", "2025-01"), staleness checks with auto-reingestion triggers, quarterly aggregation of monthly series, and yield-curve spread calculations, all with source attribution back to FRED.
+`backend/rag/utils/macro_tool.py` exposes this as a plain LangChain `@tool` (not MCP, not agent-wrapped) that a RAG-side chat agent can call directly — supporting flexible period strings ("Q2 2025", "2025-01"), staleness checks with auto-reingestion triggers, quarterly aggregation of monthly series, and yield-curve spread calculations, all with source attribution back to FRED.
 
 **Requires `FRED_API_KEY`** — not present in `.env.example`; must be added manually or ingestion raises on startup.
 
@@ -446,32 +446,32 @@ Queued/async equivalents of `/ask`, `/compare`, `/alpha`, `/quant/query`, plus s
 
 A global library of every document ingested into Qdrant plus a per-document inspector (PDF pages beside the extracted text, tables, image analyses and page JSON). Full design: `docs/DOCUMENT_INSPECTOR_PLAN.md`.
 
-- **Registry**: `documents` table (migration `018`) is a cache of Qdrant (`app/services/documents/registry.py`); `doc_id` = `metadata.content_hash`. Re-synced lazily (5 min TTL) or via `POST /documents/sync`.
-- **Endpoints** (`app/api/documents.py`, all authenticated): `GET /documents` (filters, cursor paging, facets), `/documents/{id}`, `/pages`, `/pages/{n}` (page JSON + PyMuPDF geometry), `/pages/{n}/locate?q=` (cited text -> rects; exact search, then fuzzy word-window match), `/pdf` (Range + ETag), `POST /ensure-pdf` + `GET /pdf-status` (re-download from SEC EDGAR into `sec_filings/{TICKER}/`).
+- **Registry**: `documents` table (migration `018`) is a cache of Qdrant (`backend/app/services/documents/registry.py`); `doc_id` = `metadata.content_hash`. Re-synced lazily (5 min TTL) or via `POST /documents/sync`.
+- **Endpoints** (`backend/app/api/documents.py`, all authenticated): `GET /documents` (filters, cursor paging, facets), `/documents/{id}`, `/pages`, `/pages/{n}` (page JSON + PyMuPDF geometry), `/pages/{n}/locate?q=` (cited text -> rects; exact search, then fuzzy word-window match), `/pdf` (Range + ETag), `POST /ensure-pdf` + `GET /pdf-status` (re-download from SEC EDGAR into `sec_filings/{TICKER}/`).
 - **Alignment check**: a re-downloaded PDF is rendered from HTML, so pagination can differ; per-page text fingerprints decide `aligned`, and the UI warns / searches adjacent pages when false.
 - **Frontend** (`investment-analyst-ui/src/features/documents/`): `/documents` (URL-synced filters) and `/documents/:docId?page=&hl=&tab=&from=chat:<portfolio>:<session>`. pdf.js renders pages lazily; right pane has Text / JSON / Tables / Images tabs with block-hover mapping. Shortcuts: `j`/`k` page, `/` search, `+`/`-` zoom, `1`-`4` tabs, `Esc` clear highlight.
-- **Table ingestion** (`ingestion/table_extractor.py`, `ingestion/chunking.py`): financial tables are rebuilt from word positions (columns from the numbers' right edges, row labels and wrapped labels kept, multi-row headers flattened, statement caption added); a completeness guard falls back to ruling-line extraction if any printed number would be dropped. Tables are packed whole into separate `[TABLES]` chunks (`chunk_kind: table`) instead of being cut mid-row by the text splitter. `scripts/reextract_tables.py` (dry run by default, `--apply` to write) upgrades already-ingested filings: it re-chunks only pages that have tables, re-embeds them and replaces that page's old text chunks.
+- **Table ingestion** (`backend/ingestion/table_extractor.py`, `backend/ingestion/chunking.py`): financial tables are rebuilt from word positions (columns from the numbers' right edges, row labels and wrapped labels kept, multi-row headers flattened, statement caption added); a completeness guard falls back to ruling-line extraction if any printed number would be dropped. Tables are packed whole into separate `[TABLES]` chunks (`chunk_kind: table`) instead of being cut mid-row by the text splitter. `scripts/reextract_tables.py` (dry run by default, `--apply` to write) upgrades already-ingested filings: it re-chunks only pages that have tables, re-embeds them and replaces that page's old text chunks.
 - **Citations**: chat citation page pills link to the Inspector; `features/documents/citations.ts` picks the best-matching sentence on the cited page (no LLM) as the highlight quote. Stored chat history keeps only metadata, so older sessions open the right page without a highlight.
 
 ## 11. Services layer
 
 | Service | File | Purpose |
 |---|---|---|
-| `PortfolioService` | `app/services/portfolio.py` | CRUD over `Portfolio`/`Session`. Tickers normalized to lowercase on write. |
-| `ChatService` | `app/services/chat.py` | CRUD + analytics over chat models. **OpenAI-backed** (`ChatOpenAI`) for single-session and cross-session (`ConsolidatedSummary`, auto-detects dominant session type by majority vote) LLM summaries. |
-| `report.py` (module functions) | `app/services/report.py` | Draft-clipboard CRUD + Analyst Report CRUD/search/publish. All rich text passed through `html_sanitize.sanitize_report_html` (nh3 allowlist + inline-style property filter) before persistence. `content_markdown` is *derived* from `content_html`, not authoritative. |
-| `IntegrationService` | `app/services/integration.py` | CRUD over `Integration`. `mask_credentials()` redacts any key containing `client_secret`/`password`/`secret_key`/`access_token`/`refresh_token` before returning to the API layer. |
-| `FileImportService` | `app/services/file_import.py` | Downloads + ingests files from a connector. Bounded concurrency (`asyncio.Semaphore(3)` — explicitly sized to overlap I/O without hammering OpenAI embedding rate limits, not "as parallel as possible"). |
-| `stock_agent` module | `app/services/stock_agent.py` | Lifecycle management for the quant supervisor — see [§6](#6-quant-subsystem). |
-| `VectorDBManager` | `app/services/vectordb_manager.py` | Per-ticker Qdrant instance cache (`get_instance(ticker)`). **Several methods are now no-op/legacy stubs** (`initialize_for_portfolio`, `cleanup_portfolio`, `get_for_session`, `create_temporary`) — see [§14](#14-known-limitations-and-architectural-notes). |
-| `AnalysisTaskService` | `app/services/analysis_tasks.py` | CRUD + status updates for `AnalysisTask` rows; publishes updates to Redis pub/sub for the `/analysis-tasks/stream/*` SSE routes — see [§7](#7-background-job-system-redisarq). |
-| `pdf_render.py` | `app/services/pdf_render.py` | Renders sanitized report HTML to PDF via `fpdf2`, walking the DOM manually (chosen over fpdf2's built-in `write_html()` because that ignores inline color/background outside heading tags and crashes on TipTap-style pixel-width image attributes). |
+| `PortfolioService` | `backend/app/services/portfolio.py` | CRUD over `Portfolio`/`Session`. Tickers normalized to lowercase on write. |
+| `ChatService` | `backend/app/services/chat.py` | CRUD + analytics over chat models. **OpenAI-backed** (`ChatOpenAI`) for single-session and cross-session (`ConsolidatedSummary`, auto-detects dominant session type by majority vote) LLM summaries. |
+| `report.py` (module functions) | `backend/app/services/report.py` | Draft-clipboard CRUD + Analyst Report CRUD/search/publish. All rich text passed through `html_sanitize.sanitize_report_html` (nh3 allowlist + inline-style property filter) before persistence. `content_markdown` is *derived* from `content_html`, not authoritative. |
+| `IntegrationService` | `backend/app/services/integration.py` | CRUD over `Integration`. `mask_credentials()` redacts any key containing `client_secret`/`password`/`secret_key`/`access_token`/`refresh_token` before returning to the API layer. |
+| `FileImportService` | `backend/app/services/file_import.py` | Downloads + ingests files from a connector. Bounded concurrency (`asyncio.Semaphore(3)` — explicitly sized to overlap I/O without hammering OpenAI embedding rate limits, not "as parallel as possible"). |
+| `stock_agent` module | `backend/app/services/stock_agent.py` | Lifecycle management for the quant supervisor — see [§6](#6-quant-subsystem). |
+| `VectorDBManager` | `backend/app/services/vectordb_manager.py` | Per-ticker Qdrant instance cache (`get_instance(ticker)`). **Several methods are now no-op/legacy stubs** (`initialize_for_portfolio`, `cleanup_portfolio`, `get_for_session`, `create_temporary`) — see [§14](#14-known-limitations-and-architectural-notes). |
+| `AnalysisTaskService` | `backend/app/services/analysis_tasks.py` | CRUD + status updates for `AnalysisTask` rows; publishes updates to Redis pub/sub for the `/analysis-tasks/stream/*` SSE routes — see [§7](#7-background-job-system-redisarq). |
+| `pdf_render.py` | `backend/app/services/pdf_render.py` | Renders sanitized report HTML to PDF via `fpdf2`, walking the DOM manually (chosen over fpdf2's built-in `write_html()` because that ignores inline color/background outside heading tags and crashes on TipTap-style pixel-width image attributes). |
 
 ---
 
 ## 12. Integration connectors
 
-**File:** `app/services/connectors/base.py` + one file per vendor
+**File:** `backend/app/services/connectors/base.py` + one file per vendor
 
 `BaseConnector.get_connector(vendor, credentials, url)` factory dispatches to a concrete class. Every connector implements `test_connection()`, `list_files()`, `download_file()` (returns a local temp path).
 
@@ -525,10 +525,9 @@ A prior pass through this backend surfaced a series of architectural gaps; 11 ha
 
 1. **Auth enforcement** — was opt-in per route (only `/auth/me`, `/auth/logout`, `PUT /auth/me` required a token; every other endpoint accepted `user_id` as an unverified client-supplied string). Now every route across all 10 routers requires a valid JWT and verifies the client-supplied `user_id`/fetched resource's owner matches the token, **except** a small intentional public surface (auth's own signup/login/refresh, and `/health`+`/capabilities` on both `rag` and `quant`) — see [§2](#2-backend-foundations) for the exact per-router mechanism and coverage table. Verified live: unauthenticated → 401, mismatched `user_id` → 403, another user's resource by ID → 404 (not leaked as 403), the actual owner → 200.
 2. **Checkpointer fragmentation** — RAG and Quant used two independent SQLite files despite the rest of the stack being Postgres, and `initialize_stock_agents()`'s `checkpointer` param was explicitly documented as ignored. Now both share one `AsyncPostgresSaver` on the same Postgres database. Fixing this surfaced a real follow-on risk — a shared checkpointer partitions only by `thread_id`, so if a RAG and a Quant session ever used the same underlying ID (the session model allows this), their state could collide. Fixed by prefixing every checkpoint `thread_id` (`rag:`/`quant:`) at the point of use — verified directly that identical underlying IDs stay fully isolated across the prefix boundary.
-3. **`VectorDBManager` stub/comment mismatch** — `initialize_for_portfolio()`, `cleanup_portfolio()`, `get_for_session()`, `create_temporary()` are legacy no-op shims (retrieval is fully lazy per-ticker via `get_instance(ticker)`), but `app/api/portfolios.py`'s comments described them as doing real work ("CRITICAL: Initialize Vector DB ONCE..."). Docstrings now say what these methods actually do (nothing), and `portfolios.py` no longer calls the dead ones or claims they matter. The one genuinely-live piece of state (`register_session`'s in-memory `thread_id → portfolio_id` map) is untouched and still refreshed correctly on ticker changes.
+3. **`VectorDBManager` stub/comment mismatch** — `initialize_for_portfolio()`, `cleanup_portfolio()`, `get_for_session()`, `create_temporary()` are legacy no-op shims (retrieval is fully lazy per-ticker via `get_instance(ticker)`), but `backend/app/api/portfolios.py`'s comments described them as doing real work ("CRITICAL: Initialize Vector DB ONCE..."). Docstrings now say what these methods actually do (nothing), and `portfolios.py` no longer calls the dead ones or claims they matter. The one genuinely-live piece of state (`register_session`'s in-memory `thread_id → portfolio_id` map) is untouched and still refreshed correctly on ticker changes.
 4. **Unbounded disk growth from debug dumps** — `POST /ask`, `POST /compare`, `POST /quant/query` wrote full JSON response payloads to `output/json/...` on every single call, unconditionally. Now gated behind `SAVE_DEBUG_RESPONSES` (env var, default `false`) — off by default in every environment, opt-in when you actually want the dumps for debugging.
 5. **`_is_direct_vectordb_mode()` bypass risk** — comparison/segment/geographic queries skipped grading and web-search fallback entirely, on a "10-K is authoritative" assumption that doesn't hold once 10-Q/8-K data (thinner per-document) flows through the same paths. Now the bypass only applies when `filing_types` is empty or contains only `"10-K"` (byte-for-byte unchanged behavior there); any query resolving to 10-Q/8-K (alone or combined with 10-K) falls through to the normal grade → web-fallback safety net instead. Verified with 9 direct test cases covering both branches.
-6. **`quant/stock_agent/api_server.py` port collision** — its startup banner claimed port 8567 but actually bound 8568, colliding with the Options Intelligence MCP server if both ran at once. This file is a standalone/alternate entry point (not the one wired into `app/main.py`), now moved to port 8569 with the banner corrected to match.
 7. **Bare `print()` instead of structured logging** — was pervasive in `portfolios.py`, `integrations.py`, `rag.py`, `quant.py`, and all 5 file-storage connectors. All converted to the `logging` module (matching the style already used in `main.py`/`edgar.py`/`form4.py`), with level chosen by message content (error/warning/info).
 8. **`is_comparison_mode` checkpointer leak** — `/compare` set `is_comparison_mode`/`comparison_company1-3`/`year_start`/`year_end` on the graph state, and the Postgres checkpointer persists state per `thread_id` across turns by merging inputs rather than replacing state. `/ask` never reset these fields, so a thread that was ever used for `/compare` would silently route every later `/ask` question through the annual-only comparison templates. Fixed by having `/ask` explicitly reset all of these every call. Reproduced and verified live against the actual Postgres-backed checkpointer (not just read from code) before and after the fix.
 9. **Company-name alias gaps** — `TICKER_TO_COMPANY` had a duplicate `'googl'` dict key, silently dropping the `'alphabet'` alias (Python keeps only the last literal key); `detect_tickers_in_query()` also only checked a ticker's single canonical name, so even after the alias was restored, "Alphabet ..." sub-queries fell back to querying every company in the request instead of just Google. Fixed via `get_company_aliases()` (§ Fiscal calendar utilities above) used by both `get_ticker()`'s reverse mapping and `detect_tickers_in_query()`.
@@ -537,10 +536,10 @@ A prior pass through this backend surfaced a series of architectural gaps; 11 ha
 
 ### Still open
 
-12. **Semantic cache (`rag/graph/semantic_cache.py`) is not wired into any live code path** — correctness-fixed (filter-aware cache key) in case it's adopted later, but currently dead code.
+12. **Semantic cache (`backend/rag/graph/semantic_cache.py`) is not wired into any live code path** — correctness-fixed (filter-aware cache key) in case it's adopted later, but currently dead code.
 13. **`postgres_mcp` (:8570) has no health/startup safety net** — unlike the 4 core MCP servers, it isn't started by `docker-entrypoint.sh`, isn't exposed in `docker-compose.yml`, isn't in `initialize_stock_agents()`'s readiness-wait list, and isn't checked by `/quant/health`. `postgres_agent` is still added to the supervisor's `available_agents` unconditionally (see [§6](#6-quant-subsystem)), so a query routed to it when the server isn't running fails at tool-call time with no earlier, clearer signal.
 
 ### Still true, by design (not gaps)
 
 - **Bounded concurrency appears in exactly one place** in the services layer: `FileImportService.import_files` (`asyncio.Semaphore(3)`). The ingestion pipeline itself (embeddings, image captioning, EDGAR filing fetches) uses bounded concurrency extensively, but the services/API layer otherwise doesn't need it since most work is single-document per request.
-- **`JWT_SECRET_KEY` dev fallback**: if unset, `app/auth/jwt.py` refuses to start when `APP_ENV=production`; in dev it falls back to a *random secret generated fresh every process start* — safe against forgery, but means every restart invalidates all existing tokens, which reads as "sessions expire instantly" under `uvicorn --reload`. Set it explicitly in `.env` for any environment where restarts shouldn't log everyone out.
+- **`JWT_SECRET_KEY` dev fallback**: if unset, `backend/app/auth/jwt.py` refuses to start when `APP_ENV=production`; in dev it falls back to a *random secret generated fresh every process start* — safe against forgery, but means every restart invalidates all existing tokens, which reads as "sessions expire instantly" under `uvicorn --reload`. Set it explicitly in `.env` for any environment where restarts shouldn't log everyone out.

@@ -65,7 +65,7 @@ FastAPI app (app/main.py)
 │   arithmetic), reviewed by a person where doubtful, indexed in the `user_documents`
 │   Qdrant collection. app/docproc/ is the folded-in extraction engine
 │   (local OCR first, vision model only where doubtful)
-├── Form4 insider-trading pipeline (ingestion/Form4_Ingestion/, rag/utils/Insights_Form4/)
+├── Form4 insider-trading pipeline (ingestion/form4/, rag/utils/form4_insights/)
 ├── Macro data pipeline (ingestion/ingest_macro_data.py — FRED + BLS)
 ├── Integrations (app/api/integrations.py, app/services/connectors/) —
 │   S3, Azure Blob, Google Drive, OneDrive, SharePoint, SFTP, Confluence
@@ -96,14 +96,14 @@ cd Investment_Analyst
 
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 playwright install chromium     # needed for EDGAR filing → PDF rendering
 
 cp .env.example .env
 # Edit .env — see Environment Variables below for the full set
 ```
 
-`requirements.txt` covers everything the app needs, including PyMuPDF **2.x** (`pymupdf>=2.1`, with `pymupdf-layout`; PyMuPDF 1.x finds tables differently and the extraction tests will fail) and the LLM provider libraries (`langchain-openai`, `langchain-anthropic`, `langchain-google-genai`, `langchain-ollama`). If you install by hand instead:
+`backend/requirements.txt` covers everything the app needs, including PyMuPDF **2.x** (`pymupdf>=2.1`, with `pymupdf-layout`; PyMuPDF 1.x finds tables differently and the extraction tests will fail) and the LLM provider libraries (`langchain-openai`, `langchain-anthropic`, `langchain-google-genai`, `langchain-ollama`). If you install by hand instead:
 
 ```bash
 pip install "pymupdf>=2.1" "pymupdf-layout>=2.1" openpyxl python-docx python-pptx beautifulsoup4 lxml \
@@ -131,16 +131,19 @@ This publishes Postgres on host port **5433** (not 5432 — avoids clashing with
 ### 3. Run migrations
 
 ```bash
-alembic upgrade head
+alembic upgrade head          # run from backend/
 ```
 
-(The API also runs `alembic upgrade head` on startup.) The schema is at revision `023_provider_credentials`. **Switching to an older branch?** An older branch cannot start on a database already migrated past its own newest revision. Keep a separate database per branch, or `alembic downgrade <that branch's revision>` first. This branch's `docker-compose.yml` uses its own Compose project name (`investment_analyst_new`, override with `COMPOSE_PROJECT_NAME`), so its Postgres/Redis volumes are separate from the older branch's.
+(The API also runs `alembic upgrade head` on startup.) The schema is at revision `025_user_data_sources`. **Switching to an older branch?** An older branch cannot start on a database already migrated past its own newest revision. Keep a separate database per branch, or `alembic downgrade <that branch's revision>` first. This branch's `docker-compose.yml` uses its own Compose project name (`investment_analyst_new`, override with `COMPOSE_PROJECT_NAME`), so its Postgres/Redis volumes are separate from the older branch's.
 
 ### 4. Start the API
 
 ```bash
+cd backend
 python -m uvicorn app.main:app --reload --port 8000
 ```
+
+The virtualenv (`venv/`) stays at the repo root; the Python code lives in `backend/`, and everything the app writes at runtime goes to `data/` (override with `DATA_DIR`).
 
 On startup, the app also creates the LangGraph RAG agent, initializes the quant supervisor (waiting briefly for MCP servers — non-fatal if some aren't up yet), connects to the Redis/Arq job queue, checks/kicks off macro data ingestion if stale, and starts a 24h macro re-sync loop.
 
@@ -158,11 +161,11 @@ arq app.worker.BatchWorkerSettings &          # long-running / batch queue
 Easiest: `./scripts/start_mcp_servers.sh` (start | stop | status; it sets `PYTHONPATH` so the servers can import the app). By hand:
 
 ```bash
-cd quant/yahoo-finance-mcp && python server.py &      # Stock Information — :8565
-cd quant/Stock_Analysis && python server_mcp.py &     # Technical Analysis — :8566
-cd quant/research_mcp && python server_mcp.py &        # Research/Ratings — :8567
-cd quant/options_mcp && python server_mcp.py &         # Options Intelligence — :8568
-cd quant/postgres_mcp && python server_mcp.py &        # Postgres query agent — :8570 (only needed if using a Postgres integration)
+cd backend/quant/yahoo_mcp && python server.py &      # Stock Information — :8565
+cd backend/quant/technical_mcp && python server_mcp.py &     # Technical Analysis — :8566
+cd backend/quant/research_mcp && python server_mcp.py &        # Research/Ratings — :8567
+cd backend/quant/options_mcp && python server_mcp.py &         # Options Intelligence — :8568
+cd backend/quant/postgres_mcp && python server_mcp.py &        # Postgres query agent — :8570 (only needed if using a Postgres integration)
 ```
 
 Or run everything (Postgres + Qdrant + Redis + API + both workers + all MCP servers) via Docker:
@@ -189,7 +192,7 @@ The API allows `localhost`/`127.0.0.1` on any port by default (Vite moves to 517
 ### 8. Ingest some filings to test with
 
 ```bash
-python scripts/ingest_ticker.py AAPL
+cd backend && python scripts/ingest_ticker.py AAPL
 # Lists available 10-K/10-Q/8-K/20-F/6-K filings with fiscal year/quarter labels
 # (e.g. "FY2024", "2025Q3"), lets you pick which to pull in and ingest.
 ```
@@ -201,7 +204,6 @@ python scripts/ingest_ticker.py AAPL
 | http://localhost:8000 | API root / service directory |
 | http://localhost:8000/docs | Interactive Swagger UI |
 | http://localhost:8000/health | Aggregated health check |
-| `static/index.html` | Minimal web UI |
 
 ---
 
@@ -218,7 +220,7 @@ python scripts/ingest_ticker.py AAPL
 | `LLM_ALLOW_PRIVATE_URLS` | Optional | `0` = refuse localhost / private-network model addresses (set on a shared server; cloud-metadata addresses are always refused). |
 | `COHERE_API_KEY`, `RERANK_LOCAL_MODEL` | Optional | Re-ranker: local cross-encoder by default (model downloads on first use, ~90 MB); Cohere only if a user chooses it. |
 | `CONTEXTUAL_PREFIX` | Optional | `0` turns off the company/filing/period/section header added to each chunk's embedding text at ingestion (default on). |
-| `DOCPROC_DATA_DIR` | Optional | Where the document-reading engine keeps OCR models and logs (default `data/docproc`). |
+| `DOCPROC_DATA_DIR` | Optional | Where the document-reading engine keeps OCR models and logs (default `data/docproc`; the whole data folder moves with `DATA_DIR`). |
 | `MCP_<STOCK_INFO\|TECHNICAL\|RESEARCH\|OPTIONS\|POSTGRES>_URL` / `_ENABLED` / `_BIND`, `MCP_HOST` | Optional | Where each quant MCP server lives; defaults to `127.0.0.1` and the usual ports. |
 | `QDRANT_URL`, `QDRANT_API_KEY` | Required | Vector database (Qdrant Cloud or self-hosted) |
 | `GOOGLE_API_KEY` | Required | Gemini vision, used for quant chart-summary generation (distinct from the GPT-4o vision used in filing ingestion) |
@@ -249,40 +251,42 @@ Generate an integration secret: `python -c "import secrets; print(secrets.token_
 ## Testing
 
 ```bash
-pytest tests --ignore=tests/test_api_v2.py        # ~2.5 min (the extraction engine's tests run OCR); tests/docproc can be skipped for a quick run
+cd backend && pytest --ignore=tests/test_api_v2.py        # ~2.5 min (the extraction engine's tests run OCR); tests/docproc can be skipped for a quick run
 python scripts/extraction_eval.py                 # finance extraction accuracy (local OCR, no LLM calls)
 EVAL_TOKEN=… EVAL_THREAD_ID=… python scripts/rag_eval.py   # question set against a running API (uses your LLM provider)
 ```
 
-`tests/test_api_v2.py` needs a running Postgres. Fill in `expected` answers in `tests/rag_eval/golden.jsonl` for the RAG evaluation to measure accuracy.
+`backend/tests/test_api_v2.py` needs a running Postgres. Fill in `expected` answers in `backend/tests/rag_eval/golden.jsonl` for the RAG evaluation to measure accuracy.
 
 ---
 
 ## Repository layout
 
 ```
-app/                   FastAPI app: routers (api/), services (services/ — incl. app_settings/,
-                        llm_providers/, user_docs/), docproc/ (document-reading engine: OCR,
-                        layout, tables, finance checks), mcp registry/auth,
-                        auth (auth/), DB models + connection (database/),
-                        background job workers (worker.py, jobs/),
-                        external connectors (services/connectors/)
-rag/                    LangGraph RAG pipeline (graph/), Qdrant client, prompts (+ editable prompt
-                        registry), retrieval/rerank.py, verify/numbers.py, eval/metrics.py
-ingestion/              PDF/table/image processing, EDGAR fetcher, Form4 pipeline,
-                        macro data ingestion, table_extractor.py
-quant/                  Stock-agent supervisor + sub-agents, 5 MCP servers
-                        (yahoo-finance-mcp, Stock_Analysis, research_mcp,
-                        options_mcp, postgres_mcp)
-schemas/                Pydantic models (LLM structured outputs, request/response shapes)
-alembic/versions/       Database migrations (Postgres-target)
-scripts/                ingest_ticker.py (interactive EDGAR ingestion CLI), utilities
-static/                 Minimal web UI (index.html, integrations.html, test.html)
-tests/                  pytest suite (tests/docproc/ = the extraction engine's tests)
-scripts/                (above) + rag_eval.py (question set → accuracy report),
-                        extraction_eval.py (finance statements × scan quality, no LLM cost),
-                        start_mcp_servers.sh
-docs/                   TECHNICAL_GUIDE.md — the full architectural reference
+backend/                 all Python code (run commands from here)
+  app/                   FastAPI app: routers (api/), services (services/ — incl. app_settings/,
+                         llm_providers/, user_docs/), docproc/ (document-reading engine: OCR,
+                         layout, tables, finance checks), auth/, DB models + connection (database/),
+                         background job workers (worker.py, jobs/), core/paths.py (where files live)
+  rag/                   LangGraph RAG pipeline (graph/), Qdrant client, prompts (+ editable prompt
+                         registry), retrieval/rerank.py, verify/numbers.py, eval/metrics.py
+  ingestion/             PDF/table/image processing, EDGAR fetcher, form4/ pipeline,
+                         macro data ingestion, table_extractor.py
+  quant/                 Stock-agent supervisor + sub-agents (stock_agent/), 5 MCP servers
+                         (yahoo_mcp, technical_mcp, research_mcp, options_mcp, postgres_mcp)
+  schemas/               Pydantic models (LLM structured outputs, request/response shapes)
+  alembic/               Database migrations (alembic.ini beside it)
+  scripts/               ingest_ticker.py (interactive EDGAR ingestion CLI), rag_eval.py,
+                         extraction_eval.py, reextract_tables.py and other developer tools
+  tests/                 pytest suite (tests/docproc/ = the extraction engine's tests)
+  sample_data/           sample PDFs used by tests and demos
+  docker/                container entrypoints
+  Dockerfile, requirements.txt, pytest.ini
+scripts/                 start_api / start_mcp_servers launchers (.sh and .bat)
+docs/                    TECHNICAL_GUIDE.md — the full architectural reference, and design notes
+data/                    runtime files: filings, uploads, keys, caches, logs (git-ignored)
+venv/                    virtualenv (git-ignored, kept at the repo root, outside backend/)
+docker-compose.yml, .env, .env.example
 ```
 
 ---

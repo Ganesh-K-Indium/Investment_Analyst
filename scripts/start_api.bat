@@ -58,7 +58,7 @@ echo [INFO] Checking dependencies...
 python -c "import fastapi" >nul 2>&1
 if %errorlevel% neq 0 (
     echo [WARNING] Dependencies not installed. Installing...
-    pip install -r "%PROJECT_ROOT%\requirements.txt"
+    pip install -r "%PROJECT_ROOT%\backend\requirements.txt"
     if %errorlevel% neq 0 (
         echo [ERROR] Failed to install dependencies.
         exit /b 1
@@ -119,10 +119,10 @@ echo [SUCCESS] Starting server on http://localhost:%API_PORT%
 echo.
 echo [INFO] API Documentation: http://localhost:%API_PORT%/docs
 echo [INFO] Health Check: http://localhost:%API_PORT%/health
-echo [INFO] Web UI: Open static/index.html in browser
+echo [INFO] API docs: http://localhost:%API_PORT%/docs
 echo.
 
-pushd "%PROJECT_ROOT%"
+pushd "%PROJECT_ROOT%\backend"
 if "%DEV_MODE%"=="true" (
     echo [INFO] Development mode: Auto-reload enabled
     python -m uvicorn app.main:app --reload --reload-dir app --reload-dir rag --reload-dir quant --reload-dir schemas --reload-dir ingestion --port %API_PORT% --host 0.0.0.0

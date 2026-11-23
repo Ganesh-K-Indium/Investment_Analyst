@@ -5,8 +5,8 @@
 # =============================================================================
 # This script starts the 4 MCP (Model Context Protocol) servers required for
 # the Stock Analysis system:
-#   1. Stock Information Server (port 8565) - yahoo-finance-mcp
-#   2. Technical Analysis Server (port 8566) - Stock_Analysis
+#   1. Stock Information Server (port 8565) - yahoo_mcp
+#   2. Technical Analysis Server (port 8566) - technical_mcp
 #   3. Research Server (port 8567) - research_mcp
 #   4. Options Intelligence Server (port 8568) - options_mcp
 #
@@ -29,15 +29,16 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_PATH="$PROJECT_ROOT/venv"
-QUANT_DIR="$PROJECT_ROOT/quant"
-LOG_DIR="$PROJECT_ROOT/logs/mcp"
-PID_DIR="$PROJECT_ROOT/logs/mcp/pids"
+BACKEND_DIR="$PROJECT_ROOT/backend"
+QUANT_DIR="$BACKEND_DIR/quant"
+LOG_DIR="$PROJECT_ROOT/data/logs/mcp"
+PID_DIR="$PROJECT_ROOT/data/logs/mcp/pids"
 
 # Server configurations (compatible with bash 3.2+)
 # Format: name|directory|script|port
 SERVER_CONFIGS=(
-    "stock_info|yahoo-finance-mcp|server.py|8565"
-    "technical|Stock_Analysis|server_mcp.py|8566"
+    "stock_info|yahoo_mcp|server.py|8565"
+    "technical|technical_mcp|server_mcp.py|8566"
     "research|research_mcp|server_mcp.py|8567"
     "options|options_mcp|server_mcp.py|8568"
     "postgres|postgres_mcp|server_mcp.py|8570"
@@ -130,7 +131,7 @@ start_server() {
     
     # Start the server
     cd "$server_dir"
-    export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"   # the servers import app.* (registry, auth)
+    export PYTHONPATH="$BACKEND_DIR${PYTHONPATH:+:$PYTHONPATH}"   # the servers import app.* (registry, auth)
     nohup python "$script" > "$log_file" 2>&1 &
     local pid=$!
     echo $pid > "$pid_file"
@@ -298,8 +299,8 @@ ${YELLOW}Commands:${NC}
   help       Show this help message
 
 ${YELLOW}Servers:${NC}
-  1. Stock Information (port 8565) - yahoo-finance-mcp
-  2. Technical Analysis (port 8566) - Stock_Analysis
+  1. Stock Information (port 8565) - yahoo_mcp
+  2. Technical Analysis (port 8566) - technical_mcp
   3. Research (port 8567) - research_mcp
   4. Options Intelligence (port 8568) - options_mcp
 

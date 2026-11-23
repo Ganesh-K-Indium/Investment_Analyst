@@ -1,0 +1,4711 @@
+"This module contains all info about about the nodes in the graph"
+import asyncio
+import hashlib
+import logging
+import re
+from functools import lru_cache
+from typing import Optional, Dict, Any, List
+from datetime import datetime
+from dotenv import load_dotenv
+from langchain_core.documents import Document
+from rag.graph.doc_kinds import is_analyst_note, split_notes
+from langchain_openai import ChatOpenAI
+from app.services import app_settings
+from rag.prompts import registry as prompt_registry
+from app.services.app_settings import get_llm
+from langchain_groq import ChatGroq
+from langchain_core.messages import AIMessage
+from langchain_tavily import TavilySearch
+from rag.prompts.prompts import (get_rag_chain,
+                                                          get_financial_analyst_grader_chain,
+                                                          MACRO_PLANNER_SYSTEM_PROMPT,
+                                                          MACRO_SYNTHESIS_PROMPT,
+                                                          MACRO_FEW_SHOT)
+from rag.vectordb.client import load_vector_database
+from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company, get_company_aliases, get_extra_web_domains
+from app.utils.filing_types import (
+    ANNUAL_FILING_TYPES, EVENT_FILING_TYPES, group_filing_types,
+    order_filing_types, web_search_form_label,
+)
+
+logger = logging.getLogger("rag.graph.nodes")
+
+load_dotenv()
+
+# Trusted financial data domains for web search
+# Only these domains will be used for financial queries to ensure data quality and reliability
+TRUSTED_FINANCIAL_DOMAINS = [
+    "sec.gov",                  # SEC filings - official source
+    "investor.com",             # Investor relations sites
+    "finance.yahoo.com",        # Yahoo Finance
+    "bloomberg.com",            # Bloomberg
+    "reuters.com",              # Reuters
+    "cnbc.com",                 # CNBC
+    "marketwatch.com",          # MarketWatch
+    "fool.com",                 # Motley Fool
+    "seekingalpha.com",         # Seeking Alpha
+    "morningstar.com",          # Morningstar
+    "wsj.com",                  # Wall Street Journal
+    "ft.com",                   # Financial Times
+    "forbes.com",               # Forbes
+    "investopedia.com",         # Investopedia
+    "nasdaq.com",               # Nasdaq
+    "nyse.com",                 # NYSE
+    "gurufocus.com",            # GuruFocus
+    "macrotrends.net",          # MacroTrends
+    "stockanalysis.com",        # Stock Analysis
+    "companiesmarketcap.com",   # Companies Market Cap
+    "treasury.gov",        # US Treasury data
+
+]
+
+# Government sources for macro/liquidity data (Liquidity dimension of ALPHA)
+GOVT_SOURCE_DOMAINS = [
+    "fdic.gov",             # FDIC - bank liquidity, deposit, and risk data
+    "federalreserve.gov",   # Federal Reserve - interest rates, monetary policy
+    "treasury.gov",         # US Treasury - yields, debt data
+    "bls.gov",              # Bureau of Labor Statistics - inflation, employment
+    "bea.gov",              # Bureau of Economic Analysis - GDP, macro indicators
+]
+
+
+def generate_comparison_subqueries(companies: list, year: str = None) -> dict:
+    """
+    Generate optimized sub-queries for company comparison WITHOUT LLM.
+
+    These queries are specifically designed to retrieve data from 10-K reports
+    with maximum accuracy and minimal retrieval time.
+
+    Args:
+        companies: List of company names to compare
+        year: Year for comparison. Defaults to the most recent fiscal year
+            likely to actually have a filed 10-K (per the first company's
+            fiscal calendar) rather than the current calendar year, which
+            for most filers won't have one until Feb/Mar of next year.
+
+    Returns:
+        dict: Sub-query analysis with pre-generated queries
+    """
+    if year is None:
+        from app.utils.company_mapping import get_ticker as _get_ticker_for_year, get_most_recent_filed_fiscal_year
+        _first_ticker = _get_ticker_for_year(companies[0]) if companies else None
+        if not _first_ticker and companies and 2 <= len(companies[0]) <= 5:
+            _first_ticker = companies[0]
+        year = str(get_most_recent_filed_fiscal_year(_first_ticker))
+
+    sub_queries = []
+
+    # Template structure optimized for 10-K reports
+    # Using multiple search terms and specific document sections
+
+    year_given = year is not None
+    year_int = int(year) if isinstance(year, str) else year
+    prior_year = year_int - 1
+
+    for company in companies:
+        # Fiscal-year-end phrasing: most filers use a calendar fiscal year
+        # (year ended December 31), so keep that exact language for them —
+        # this is the majority case and preserves existing retrieval output.
+        # Known non-calendar filers (Apple, Microsoft, etc.) get generic
+        # "fiscal year end {year}" phrasing instead, since asserting
+        # "December 31" for them would be factually wrong and could bias
+        # retrieval toward the wrong period.
+        from app.utils.company_mapping import get_ticker as _get_ticker, get_fiscal_year_end_month as _get_fye_month
+        _ticker = _get_ticker(company)
+        _fye_month = _get_fye_month(_ticker) if _ticker else 12
+        if _fye_month == 12:
+            year_end_phrase = f"year ended December 31 {year}"
+            balance_date_phrase = f"as of December 31 {year}"
+        else:
+            year_end_phrase = f"fiscal year {year} annual period"
+            balance_date_phrase = f"as of fiscal year end {year}"
+
+        # 1. REVENUE - Exact 10-K language
+        sub_queries.append(
+            f"{company} total revenues net revenues {year_end_phrase} consolidated statements of operations"
+        )
+
+        # 2. NET INCOME - Exact bottom-line metric
+        sub_queries.append(
+            f"{company} net income loss {year_end_phrase} per share diluted basic"
+        )
+
+        # 3. OPERATING INCOME - Before tax line
+        sub_queries.append(
+            f"{company} income from operations operating income {year_end_phrase}"
+        )
+
+        # 4. EARNINGS GROWTH - Prior-year comparative income statement line, so the
+        # growth base (prior year net income) is retrieved alongside the current year
+        prior_end_phrase = (
+            f"year ended December 31 {prior_year}" if _fye_month == 12
+            else f"fiscal year {prior_year} annual period"
+        )
+        sub_queries.append(
+            f"{company} net income loss {prior_end_phrase} comparative consolidated statements of operations {year_end_phrase}"
+        )
+
+        # 5. R&D EXPENSES - Operating cost breakout
+        sub_queries.append(
+            f"{company} research and development costs and expenses {year_end_phrase}"
+        )
+
+        # 6. TOTAL ASSETS - Balance sheet specific date
+        sub_queries.append(
+            f"{company} total assets {balance_date_phrase} consolidated balance sheets"
+        )
+
+        # 7. TOTAL DEBT - Long-term obligations
+        sub_queries.append(
+            f"{company} long-term debt total liabilities {balance_date_phrase} balance sheets"
+        )
+
+        # 8. PROFIT DRIVERS - MD&A results section
+        sub_queries.append(
+            f"{company} results of operations factors affecting our performance key business drivers {year}"
+        )
+
+        # 9. RISK FACTORS - Dedicated section
+        sub_queries.append(
+            f"{company} Item 1A risk factors risks and uncertainties that could affect our business {year}"
+        )
+
+    logger.info(f"[FIXED QUERIES] Generated {len(sub_queries)} optimized sub-queries for {len(companies)} companies")
+    logger.warning(f"[FIXED QUERIES] Skipped LLM query generation - using 10-K-optimized templates")
+
+    return {
+        "needs_sub_queries": True,
+        "query_type": "multi_company",
+        "companies_detected": companies,
+        "sub_queries": sub_queries,
+        # No year in the request: leave empty so retrieve() resolves each company's own latest filed year.
+        "requested_years": [year_int] if year_given else [],
+        "reasoning": f"Pre-optimized 10-K queries for {', '.join(companies)} (no LLM needed)",
+        "generation_method": "template"  # vs "llm"
+    }
+
+
+def detect_segment_or_geographic_query(question: str) -> str:
+    """
+    Detect if a query is specifically about segment reporting or geographic information.
+
+    Returns:
+        "segment" if segment query, "geographic" if geographic query, "none" otherwise.
+    """
+    question_lower = question.lower()
+
+    segment_keywords = [
+        "segment", "segments", "reportable segment", "operating segment",
+        "business segment", "segment revenue", "segment income", "segment profit",
+        "revenue by segment", "income by segment", "segment assets",
+        "segment capital expenditure", "segment depreciation", "segment amortization",
+        "capex by segment", "segment performance", "segment results",
+        "segment margin", "segment outlook", "segment trend",
+        "product segment", "line of business", "disaggregation of revenue",
+        "segment ebitda", "segment operating income", "segment net sales",
+        "codm", "asc 280", "segment disclosure", "segment reporting"
+    ]
+
+    geographic_keywords = [
+        "geographic", "geography", "by region", "by country",
+        "revenue by geography", "revenue by region", "net sales by geography",
+        "geographic revenue", "geographic distribution", "region country",
+        "revenue concentration", "geographic information",
+        "foreign operations", "international operations",
+        "domestic vs international", "overseas operations", "global footprint",
+        "foreign subsidiaries", "properties by location", "facilities by geography",
+        "manufacturing locations", "data centers", "distribution centers",
+        "assets by country", "geographic risk", "country risk", "regional risk",
+        "currency risk", "foreign exchange exposure", "export controls",
+        "sanctions", "customers by region", "customer concentration geography",
+        "market concentration regional", "geographic market share",
+        "long lived assets by geography", "revenue by country"
+    ]
+
+    # Check geographic first (more specific) then segment
+    if any(kw in question_lower for kw in geographic_keywords):
+        return "geographic"
+    if any(kw in question_lower for kw in segment_keywords):
+        return "segment"
+    return "none"
+
+
+def _extract_years_from_question(question: str, ticker: Optional[str] = None) -> list:
+    """
+    Extract explicitly mentioned 4-digit years (2000-2029) from the user question.
+
+    Falls back to the most recent fiscal year likely to actually have a filed
+    10-K, NOT the current calendar year — a 10-K for the current calendar
+    year almost never exists yet (companies get ~60-90 days after fiscal
+    year end to file), so an undated query like "break down Google's
+    segments" would otherwise silently target an unfiled fiscal year and
+    retrieve nothing useful.
+    """
+    years = sorted(set(int(y) for y in re.findall(r'\b(20[0-2][0-9])\b', question)))
+    if years:
+        return years
+    if ticker:
+        from app.utils.company_mapping import get_most_recent_filed_fiscal_year
+        return [get_most_recent_filed_fiscal_year(ticker)]
+    # No ticker resolved yet either — a company-agnostic calendar-year
+    # assumption is still safer than "this year", which is correct for the
+    # overwhelming majority (calendar-year) filers.
+    return [datetime.now().year - 1]
+
+
+# Pure keyword heuristic for filing-type inference — zero LLM/embedding cost.
+# Generic (form-agnostic) language maps to the whole document family — "annual
+# report" implies a 10-K for a domestic issuer but a 20-F for a foreign private
+# issuer, and retrieval is scoped per ticker, so searching both costs nothing
+# extra (see group_filing_types). Only an explicit form name narrows to one form.
+_FILING_TYPE_ANNUAL_KEYWORDS = [
+    "annual report", "full year", "full-year", "fiscal year annual",
+    "yearly results", "3-year", "three-year", "comparative financials",
+]
+_FILING_TYPE_10Q_KEYWORDS = [
+    "10-q", "10q", "quarterly", "quarter", "q1", "q2", "q3", "q4",
+    "latest quarter", "most recent quarter", "this quarter", "last quarter",
+    "sequential", "qoq", "quarter-over-quarter",
+]
+_FILING_TYPE_EVENT_KEYWORDS = [
+    "material event", "press release", "announced", "announcement",
+    "departure", "resignation", "appointed", "appointment", "acquisition of",
+    "merger agreement", "guidance update", "restructuring announcement",
+    "executive change", "ceo change", "cfo change",
+]
+# Foreign private issuers report interim results via 6-K (no 10-Q equivalent).
+_FILING_TYPE_6K_KEYWORDS = [
+    "half-year", "half year", "interim results", "semi-annual", "semiannual",
+    "foreign private issuer",
+]
+
+
+def detect_filing_types_in_query(question: str) -> list:
+    """
+    Infer which SEC filing type(s) (10-K / 20-F / 10-Q / 8-K / 6-K) a query
+    implies, using pure keyword heuristics — no LLM call. Returns an empty list
+    when the query doesn't clearly imply a specific filing type, which means
+    "search all filing types" (the safe default that preserves pre-existing
+    behavior for collections/queries where filing type isn't a meaningful signal).
+
+    Collects ALL distinct signals present (not just the first, in priority
+    order) so a question that explicitly references more than one filing
+    type (e.g. "combine the 10-K and 10-Q figures") resolves to both, while
+    a question with only one signal still resolves to a single-element list.
+
+    Explicit form names win over generic language within a family: "10-K" alone
+    resolves to ["10-K"], "20-F" to ["20-F"], while "annual report" resolves to
+    ["10-K", "20-F"]. Likewise "8-K"/"6-K" are explicit, while generic event
+    language ("announced", "press release") resolves to both event forms.
+    """
+    if not question:
+        return []
+    q = question.lower()
+    found = set()
+
+    explicit_annual = False
+    if re.search(r'\b10-?k\b', q):
+        found.add("10-K")
+        explicit_annual = True
+    if re.search(r'\b20-?f\b', q):
+        found.add("20-F")
+        explicit_annual = True
+    if not explicit_annual and any(kw in q for kw in _FILING_TYPE_ANNUAL_KEYWORDS):
+        found.update(ANNUAL_FILING_TYPES)
+
+    if re.search(r'\b10-?q\b', q) or any(kw in q for kw in _FILING_TYPE_10Q_KEYWORDS):
+        found.add("10-Q")
+
+    explicit_event = False
+    if re.search(r'\b8-?k\b', q):
+        found.add("8-K")
+        explicit_event = True
+    if re.search(r'\b6-?k\b', q) or any(kw in q for kw in _FILING_TYPE_6K_KEYWORDS):
+        found.add("6-K")
+        explicit_event = True
+    if not explicit_event and any(kw in q for kw in _FILING_TYPE_EVENT_KEYWORDS):
+        found.update(EVENT_FILING_TYPES)
+
+    return order_filing_types(found)
+
+
+_QUARTER_WORDS = {
+    "first quarter": 1, "1st quarter": 1,
+    "second quarter": 2, "2nd quarter": 2,
+    "third quarter": 3, "3rd quarter": 3,
+    "fourth quarter": 4, "4th quarter": 4,
+}
+
+
+def extract_fiscal_quarters_from_question(question: str) -> list:
+    """
+    Extract which fiscal quarter(s) (1-4) the question refers to, if any —
+    "Q1"/"Q1 2025"/"first quarter" all resolve to a plain quarter NUMBER.
+    A question referencing more than one ("Q1 vs Q3") resolves to all of
+    them, sorted, instead of only the first mention.
+
+    Deliberately does NOT attempt to resolve this to a calendar date range
+    here — that would require guessing which company's fiscal calendar
+    applies, and this function runs before tickers are even resolved. The
+    quarter number itself is unambiguous (the user said "Q1"); per-ticker
+    calendar interpretation happens later once we know which companies are
+    involved (see get_fiscal_quarter_calendar_span in company_mapping.py).
+    """
+    if not question:
+        return []
+    q = question.lower()
+    quarters = {int(n) for n in re.findall(r'\bq([1-4])\b', q)}
+
+    for phrase, quarter in _QUARTER_WORDS.items():
+        if phrase in q:
+            quarters.add(quarter)
+
+    return sorted(quarters)
+
+
+def generate_segment_subqueries(companies: list, question: str = "") -> dict:
+    """
+    Generate predefined sub-queries for segment reporting queries WITHOUT LLM.
+    Optimized for 10-K segment disclosures (ASC 280).
+    """
+    requested_years = _extract_years_from_question(question, ticker=companies[0] if companies else None)
+    year_suffix = "for years " + ", ".join(str(y) for y in requested_years)
+    sub_queries = []
+
+    for company in companies:
+        # 1. Segment overview & structure
+        sub_queries.append(
+            f"{company} reportable segments operating segments business segments segment overview segment structure segment description chief operating decision maker CODM {year_suffix}"
+        )
+        # 2. Segment financial performance
+        sub_queries.append(
+            f"{company} segment revenue segment net sales segment results segment operating income segment profit segment EBITDA revenue by segment income by segment {year_suffix}"
+        )
+        # 3. Segment reporting notes (ASC 280)
+        sub_queries.append(
+            f"{company} note segment reporting reportable segments note ASC 280 segment disclosure segment accounting policy segment measurement basis {year_suffix}"
+        )
+        # 4. Product / business line disaggregation
+        sub_queries.append(
+            f"{company} geographic segments product segments line of business disaggregation of revenue segment categories product line revenue {year_suffix}"
+        )
+        # 5. Segment assets & capital allocation
+        sub_queries.append(
+            f"{company} segment assets segment capital expenditure segment depreciation segment amortization assets by segment capex by segment long lived assets by segment {year_suffix}"
+        )
+        # 6. Segment MD&A discussion
+        sub_queries.append(
+            f"{company} segment performance discussion MD&A segment results drivers of segment growth segment margins segment trends segment outlook {year_suffix}"
+        )
+
+    logger.info(f"[SEGMENT QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
+    logger.info(f"[SEGMENT QUERIES] Requested years: {requested_years}")
+    logger.warning(f"[SEGMENT QUERIES] Skipped LLM query generation - using 10-K segment templates")
+
+    return {
+        "needs_sub_queries": True,
+        "query_type": "segment",
+        "companies_detected": companies,
+        "sub_queries": sub_queries,
+        "requested_years": requested_years,
+        "reasoning": f"Pre-optimized segment reporting queries for {', '.join(companies)} (no LLM needed)",
+        "generation_method": "template"
+    }
+
+
+def generate_geographic_subqueries(companies: list, question: str = "") -> dict:
+    """
+    Generate predefined sub-queries for geographic/regional queries WITHOUT LLM.
+    Optimized for 10-K geographic disclosures.
+    """
+    requested_years = _extract_years_from_question(question, ticker=companies[0] if companies else None)
+    year_suffix = "for years " + ", ".join(str(y) for y in requested_years)
+    sub_queries = []
+
+    for company in companies:
+        # 1. Revenue by geography
+        sub_queries.append(
+            f"{company} revenue by geography revenue by region net sales by geography geographic revenue distribution disaggregated revenue region country revenue concentration {year_suffix}"
+        )
+        # 2. Geographic notes & ASC 280
+        sub_queries.append(
+            f"{company} geographic information note segment reporting geography ASC 280 geographic disclosure foreign domestic revenue by country long lived assets by geograph {year_suffix}"
+        )
+        # 3. Foreign / international operations
+        sub_queries.append(
+            f"{company} foreign operations international operations domestic vs international revenue foreign subsidiaries overseas operations global footprint {year_suffix}"
+        )
+        # 4. Properties & facilities by location
+        sub_queries.append(
+            f"{company} properties by location facilities by geography manufacturing locations data centers offices distribution centers assets by country {year_suffix}"
+        )
+        # 5. Geographic risk factors
+        sub_queries.append(
+            f"{company} geographic risk country risk regional risk political risk currency risk foreign exchange exposure international regulatory risk sanctions export controls {year_suffix}"
+        )
+        # 6. Customer / market concentration by region
+        sub_queries.append(
+            f"{company} major customers by region customer concentration geography market concentration regional demand geographic market share {year_suffix}"
+        )
+
+    logger.info(f"[GEOGRAPHIC QUERIES] Generated {len(sub_queries)} predefined sub-queries for {len(companies)} companies")
+    logger.info(f"[GEOGRAPHIC QUERIES] Requested years: {requested_years}")
+    logger.warning(f"[GEOGRAPHIC QUERIES] Skipped LLM query generation - using 10-K geographic templates")
+
+    return {
+        "needs_sub_queries": True,
+        "query_type": "geographic",
+        "companies_detected": companies,
+        "sub_queries": sub_queries,
+        "requested_years": requested_years,
+        "reasoning": f"Pre-optimized geographic queries for {', '.join(companies)} (no LLM needed)",
+        "generation_method": "template"
+    }
+
+
+def preprocess_and_analyze_query(state):
+    """
+    PREPROCESSING NODE: Analyze query and generate sub-queries if needed.
+    Context-free - no memory or conversation history.
+
+    UNIVERSAL SUB-QUERY ANALYZER:
+    - Single LLM call extracts companies AND generates optimal sub-queries
+    - Works for ALL query types: single-company, multi-company, financial calculations, temporal comparisons
+
+    COMPARISON MODE OPTIMIZATION:
+    - For comparison queries, uses pre-optimized templates instead of LLM (faster, cheaper, better)
+
+    SEGMENT / GEOGRAPHIC MODE OPTIMIZATION:
+    - For segment or geographic queries, uses pre-optimized templates instead of LLM
+    """
+    logger.info("---QUERY ANALYSIS---")
+    messages = state["messages"]
+    question = messages[-1].content
+    question_lower = question.lower()
+
+    # -------------------------------------------------------------
+    # COMPARISON MODE: Use fixed templates for known comparison queries
+    # -------------------------------------------------------------
+    is_comparison_mode = state.get("is_comparison_mode", False)
+
+    if is_comparison_mode:
+        logger.info(" COMPARISON MODE DETECTED - Using pre-optimized annual-report (10-K/20-F) queries")
+
+        # Extract companies from state
+        comparison_companies = []
+        if state.get("comparison_company1"):
+            comparison_companies.append(state["comparison_company1"])
+        if state.get("comparison_company2"):
+            comparison_companies.append(state["comparison_company2"])
+        if state.get("comparison_company3"):
+            comparison_companies.append(state["comparison_company3"])
+
+        logger.info(f" Companies: {', '.join(comparison_companies)}")
+
+        # Generate fixed sub-queries using the year from state if given; leave
+        # None otherwise so generate_comparison_subqueries applies its own
+        # fiscal-year-aware fallback (most recent year likely to have a filed
+        # 10-K) instead of blindly defaulting to the current calendar year.
+        comparison_year = str(state["year_start"]) if state.get("year_start") else (
+            str(state["year_end"]) if state.get("year_end") else None
+        )
+        logger.info(f" Comparison year: {comparison_year or '(unspecified — will resolve to most recent filed fiscal year)'}")
+        sub_query_analysis = generate_comparison_subqueries(comparison_companies, year=comparison_year)
+
+        return {
+            "companies_detected": comparison_companies,
+            "sub_query_analysis": sub_query_analysis,
+            "requested_years": sub_query_analysis["requested_years"],
+            "sub_query_results": {},
+            "filing_types": list(ANNUAL_FILING_TYPES),
+            "requested_fiscal_quarters": [],
+            "chart_url": None,
+            "chart_filename": None
+        }
+
+    # -------------------------------------------------------------
+    # SEGMENT / GEOGRAPHIC MODE: Use fixed templates
+    # -------------------------------------------------------------
+    seg_geo_type = detect_segment_or_geographic_query(question)
+
+    if seg_geo_type != "none":
+        # Determine companies from state (company_filter / ticker)
+        companies = []
+        company_filter = state.get("company_filter", [])
+        primary_ticker = state.get("ticker")
+
+        if company_filter:
+            companies = [c for c in company_filter if c and c.strip()]
+        elif primary_ticker and primary_ticker.lower() != "string":
+            companies = [primary_ticker]
+
+        if companies:
+            if seg_geo_type == "segment":
+                logger.info(f" SEGMENT QUERY DETECTED - Using pre-optimized segment templates for {companies}")
+                sub_query_analysis = generate_segment_subqueries(companies, question=question)
+            else:
+                logger.info(f" GEOGRAPHIC QUERY DETECTED - Using pre-optimized geographic templates for {companies}")
+                sub_query_analysis = generate_geographic_subqueries(companies, question=question)
+
+            return {
+                "companies_detected": companies,
+                "sub_query_analysis": sub_query_analysis,
+                "requested_years": sub_query_analysis["requested_years"],
+                "sub_query_results": {},
+                "filing_types": list(ANNUAL_FILING_TYPES),
+                "requested_fiscal_quarters": [],
+                "chart_url": None,
+                "chart_filename": None
+            }
+        else:
+            logger.info(f"  {seg_geo_type.upper()} query detected but no companies identified, falling through to LLM analysis")
+
+    # -------------------------------------------------------------
+    # NORMAL MODE: Continue with existing logic
+    # -------------------------------------------------------------
+
+    # UNIVERSAL APPROACH: Single LLM call for sub-query analysis
+    logger.info("---UNIVERSAL SUB-QUERY ANALYSIS---")
+    llm = get_llm("router")
+    
+    from rag.prompts.prompts import get_universal_sub_query_analyzer
+    sub_query_analyzer = get_universal_sub_query_analyzer(llm)
+    
+    # Analyze the question
+    analysis = sub_query_analyzer.invoke({"question": question})
+
+    # Years come ONLY from the explicit years in the question text. The LLM
+    # was filling in years it was never given (e.g. "2022" for an undated
+    # "latest annual report"), which scoped retrieval to a year with no filings
+    # and fell through to web search. An empty list lets retrieve() resolve
+    # the ticker's latest filed fiscal year (get_most_recent_filed_fiscal_year).
+    explicit_years = sorted(set(int(y) for y in re.findall(r'\b(20[0-2][0-9])\b', question)))
+    analysis.requested_years = explicit_years
+
+    # filing_types: union the LLM's structured hints (free — rides the existing
+    # call) with the keyword heuristic, so a signal either method catches alone
+    # isn't lost. Preserves canonical order (10-K, 20-F, 10-Q, 8-K, 6-K) for readability.
+    _llm_filing_types = getattr(analysis, "filing_type_hints", None) or []
+    _heuristic_filing_types = detect_filing_types_in_query(question)
+    _filing_types_union = set(_llm_filing_types) | set(_heuristic_filing_types)
+    filing_types = order_filing_types(_filing_types_union)
+
+    # Foreign private issuers file 20-F (not 10-K) and 6-K (not 8-K). A 10-K filter
+    # on a 20-F filer matches zero chunks, so map the annual/event form to the
+    # foreign equivalent for every company the question names.
+    from app.utils.company_mapping import is_foreign_private_issuer
+    _named_tickers = [get_ticker(c) or c for c in (analysis.companies_detected or []) if c]
+    # Foreign private issuers file no 10-Q (interim results go on 6-K). When every
+    # named company is one, a 10-Q that only the LLM hinted at (e.g. "how has it
+    # changed" read as quarterly) is spurious — keep it only on an explicit
+    # quarterly signal in the question (the keyword heuristic).
+    if _named_tickers and all(is_foreign_private_issuer(t) for t in _named_tickers if t):
+        if "10-Q" in filing_types and "10-Q" not in _heuristic_filing_types:
+            logger.info(f"[FILING TYPES] Foreign issuer(s) only, no explicit quarterly signal → dropping LLM-only 10-Q hint from {filing_types}")
+            filing_types = [ft for ft in filing_types if ft != "10-Q"]
+    if any(is_foreign_private_issuer(t) for t in _named_tickers if t):
+        _fpi_map = {"10-K": "20-F", "8-K": "6-K"}
+        _mapped = {_fpi_map.get(ft, ft) for ft in filing_types}
+        if _mapped != set(filing_types):
+            logger.info(f"[FILING TYPES] Foreign issuer named → {filing_types} mapped to {order_filing_types(_mapped)}")
+            filing_types = order_filing_types(_mapped)
+
+    # Convert to dict for state storage
+    sub_query_analysis = {
+        "needs_sub_queries": analysis.needs_sub_queries,
+        "query_type": analysis.query_type,
+        "companies_detected": analysis.companies_detected,
+        "sub_queries": analysis.sub_queries,
+        # Retrieval-optimized rewrite of the raw question — only consumed by
+        # retrieve()'s direct-mode path (needs_sub_queries == False), where
+        # the raw question would otherwise be embedded unmodified with no
+        # abbreviation expansion or section-context hints. Same LLM call as
+        # everything else above, so this costs zero extra latency.
+        "optimized_query": getattr(analysis, "optimized_query", None),
+        "requested_years": analysis.requested_years,
+        "reasoning": analysis.reasoning
+    }
+
+    # Log analysis results
+    logger.info(f"[ANALYSIS] Query Type: {analysis.query_type}")
+    logger.info(f"[ANALYSIS] Companies: {analysis.companies_detected if analysis.companies_detected else 'None'}")
+    logger.info(f"[ANALYSIS] Needs Sub-Queries: {analysis.needs_sub_queries}")
+    logger.info(f"[ANALYSIS] Requested Years: {analysis.requested_years}")
+    logger.info(f"[ANALYSIS] Filing Types: {filing_types or 'unresolved (search all)'}")
+
+    if analysis.needs_sub_queries:
+        logger.info(f"[ANALYSIS] Generated {len(analysis.sub_queries)} sub-queries:")
+        for i, sq in enumerate(analysis.sub_queries, 1):
+            logger.info(f"   {i}. {sq}")
+        logger.info(f"[ANALYSIS] Reasoning: {analysis.reasoning}")
+    else:
+        logger.info(f"[ANALYSIS] Direct retrieval recommended: {analysis.reasoning}")
+
+    # Return state updates
+    return {
+        "companies_detected": analysis.companies_detected,
+        "sub_query_analysis": sub_query_analysis,
+        "requested_years": analysis.requested_years,
+        "sub_query_results": {},
+        "filing_types": filing_types,
+        "requested_fiscal_quarters": extract_fiscal_quarters_from_question(question),
+        "chart_url": None,
+        "chart_filename": None
+    }
+
+def detect_tickers_in_query(query_text: str, allowed_tickers: set) -> set:
+    """
+    Intelligently detect which tickers from the allowed set are mentioned in the query.
+
+    Detection strategies:
+    1. Exact ticker match (e.g., "AAPL" or "aapl")
+    2. Company name match (e.g., "Apple" → "AAPL", "Amazon" → "AMZN")
+    3. Partial company name match (e.g., "Microsoft's revenue" → "MSFT")
+
+    Args:
+        query_text: The sub-query or question text
+        allowed_tickers: Set of valid tickers to choose from (from company_filter)
+
+    Returns:
+        Set of matched tickers from the allowed set
+    """
+    query_lower = query_text.lower()
+    matched_tickers = set()
+
+    for ticker in allowed_tickers:
+        ticker_lower = ticker.lower()
+
+        # Strategy 1: Exact ticker match (as standalone word)
+        # Check if ticker appears as a word boundary
+        if re.search(r'\b' + re.escape(ticker_lower) + r'\b', query_lower):
+            matched_tickers.add(ticker)
+            continue
+
+        # Strategy 2: Company name match
+        # Check every known alias for this ticker, not just the single
+        # canonical TICKER_TO_COMPANY name — e.g. 'googl' has both "google"
+        # and "alphabet" as valid names a sub-query might use.
+        aliases = get_company_aliases(ticker_lower) or [map_ticker_to_company(ticker_lower)]
+        matched = False
+        for company_name in aliases:
+            if not company_name or company_name == ticker_lower:
+                continue
+            # Check if company name appears in query
+            if company_name in query_lower:
+                matched_tickers.add(ticker)
+                matched = True
+                break
+
+            # Strategy 3: Partial company name match
+            # For multi-word company names, check if any significant word matches
+            company_words = company_name.split()
+            for word in company_words:
+                # Skip common words
+                if len(word) > 3 and word not in ['corporation', 'company', 'group', 'inc']:
+                    if re.search(r'\b' + re.escape(word) + r'\b', query_lower):
+                        matched_tickers.add(ticker)
+                        matched = True
+                        break
+            if matched:
+                break
+
+    return matched_tickers
+
+
+async def _hybrid_search_with_quarter_fallback(db_instance, fiscal_quarter: Optional[int], **kwargs):
+    """
+    Wrap hybrid_search with safe fallbacks:
+
+    1. fiscal_quarter filter: try WITH it first (precise), but if it returns nothing,
+       retry WITHOUT it. This protects against the exact scenario where a
+       collection has real 10-Q data that predates fiscal_quarter tagging (or
+       the ingested doc's fiscal_quarter didn't resolve at ingestion time) — a
+       hard filter on an untagged field would otherwise silently return zero
+       results for data that's actually there and relevant.
+    2. 10-Q -> 6-K: foreign private issuers have no 10-Q; their quarterly/interim
+       results are filed on Form 6-K. When a 10-Q-scoped pass finds nothing at
+       all, retry against 6-K so "latest quarter" questions about a foreign
+       issuer's ticker still retrieve its interim filings (a domestic ticker with
+       no 10-Q for that year just gets another empty result).
+    """
+    if fiscal_quarter:
+        results = await db_instance.hybrid_search(fiscal_quarter=fiscal_quarter, **kwargs)
+        if results:
+            return results
+        logger.info(f"    No results with fiscal_quarter={fiscal_quarter} filter (likely un-tagged older data) — retrying without it")
+    results = await db_instance.hybrid_search(**kwargs)
+    if not results and kwargs.get("filing_type") == "10-Q":
+        logger.info("    No 10-Q results — retrying as 6-K (foreign private issuer interim reports)")
+        results = await db_instance.hybrid_search(**{**kwargs, "filing_type": "6-K"})
+    return results
+
+
+def _build_type_quarter_passes(filing_types: list, requested_fiscal_quarters: list) -> list:
+    """
+    Build the (filing_type, fiscal_quarter) combinations to query, one search
+    pass per combination — mirrors the existing "one query per requested year"
+    representation pattern (see the year loop in retrieve()) so an explicitly
+    requested quarter or filing type can't get starved out by another one
+    scoring higher in a single combined query.
+
+    The quarter filter is only ever applied on the "10-Q" pass — it's only
+    meaningful (and only ever tagged) on 10-Q chunks, so applying it to an
+    annual/event pass would incorrectly exclude chunks that never carry that field.
+
+    Degenerates to a single (filing_type, None) pass per requested type when
+    no quarters are requested, and a single (None, None) pass when neither
+    dimension is requested — identical query count to before this function
+    existed for the common case.
+    """
+    # Equivalent forms (10-K/20-F, 8-K/6-K) are grouped into ONE pass with a
+    # multi-value filter — a ticker's collection holds one or the other, so this
+    # keeps the pass count (and embedding calls) identical to the 3-type setup.
+    types_to_try = group_filing_types(filing_types) or [None]
+    passes = []
+    for ft in types_to_try:
+        if ft == "10-Q" and requested_fiscal_quarters:
+            for q in requested_fiscal_quarters:
+                passes.append((ft, q))
+        else:
+            passes.append((ft, None))
+    return passes
+
+
+def _classify_qdrant_error(e: Exception, ticker: str) -> Optional[dict]:
+    """
+    Classify a Qdrant lookup exception raised while querying one ticker's
+    collection during retrieve(). Returns None for a "collection not found"
+    error (ticker just hasn't been ingested yet — log and let the caller
+    continue to the next ticker/sub-query), or a ready-to-return error
+    result dict for a genuine connectivity/availability problem.
+    """
+    err_str = str(e).lower()
+    if any(k in err_str for k in ("not found", "404", "doesn't exist", "does not exist")):
+        logger.error("       Collection not found for %s (not yet ingested) — skipping", ticker)
+        return None
+    logger.error("       Qdrant connection error for %s: %s", ticker, e)
+    return {
+        "documents": [],
+        "vectorstore_searched": True,
+        "sub_query_results": {},
+        "qdrant_error": "Vector database is currently unavailable. Please try again shortly."
+    }
+
+
+# Source-text budget (in tokens) for any single LLM call over retrieved chunks.
+# gpt-4o has a 128k-token window; 70k leaves room for the system prompt, the
+# question and the answer. Over budget, whole low-priority chunks are dropped —
+# a chunk is NEVER cut mid-text, because the figure that answers the question
+# can sit anywhere inside it (a prefix cut hides it and the model reports the
+# data as missing).
+_CONTEXT_TOKEN_BUDGET = 70_000
+
+# Per data bucket in the Bull / Bear / Base scenario prompts (three buckets feed each case).
+_SCENARIO_BUCKET_TOKENS = 12_000
+
+# Max concurrent Qdrant searches per retrieve() call (each also does one
+# embedding call), so wide multi-company/multi-year questions don't flood the
+# embedding API or Qdrant.
+_RETRIEVAL_CONCURRENCY = 8
+
+
+@lru_cache(maxsize=1)
+def _token_encoder():
+    try:
+        import tiktoken
+        try:
+            return tiktoken.encoding_for_model("gpt-4o")
+        except KeyError:
+            return tiktoken.get_encoding("o200k_base")
+    except Exception as e:
+        logger.warning(f"tiktoken unavailable ({e}) — falling back to a conservative chars/3 token estimate")
+        return None
+
+
+def _count_tokens(text: str) -> int:
+    enc = _token_encoder()
+    if enc is not None:
+        try:
+            return len(enc.encode(text, disallowed_special=()))
+        except Exception:
+            pass
+    return len(text) // 3 + 1
+
+
+def _fit_texts_to_token_budget(texts: list, budget: int = _CONTEXT_TOKEN_BUDGET, priority: list = None):
+    """
+    Choose which texts to send so the total stays within `budget` tokens, keeping
+    every chosen text WHOLE. Lower `priority` numbers are kept first (ties keep
+    input order, which for retrieval results is relevance order); when everything
+    fits nothing is dropped and the original order is untouched. Always keeps at
+    least one text. Returns (kept_indices_in_original_order, dropped_count, tokens_used).
+    """
+    counts = [_count_tokens(t) for t in texts]
+    total = sum(counts)
+    if total <= budget:
+        return list(range(len(texts))), 0, total
+    order = sorted(range(len(texts)), key=lambda i: ((priority[i] if priority else 0), i))
+    kept, used = set(), 0
+    for i in order:
+        if used + counts[i] <= budget:
+            kept.add(i)
+            used += counts[i]
+    if not kept and order:
+        kept.add(order[0])
+        used = counts[order[0]]
+    return sorted(kept), len(texts) - len(kept), used
+
+
+def _doc_key(metadata: dict, content: str, default_company: str = "") -> str:
+    """
+    Dedup key for a retrieved chunk. Hashes the FULL text: a short prefix is not
+    unique — financial-statement pages repeat the same running header ("Table of
+    Contents / Embraer S.A. / Notes to the Consolidated Financial Statements…")
+    at the top of every chunk on the page, so a prefix key silently dropped real
+    chunks and the figures in them.
+    """
+    digest = hashlib.sha1((content or "").encode("utf-8")).hexdigest()
+    return f"{metadata.get('company') or default_company}_{metadata.get('source_file', '')}_{metadata.get('page_num', '')}_{digest}"
+
+
+_ANALYST_NOTE_PER_TICKER = 3  # note chunks per ticker named in the question...
+_ANALYST_NOTE_MAX = 6  # ...capped, so a wide question cannot flood the context
+
+
+async def _analyst_note_documents(config, tickers, query) -> list:
+    """Note chunks the authenticated user may read for these tickers. [] when no user is in the config
+    (compare/alpha/benchmark runs), when they have no notes, or on any error: filing retrieval never depends on this."""
+    user_id = ((config or {}).get("configurable") or {}).get("user_id")
+    if not user_id or not tickers:
+        return []
+    try:
+        from app.services.analyst_notes import search_notes
+        wanted = sorted({str(t).upper() for t in tickers})
+        docs = await search_notes(user_id, query, wanted, limit=min(_ANALYST_NOTE_MAX, _ANALYST_NOTE_PER_TICKER * len(wanted)))
+    except Exception as e:
+        logger.warning(f" Analyst notes skipped: {e}")
+        return []
+    if docs:
+        logger.info(f" Added {len(docs)} analyst note chunk(s) for user {user_id}")
+    return docs
+
+
+async def _user_upload_documents(state, config, query) -> list:
+    """Chunks from the user's own uploaded documents (statements, broker notes, models, scans) that they may read. Relevance decides
+    which documents answer: the question need not name the file. [] when no user is in the config, when they have none, or on error."""
+    user_id = ((config or {}).get("configurable") or {}).get("user_id")
+    if not user_id:
+        return []
+    try:
+        from app.services.user_docs import store as udocs
+        top_k = int(app_settings.get("retrieval", "top_k", 12))
+        docs = await udocs.search(user_id, query, limit=max(4, min(10, top_k // 2)), doc_ids=state.get("document_ids") or None)
+    except Exception as e:
+        logger.warning(f" User documents skipped: {e}")
+        return []
+    if docs:
+        logger.info(f" Added {len(docs)} chunk(s) from the user's uploaded documents")
+    return docs
+
+
+async def _rerank_documents(query: str, docs: list, cut: bool) -> list:
+    """Re-rank text chunks with the user's chosen re-ranker (see rag/retrieval/rerank.py). Images keep their place after the text."""
+    r = app_settings.current().get("retrieval", {})
+    provider = r.get("rerank_provider", "local") if r.get("rerank_enabled", True) else "off"
+    if provider == "off" or len(docs) < 2:
+        return docs
+    from rag.retrieval.rerank import rerank
+    text = [d for d in docs if getattr(d, "metadata", {}).get("content_type", "text") != "image"]
+    other = [d for d in docs if d not in text]
+    groups: dict = {}
+    for d in text:
+        groups.setdefault(d.metadata.get("company") or d.metadata.get("ticker") or "", []).append(d)
+    keep = r.get("rerank_top_n", 8) if cut else None
+    out: list = []
+    for g in groups.values():
+        ranked, ran = await asyncio.to_thread(rerank, query, g, provider, keep)
+        logger.info(f"[RERANK] {provider}: {len(g)} -> {len(ranked)} chunks{'' if ran else ' (re-ranker unavailable, retrieval order kept)'}")
+        out.extend(ranked)
+    return out + other
+
+
+async def retrieve(state, config):
+    """
+    Retrieve documents relevant to the question using ticker-based collections.
+    Supports multi-company retrieval by querying separate collections.
+    """
+    logger.info("="*80)
+    logger.info(" TICKER-BASED RETRIEVAL (TEXT + IMAGES)")
+    logger.info("="*80)
+    
+    messages = state["messages"]
+    question = messages[-1].content
+    
+    # Get configuration
+    thread_id = config.get("configurable", {}).get("thread_id")
+    
+    # Get managers
+    from app.services.vectordb_manager import get_vectordb_manager
+    vectordb_mgr = get_vectordb_manager()
+    
+    # 1. Identify Target Ticker(s)
+    # ----------------------------
+    # Priority:
+    # 1. Ticker explicitly provided in state (from API)
+    # 2. Ticker derived from company_filter
+    # 3. Ticker derived from question analysis
+    
+    # 1. Identify Target Ticker(s)
+    # ----------------------------
+    # Priority:
+    # 1. Identify Target Ticker(s)
+    # ----------------------------
+    # STRICT LOGIC:
+    # - /ask endpoint provides 'company_filter' (portfolio tickers)
+    # - /compare endpoint provides 'company_filter' (input tickers)
+    # - 'ticker' is an optional override
+    
+    primary_ticker = state.get("ticker")
+    # Clean up primary ticker
+    if primary_ticker and (primary_ticker.lower() == "string" or not primary_ticker.strip()):
+        primary_ticker = None
+        
+    company_filter = state.get("company_filter", [])
+    
+    # Use cached sub-query analysis
+    sub_query_analysis = state.get("sub_query_analysis", {})
+    needs_sub_queries = sub_query_analysis.get("needs_sub_queries", False)
+    sub_queries = sub_query_analysis.get("sub_queries", [])
+    query_type = sub_query_analysis.get("query_type", "single_company")
+
+    # Direct-mode retrieval (needs_sub_queries == False) uses a single query
+    # for the whole search — prefer the LLM's retrieval-optimized rewrite
+    # (abbreviation expansion, section-context hints) over the raw question
+    # when available; falls back to the raw question for comparison/segment/
+    # geographic modes, which never populate optimized_query.
+    direct_mode_query = sub_query_analysis.get("optimized_query") or question
+    
+    # Extract requested years from state (set by preprocess_and_analyze_query for all paths)
+    # Fall back to sub_query_analysis for backward compatibility. Final
+    # fallback resolves to the most recent fiscal year likely to actually
+    # have a filed 10-K (per the resolved ticker's fiscal calendar) rather
+    # than a hardcoded literal year, which goes stale the moment it's wrong.
+    requested_years = state.get("requested_years") or sub_query_analysis.get("requested_years") or []
+    # When the question names no year, each ticker is searched for its OWN latest
+    # filed fiscal year (see _years_for_ticker), not one year shared by all companies:
+    # e.g. Microsoft's FY2026 (June year end) does not exist for Sanofi's FY2026 (Dec year end).
+    years_explicit = bool(requested_years)
+
+    def _years_for_ticker(ticker):
+        if years_explicit:
+            return requested_years
+        from app.utils.company_mapping import get_most_recent_filed_fiscal_year
+        return [get_most_recent_filed_fiscal_year(ticker)]
+
+    # filing_types: resolved by preprocess_and_analyze_query via keyword heuristic
+    # (+ free LLM structured-output field). Empty list means "unresolved — search
+    # all filing types", which is the pre-existing behavior for every query today.
+    # Usually a single-element list; more than one only when the question
+    # explicitly asked to combine filing types.
+    filing_types = state.get("filing_types") or []
+
+    comparison_spans_multiple_filings = False
+    comparison_span_details = None
+
+    # SEGMENT / GEOGRAPHIC OPTIMISATION:
+    # A 10-K (or 20-F, which also carries 3 years of income statement data)
+    # covers the filing year + 2 prior years (3-year comparative). This
+    # collapse ONLY applies to annual-report-sourced data — 10-Qs are single-quarter
+    # (no 3-year comparative table) and 8-Ks are single-event (no multi-year
+    # structure at all). Evaluated independently per requested filing type,
+    # then the resulting year sets are unioned — when only one type is
+    # requested (the common case, incl. unresolved/None) this is byte-for-byte
+    # identical to before this branch supported more than one type. When
+    # multiple types are combined, the union may issue a few extra queries for
+    # years outside a given type's own collapsed window (e.g. a 10-K query for
+    # a year only the 10-Q side needed); those simply return no results —
+    # harmless, not incorrect.
+    if query_type in ("segment", "geographic") and len(requested_years) > 1:
+        _years_by_type = []
+        for ft in (filing_types or [None]):
+            if ft in (None, *ANNUAL_FILING_TYPES):
+                year_span = requested_years[-1] - requested_years[0]
+                if year_span == 2:
+                    _years_by_type.append([requested_years[-1]])
+                    logger.info(f" [{ft or 'unresolved'}] Span=2y → querying only [{requested_years[-1]}] (single annual report covers all 3 years)")
+                elif year_span > 2:
+                    comparison_spans_multiple_filings = True
+                    comparison_span_details = (
+                        f"Requested years {requested_years[0]}-{requested_years[-1]} span more than one "
+                        f"10-K's 3-year comparative window; queried the {requested_years[0]} and "
+                        f"{requested_years[-1]} 10-Ks together to cover the full range."
+                    )
+                    _years_by_type.append([requested_years[0], requested_years[-1]])
+                    logger.info(f" [{ft or 'unresolved'}] Span={year_span}y → querying [{requested_years[0]}, {requested_years[-1]}] (first+last 10-K covers full range)")
+                else:
+                    _years_by_type.append(list(requested_years))
+            elif ft == "10-Q":
+                # No 3-year comparative window on a 10-Q — query each requested
+                # year/quarter individually rather than collapsing.
+                logger.info(f" filing_type=10-Q → no 3-year window collapse, querying each requested year individually: {requested_years}")
+                _years_by_type.append(list(requested_years))
+                if len(requested_years) > 1:
+                    comparison_spans_multiple_filings = True
+                    note = (
+                        f"Requested years {requested_years} span multiple 10-Q filings (each a single "
+                        f"quarter, not directly comparable to a 10-K's audited annual figures)."
+                    )
+                    comparison_span_details = f"{comparison_span_details} {note}" if comparison_span_details else note
+            elif ft in EVENT_FILING_TYPES:
+                # Single point-in-time event — a multi-year span is a no-op here,
+                # just keep the requested years as-is (no comparative structure to collapse).
+                logger.info(f" filing_type={ft} → single-event filing, no window collapse applied: {requested_years}")
+                _years_by_type.append(list(requested_years))
+        requested_years = sorted(set(y for years in _years_by_type for y in years))
+
+    target_tickers = set()
+
+    # Strategy: Strictly use provided inputs
+    
+    # 1. From Portfolio/Input (company_filter) - THIS IS THE SOURCE OF TRUTH
+    if company_filter:
+        for c in company_filter:
+            if c and isinstance(c, str) and c.strip():
+                # Try to map to ticker first (in case full name was provided)
+                found_ticker = get_ticker(c.strip())
+                if found_ticker:
+                    target_tickers.add(found_ticker)
+                else:
+                    # Fallback: assume it might be a ticker already
+                    target_tickers.add(c.strip().lower())
+    
+    # 2. From API Override (primary_ticker)
+    # If provided, does it restrict the search or add to it?
+    # Usually 'ticker' param in /ask is meant to focus on one company.
+    if primary_ticker:
+         # If primary_ticker is provided, we focus ONLY on it (override), 
+         # or we add it? 
+         # Given the user wants simplicity, if they explicitly asked for a ticker, 
+         # they probably want that specific one. 
+         # But to be safe and support "portfolio + specific question", let's just make sure it's included.
+         target_tickers.add(primary_ticker)
+
+    # 3. From LLM Analysis (companies_detected)
+    companies_detected = state.get("companies_detected", [])
+    if companies_detected:
+        for company_name in companies_detected:
+            if company_name and isinstance(company_name, str):
+                # Try to map name to ticker
+                found_ticker = get_ticker(company_name)
+                if found_ticker:
+                    target_tickers.add(found_ticker)
+                else:
+                    # If it's already a ticker-like string and from a trusted source, we can try using it directly 
+                    # but only if it's 2-5 chars and all uppercase
+                    if 2 <= len(company_name) <= 5 and company_name.isupper():
+                        target_tickers.add(company_name.lower())
+
+    logger.info(f" Identified Target Tickers: {list(target_tickers) or 'None'}")
+    note_tickers = set(target_tickers)  # the user's notes are about these companies even when SEC filings are switched off
+    if "filings" not in app_settings.get("retrieval", "sources", ["filings"]):
+        logger.info(" Source choice excludes SEC filings: skipping filing collections")
+        target_tickers = set()
+
+    # If primary_ticker was empty, set it to the first found ticker for downstream consistency
+    if not primary_ticker and target_tickers:
+        primary_ticker = list(target_tickers)[0]
+
+    # requested_fiscal_quarters: resolved by preprocess_and_analyze_query from
+    # plain "Q1"/"Q1 vs Q3"/"first quarter" phrasing — unambiguous quarter
+    # NUMBERS. Whether a given number means the same calendar months for
+    # every company in this query depends on each ticker's fiscal calendar,
+    # checked next.
+    requested_fiscal_quarters = state.get("requested_fiscal_quarters") or []
+
+    if requested_fiscal_quarters and len(target_tickers) > 1:
+        from app.utils.company_mapping import get_fiscal_year_end_month, get_fiscal_quarter_calendar_span
+        fye_months = {t: get_fiscal_year_end_month(t) for t in target_tickers}
+        if len(set(fye_months.values())) > 1:
+            # Different fiscal calendars → the SAME quarter number covers
+            # DIFFERENT calendar months for each company. Flag it so the
+            # prompt warns the user instead of presenting a clean comparison.
+            # One note per requested quarter that actually differs across tickers.
+            comparison_spans_multiple_filings = True
+            for q in requested_fiscal_quarters:
+                spans = ", ".join(
+                    f"{t.upper()} ({get_fiscal_quarter_calendar_span(t, q)})"
+                    for t in sorted(target_tickers)
+                )
+                note = (
+                    f"Requested fiscal Q{q} does not cover the same calendar "
+                    f"months for every company here, since they have different fiscal year ends: {spans}."
+                )
+                comparison_span_details = (
+                    f"{comparison_span_details} {note}" if comparison_span_details else note
+                )
+                logger.info(f" Fiscal quarter misalignment detected: {note}")
+
+    # ============================================================================
+    # SUB-QUERY MODE: Targeted retrieval for each sub-query (Multi-Collection)
+    # ============================================================================
+    all_documents = []
+    sub_query_results = {}
+    seen_doc_ids = set()
+    
+    search_sem = asyncio.Semaphore(_RETRIEVAL_CONCURRENCY)
+
+    async def _search_ticker(query, tkr, quarters, limit, dense_limit, sparse_limit):
+        """
+        Every (year x filing-type[/quarter]) pass for ONE ticker, run concurrently,
+        one pass per requested dimension so none gets starved by another scoring
+        higher in a single combined query. Returns Documents in pass order; raises
+        on any Qdrant/lookup error (the caller classifies it).
+        """
+        # DO NOT CREATE if missing
+        db_instance = vectordb_mgr.get_instance(tkr, create_if_missing=False)
+
+        async def _one_pass(year_filter, ft, q):
+            async with search_sem:
+                return await _hybrid_search_with_quarter_fallback(
+                    db_instance,
+                    fiscal_quarter=q,
+                    query=query,
+                    content_type=None,
+                    years=[year_filter],
+                    filing_type=ft,
+                    limit=limit,
+                    dense_limit=dense_limit,
+                    sparse_limit=sparse_limit,
+                )
+
+        passes = [
+            (year_filter, ft, q)
+            for year_filter in _years_for_ticker(tkr)
+            for ft, q in _build_type_quarter_passes(filing_types, quarters)
+        ]
+        batches = await asyncio.gather(*[_one_pass(*p) for p in passes])
+
+        docs = []
+        for points in batches:
+            for point in points:
+                if hasattr(point, 'payload'):
+                    metadata = point.payload.get('metadata', {})
+                    # Ensure company metadata is set if missing
+                    if 'company' not in metadata:
+                        metadata['company'] = tkr
+                    docs.append(Document(page_content=point.payload.get('page_content', ''), metadata=metadata))
+        return docs
+
+    if needs_sub_queries and sub_queries:
+        logger.info(f"\n SUB-QUERY MODE: {len(sub_queries)} data points")
+        logger.info("-" * 80)
+        
+        # One search task per (sub-query, ticker), run concurrently (bounded by
+        # _RETRIEVAL_CONCURRENCY). Results are consumed below in the original
+        # order, so dedup and sub_query_results behave as in a sequential run.
+        sq_plan = []  # [(sub-query, [tickers], quarters)]
+        for i, sq in enumerate(sub_queries, 1):
+            logger.info(f"\n {i}/{len(sub_queries)}: {sq}")
+
+            # Intelligently detect which tickers are mentioned in THIS sub-query
+            sq_tickers_for_step = detect_tickers_in_query(sq, target_tickers)
+
+            # If no specific ticker detected, query ALL allowed tickers
+            # (This handles cases where the sub-query doesn't explicitly mention a company)
+            if not sq_tickers_for_step:
+                logger.info(f"     No specific company detected, querying all: {list(target_tickers)}")
+                sq_tickers_for_step = target_tickers
+            else:
+                logger.info(f"    Detected companies: {list(sq_tickers_for_step)}")
+
+            # Scope quarter passes to what THIS sub-query itself asks for — when
+            # multiple quarters are requested the analyzer generates one sub-query
+            # per quarter, and applying every requested quarter to every sub-query
+            # would drown the quarter-specific one in the OTHER quarter's chunks.
+            sq_quarters = extract_fiscal_quarters_from_question(sq) or requested_fiscal_quarters
+            sq_plan.append((sq, sorted(sq_tickers_for_step), sq_quarters))
+
+        search_jobs = [(sq, tkr) for sq, tickers, _q in sq_plan for tkr in tickers]
+        quarters_by_sq = {sq: q for sq, _t, q in sq_plan}
+        search_outcomes = await asyncio.gather(
+            *[_search_ticker(sq, tkr, quarters_by_sq[sq], 5, 50, 50) for sq, tkr in search_jobs],
+            return_exceptions=True,
+        )
+        outcome_by_job = dict(zip(search_jobs, search_outcomes))
+
+        for sq, tickers, _q in sq_plan:
+            if not tickers:
+                logger.warning(f"    No allowed tickers found. Skipping vector search.")
+                sub_query_results[sq] = {"found": False, "doc_count": 0, "preview": None, "companies": [], "content_types": {'text': 0, 'image': 0}}
+                continue
+
+            step_docs = []
+            for t_ticker in tickers:
+                outcome = outcome_by_job[(sq, t_ticker)]
+                if isinstance(outcome, Exception):
+                    err_result = _classify_qdrant_error(outcome, t_ticker)
+                    if err_result is not None:
+                        return err_result
+                    continue
+                logger.info(f"    ticker_{t_ticker.lower()} ({map_ticker_to_company(t_ticker.lower())}): {len(outcome)} chunks")
+                step_docs.extend(outcome)
+
+            # Deduplicate and Collect results for this sub-query
+            companies_found = set()
+            content_types = {'text': 0, 'image': 0}
+
+            for doc in step_docs:
+                doc_id = _doc_key(doc.metadata, doc.page_content)
+
+                if doc_id not in seen_doc_ids:
+                    seen_doc_ids.add(doc_id)
+                    all_documents.append(doc)
+
+                # Update stats for sub-query result
+                companies_found.add(doc.metadata.get('company', 'Unknown'))
+                ctype = doc.metadata.get('content_type', 'text')
+                content_types[ctype] = content_types.get(ctype, 0) + 1
+
+            sub_query_results[sq] = {
+                "found": len(step_docs) > 0,
+                "doc_count": len(step_docs),
+                "preview": step_docs[0].page_content[:200] if step_docs else None,
+                "companies": list(companies_found),
+                "content_types": content_types
+            }
+
+            if len(step_docs) > 0:
+                logger.info(f"    Total: {len(step_docs)} chunks from {len(companies_found)} companies")
+            else:
+                logger.info(f"    No chunks found for this sub-query")
+
+    else:
+        # ============================================================================
+        # DIRECT MODE: Retrieval from one or more collections
+        # ============================================================================
+        logger.info(f"\n DIRECT RETRIEVAL MODE")
+        logger.info("-" * 80)
+        
+        if not target_tickers:
+             logger.info(" No target tickers identified. Cannot perform vector search.")
+             logger.info(" Returning EMPTY (will trigger web search)")
+             all_documents = []
+        else:
+            logger.info(f" Searching collections for tickers: {', '.join(target_tickers)}")
+            if direct_mode_query != question:
+                logger.info(f" Using retrieval-optimized query: '{direct_mode_query}'")
+
+            # Search every ticker concurrently, then merge in a stable order
+            direct_tickers = sorted(target_tickers)
+            direct_outcomes = await asyncio.gather(
+                *[_search_ticker(direct_mode_query, t, requested_fiscal_quarters, int(app_settings.get("retrieval", "top_k", 10)), 100, 100) for t in direct_tickers],
+                return_exceptions=True,
+            )
+
+            for target_ticker, outcome in zip(direct_tickers, direct_outcomes):
+                logger.info(f"    Collection: ticker_{target_ticker}")
+                if isinstance(outcome, Exception):
+                    err_result = _classify_qdrant_error(outcome, target_ticker)
+                    if err_result is not None:
+                        return err_result
+                    continue
+
+                current_collection_docs = 0
+                for doc in outcome:
+                    doc_id = _doc_key(doc.metadata, doc.page_content, target_ticker)
+                    if doc_id not in seen_doc_ids:
+                        seen_doc_ids.add(doc_id)
+                        all_documents.append(doc)
+                        current_collection_docs += 1
+
+                logger.info(f"       Found {current_collection_docs} unique chunks across requested years")
+
+            # Final stats
+            content_types = {'text': 0, 'image': 0}
+            companies_found = set()
+            for doc in all_documents:
+                if hasattr(doc, 'metadata'):
+                    ctype = doc.metadata.get('content_type', 'text')
+                    content_types[ctype] = content_types.get(ctype, 0) + 1
+                    companies_found.add(doc.metadata.get('company', 'Unknown'))
+
+            logger.info(f"\nRetrieved {len(all_documents)} chunks total from {len(target_tickers)} collections")
+            logger.info(f"    {content_types['text']} text,  {content_types['image']} images")
+            logger.info(f"    {', '.join(sorted(companies_found))}")
+
+    # Second-stage re-ranking (cross-encoder) of the filing chunks, per company so one company cannot crowd out another.
+    # Comparison / segment / sub-query searches are only re-ordered, never cut: they deliberately fetch one slice per question.
+    all_documents = await _rerank_documents(direct_mode_query, all_documents,
+                                            cut=not (state.get("is_comparison_mode") or needs_sub_queries or query_type in ("segment", "geographic")))
+
+    # The caller's own analyst notes (separate collection, owner/visibility-filtered), appended after the filing
+    # chunks. Only runs when the route put the authenticated user in the graph config, and the user's source choice allows notes.
+    if "notes" in app_settings.get("retrieval", "sources", ["notes"]):
+        all_documents.extend(await _analyst_note_documents(config, note_tickers, question))
+    # The user's own uploaded documents (any file type), searched by relevance for the question that was actually asked.
+    if "uploads" in app_settings.get("retrieval", "sources", ["uploads"]):
+        all_documents.extend(await _user_upload_documents(state, config, direct_mode_query))
+
+    # Final summary
+    logger.info(f"\n{'='*80}")
+    logger.info(f" FINAL: {len(all_documents)} chunks ready")
+    logger.info(f"{'='*80}\n")
+    
+    return {
+        "documents": all_documents,
+        "vectorstore_searched": True,
+        "sub_query_results": sub_query_results,
+        "ticker": primary_ticker,  # Store resolved ticker in state
+        "filing_types": filing_types,
+        "comparison_spans_multiple_filings": comparison_spans_multiple_filings,
+        "comparison_span_details": comparison_span_details,
+        "requested_fiscal_quarters": requested_fiscal_quarters
+    }
+
+
+def generate(state):
+    logger.info("---GENERATE---")
+    messages = state["messages"]
+    question = messages[-1].content
+    documents = state["documents"]
+
+    # Short-circuit: surface Qdrant connection errors instead of hallucinating
+    qdrant_error = state.get("qdrant_error")
+    if qdrant_error:
+        logger.error(f" QDRANT ERROR — returning user-facing message: {qdrant_error}")
+        return {"Intermediate_message": qdrant_error, "retry_count": state.get("retry_count", 0) + 1}
+    
+    # Enhanced logging for debugging
+    logger.info(f" Question: {question[:100]}...")
+    logger.info(f" Number of chunks: {len(documents) if documents else 0}")
+
+    # Log chunk content preview for debugging
+    if documents:
+        for i, doc in enumerate(documents[:3]):  # Preview first 3 chunks
+            if hasattr(doc, 'page_content'):
+                content_preview = doc.page_content[:200].replace('\n', ' ')
+            else:
+                content_preview = str(doc)[:200].replace('\n', ' ')
+            logger.info(f" Chunk {i+1} preview: {content_preview}...")
+    else:
+        logger.warning(" WARNING: No chunks available for generation!")
+    
+    # Context-free mode - no conversation memory
+    enriched_question = question
+    
+    logger.info("---USING STANDARD GENERATION---")
+    
+    # Keep the model's context from overflowing by DROPPING whole low-priority
+    # chunks — never by cutting inside one (see _CONTEXT_TOKEN_BUDGET). Filing
+    # chunks outrank web results; within each group, retrieval order is kept.
+    # The user's own notes are kept before everything else: a few small chunks the user put there on purpose, which
+    # must not be the first thing to go when a big filing fills the budget.
+    _web_sources = ("web_search", "integrate_web_search")
+    priority = [-1 if is_analyst_note(d) else 1 if d.metadata.get("source", "") in _web_sources else 0 for d in documents]
+    kept_idx, dropped, used_tokens = _fit_texts_to_token_budget([d.page_content for d in documents], priority=priority)
+    if dropped:
+        logger.warning(f"[DOC SIZE] Over the {_CONTEXT_TOKEN_BUDGET:,}-token budget — dropped {dropped} whole low-priority chunk(s), kept {len(kept_idx)} ({used_tokens:,} tokens)")
+        documents = [documents[k] for k in kept_idx]
+    else:
+        logger.info(f"[DOC SIZE] {used_tokens:,} tokens across {len(documents)} chunks (budget: {_CONTEXT_TOKEN_BUDGET:,})")
+
+    llm = get_llm("generator")  # temperature/timeout/retries come from the user's settings (default 0: same question, same answer)
+    # Extract query type and alpha pillar to format prompt appropriately
+    sub_query_analysis = state.get("sub_query_analysis", {})
+    query_type = sub_query_analysis.get("query_type", "general")
+    alpha_pillar = state.get("alpha_pillar")  # e.g. "insider_trading", "alignment", etc.
+
+    if alpha_pillar:
+        logger.info(f" [GENERATE] Alpha pillar mode: {alpha_pillar}")
+
+    comparison_span_note = state.get("comparison_span_details") if state.get("comparison_spans_multiple_filings") else None
+    has_notes = any(is_analyst_note(d) for d in documents)  # after budget trimming: only if a note chunk really is in the context
+    rag_chain = get_rag_chain(llm, query_type=query_type, alpha_pillar=alpha_pillar, comparison_span_note=comparison_span_note,
+                              analyst_notes=has_notes)
+    
+    generation_input = {
+        "documents": documents,
+        "question": enriched_question
+    }
+    
+    try:
+        Intermediate_message = rag_chain.invoke(generation_input)
+    except Exception as e:
+        # A provider outage/timeout must degrade to a clear message, not crash the run.
+        logger.error(f" GENERATION FAILED: {type(e).__name__}: {e}")
+        return {
+            "Intermediate_message": "I couldn't generate an answer just now because the language model service didn't respond. Please try again in a moment.",
+            "retry_count": state.get("retry_count", 0) + 1,
+        }
+
+    retry_count = state.get("retry_count", 0)
+
+    return {
+        "Intermediate_message": Intermediate_message,
+        "retry_count": retry_count + 1
+    }
+
+
+def grade_documents(state):
+    """
+    FINANCIAL ANALYST CHUNK GRADING: Evaluates retrieved chunks like a financial analyst.
+
+    1. Identifies what financial metrics the question needs
+    2. Scans chunks to find which metrics ARE present
+    3. Identifies which metrics are MISSING
+    4. Returns grading result used by decide_to_generate
+    """
+    logger.info("---FINANCIAL ANALYST CHUNK GRADING---")
+    messages = state["messages"]
+    question = messages[-1].content
+    documents = state["documents"]
+    web_searched = state.get("web_searched", False)
+    
+    # Get query context
+    sub_query_analysis = state.get("sub_query_analysis", {})
+    query_type = sub_query_analysis.get("query_type", "single_company")
+    companies_detected = sub_query_analysis.get("companies_detected", [])
+    
+    logger.info(f"Query Type: {query_type}")
+    
+    # Context-aware Company Detection
+    # If no companies detected in question, use context from portfolio/state
+    if not companies_detected:
+        ctx_ticker = state.get("ticker")
+        ctx_filter = state.get("company_filter", [])
+        
+        if ctx_ticker:
+            companies_detected = [ctx_ticker]
+            logger.info(f"Using context ticker: {ctx_ticker}")
+        elif ctx_filter:
+            companies_detected = ctx_filter
+            logger.info(f"Using portfolio context companies: {ctx_filter}")
+            
+    logger.info(f"Companies Detected: {companies_detected}")
+    logger.info(f"Chunks to grade: {len(documents)}")
+
+    # CRITICAL: Handle empty chunks case (e.g., company not in DB)
+    if not documents or len(documents) == 0:
+        logger.info(" NO CHUNKS TO GRADE")
+        logger.info(" Returning INSUFFICIENT grade → Will trigger web search")
+
+        return {
+            "documents": [],
+            "financial_grading": {
+                "overall_grade": "insufficient",
+                "can_answer": False,
+                "missing_data_summary": "No chunks found in vector database",
+                "company_coverage": [],
+                "documents_graded_count": 0
+            }
+        }
+    
+    # Analyst notes are the user's own views, not filing data: they must not make the retrieval look sufficient.
+    # Grade only the other chunks; the notes still reach generation (they stay in the returned documents).
+    all_documents = documents
+    documents, note_docs = split_notes(all_documents)
+    if not documents:
+        logger.info(" ONLY ANALYST NOTES RETRIEVED (no filing chunks) → INSUFFICIENT, will trigger web search")
+        return {
+            "documents": all_documents,
+            "financial_grading": {
+                "overall_grade": "insufficient",
+                "can_answer": False,
+                "missing_data_summary": "No filing chunks found in vector database (only the user's own notes)",
+                "company_coverage": [],
+                "documents_graded_count": 0
+            }
+        }
+
+    # Initialize financial analyst grader with gpt-4o
+    llm = get_llm("grader")
+    analyst_grader = get_financial_analyst_grader_chain(llm)
+
+    # Concatenate all documents into a single massive context window
+    # gpt-4o has a 128k context window, allowing us to pass up to ~80k-100k chars easily
+    all_previews = []
+    for i, doc in enumerate(documents, 1):
+        if hasattr(doc, 'page_content'):
+            content = doc.page_content
+        elif isinstance(doc, dict) and 'page_content' in doc:
+            content = doc['page_content']
+        else:
+            content = str(doc)
+
+        metadata_str = ""
+        if hasattr(doc, 'metadata') and doc.metadata:
+            meta = doc.metadata
+            company = meta.get("company", "Unknown")
+            filing_type = meta.get("filing_type", "")
+            year = meta.get("year", "")
+            fq = meta.get("fiscal_quarter", "")
+            period_end = meta.get("period_end_date", "")
+            source_file = meta.get("source_file", meta.get("source", "Unknown"))
+
+            meta_parts = [f"Company: {company}"]
+            if filing_type: meta_parts.append(f"Filing: {filing_type}")
+            if year: meta_parts.append(f"Year: {year}")
+            if fq: meta_parts.append(f"Fiscal Quarter: Q{fq}")
+            if period_end: meta_parts.append(f"Period End: {period_end}")
+            if source_file: meta_parts.append(f"File: {source_file}")
+
+            metadata_str = f" [{ ' | '.join(meta_parts) }]"
+
+        all_previews.append(f"--- Document {i} ---{metadata_str}\n{content}\n")
+
+    # Whole chunks only: a half-cut chunk can hide the very figure being graded for,
+    # and a grader that never saw the data answers "insufficient" and triggers a
+    # needless web search.
+    kept_idx, dropped, total_tokens = _fit_texts_to_token_budget(all_previews)
+    if dropped:
+        logger.warning(f"  Over the {_CONTEXT_TOKEN_BUDGET:,}-token budget — grading {len(kept_idx)} of {len(all_previews)} chunks ({dropped} lowest-priority dropped whole)")
+    doc_previews = [all_previews[k] for k in kept_idx]
+    total_chars = sum(len(p) for p in doc_previews)
+
+    doc_preview_text = "\n".join(doc_previews)
+    logger.info(f"  Sending {len(doc_previews)} documents ({total_chars} chars) to gpt-4o grader...")
+
+    sub_queries = "\n".join([f"- {sq}" for sq in sub_query_analysis.get("sub_queries", [])]) if sub_query_analysis.get("sub_queries") else "None"
+
+    # Build company fiscal context using company_mapping module
+    from app.utils.company_mapping import (
+        get_ticker as _get_ticker_fn,
+        get_company_name as _map_ticker_fn,
+        get_fiscal_year_end_month as _get_fye_fn,
+        get_fiscal_quarter_calendar_span as _get_fq_span_fn
+    )
+
+    fiscal_info_lines = []
+    if companies_detected:
+        for comp in companies_detected:
+            tkr = _get_ticker_fn(comp) or comp
+            cname = _map_ticker_fn(tkr).capitalize()
+            fye_m = _get_fye_fn(tkr)
+            q_spans = [f"Q{q}: {_get_fq_span_fn(tkr, q)}" for q in (1, 2, 3, 4)]
+            fiscal_info_lines.append(f"- {cname} ({tkr.upper()}): Fiscal Year ends in Month {fye_m}. Fiscal Quarters: {', '.join(q_spans)}.")
+    else:
+        fiscal_info_lines.append("Calendar-year filers (Fiscal Year ends in December). Quarters: Q1: January-March, Q2: April-June, Q3: July-September, Q4: October-December.")
+
+    company_fiscal_context = "\n".join(fiscal_info_lines)
+
+    try:
+        # Perform single LLM call
+        grade = analyst_grader.invoke({
+            "question": question,
+            "company_fiscal_context": company_fiscal_context,
+            "sub_queries": sub_queries,
+            "doc_content": doc_preview_text
+        })
+        
+        logger.info(f"\n FINANCIAL ANALYST GRADE:")
+        logger.info(f"  Is Sufficient: {grade.is_sufficient}")
+        if grade.missing_data_summary:
+            logger.warning(f"  Missing Data: {grade.missing_data_summary}")
+        
+        overall_grade = "sufficient" if grade.is_sufficient else "insufficient"
+        
+        # Store grading result in state for decision-making
+        grading_result = {
+            "overall_grade": overall_grade,
+            "can_answer": grade.is_sufficient,
+            "missing_data_summary": grade.missing_data_summary,
+            "company_coverage": [], # Removed complex coverage tracking
+            "documents_graded_count": len(doc_previews)
+        }
+
+        logger.info(f"\n GRADING COMPLETE: {len(documents)} chunks evaluated")
+        logger.info(f"   Next: Decision node will use this grading to determine if web search needed")
+
+        return {
+            "documents": documents + note_docs,
+            "financial_grading": grading_result
+    }
+
+    except Exception as e:
+        logger.error(f" Financial analyst grading failed: {e}")
+        logger.error("  Falling back to keeping all chunks and skipping grading")
+
+        # A grader outage says nothing about the chunks. Return no grade so
+        # decide_to_generate falls back to its chunk-count rule (generate from the
+        # filing chunks when there are enough) instead of marking the retrieval
+        # "partial" and pulling in web results the filings didn't need.
+        return {
+            "documents": documents + note_docs,
+            "financial_grading": {"error": str(e)}
+    }
+
+
+def _fetch_verified_market_data(ticker: str) -> str:
+    """Live price / SMA200 / RSI14 / P/E / EBITDA from yfinance (authoritative over web snippets)."""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        close = t.history(period="2y")["Close"].dropna()
+        if len(close) < 200:
+            return ""
+        price = float(close.iloc[-1])
+        sma200 = float(close.tail(200).mean())
+        delta = close.diff()
+        gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+        rsi = float(100 - 100 / (1 + gain.iloc[-1] / loss.iloc[-1]))
+        try:
+            info = t.info or {}
+        except Exception:
+            info = {}
+        pe = info.get("trailingPE")
+        ebitda = info.get("ebitda")
+        if not ebitda:
+            # Fallbacks: TTM from last 4 quarters, then latest annual EBITDA
+            for getter, n in (("quarterly_income_stmt", 4), ("income_stmt", 1)):
+                try:
+                    stmt = getattr(t, getter)
+                    if "EBITDA" in stmt.index:
+                        vals = stmt.loc["EBITDA"].dropna().iloc[:n]
+                        if len(vals) == n:
+                            ebitda = float(vals.sum())
+                            break
+                except Exception:
+                    continue
+        fin_cur = info.get("financialCurrency") or info.get("currency") or "USD"
+        sym = {"USD": "$", "EUR": "€", "GBP": "£"}.get(fin_cur, fin_cur + " ")
+        lines = [
+            f"Quote date: {close.index[-1].date()} ({info.get('currency', 'USD')})",
+            f"Current stock price: ${price:.2f}" if info.get("currency", "USD") == "USD" else f"Current stock price: {price:.2f} {info.get('currency')}",
+            f"200-day SMA: {sma200:.2f}",
+            f"RSI(14): {rsi:.2f}",
+            f"Trailing P/E: {pe:.2f}" if pe else "Trailing P/E: N/A",
+            f"EBITDA (TTM, reported in {fin_cur}): {sym}{ebitda/1e9:.2f}B" if ebitda else "EBITDA: N/A",
+        ]
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"    yfinance market data unavailable for {ticker}: {e}")
+        return ""
+
+
+def web_search(state):
+    """
+    Direct web search when question needs current/real-time data.
+    Uses enriched query for better search results with proper context.
+    Restricted to trusted financial domains for data quality.
+    Creates separate documents per source for better context utilization.
+    
+    NOW WITH UNIVERSAL SUB-QUERY SUPPORT:
+    - Works for ALL query types (financial calculations, multi-company, multi-part)
+    - Individual searches for each sub-query with deduplication
+    - Tracks missing data for fallback handling
+    """
+    logger.info("---WEB SEARCH (TRUSTED FINANCIAL DOMAINS ONLY)---")
+    messages = state["messages"]
+    question = messages[-1].content
+    enriched_query = state.get("enriched_query", question)
+    
+    # Use universal sub-query analysis
+    sub_query_analysis = state.get("sub_query_analysis", {})
+    needs_sub_queries = sub_query_analysis.get("needs_sub_queries", False)
+    sub_queries = sub_query_analysis.get("sub_queries", [])
+    companies_detected = sub_query_analysis.get("companies_detected", [])
+    
+    # Optimize search query for SEC filings
+    search_query = enriched_query if enriched_query != question else question
+    question_lower = question.lower()
+    is_sec_filing_query = any(kw in question_lower for kw in
+        ['10-k', '10k', '10-q', '10q', '8-k', '8k', '20-f', '20f', '6-k', '6k', 'annual report', 'md&a', 'mda',
+         'management discussion', 'sec filing', 'edgar'])
+
+    target_company = companies_detected[0] if companies_detected else None
+
+    if is_sec_filing_query and target_company:
+        logger.info(f"---SEC FILING QUERY DETECTED FOR {target_company.upper()}---")
+        years = re.findall(r'\b(20\d{2})\b', question)
+
+        # Vary the SEC filing type in the search query by what's actually
+        # detected/inferred, instead of always assuming 10-K — a "latest
+        # quarter" or "recent announcement" question shouldn't be forced
+        # into a 10-K-only web search.
+        # Web search only builds one query string, so use the first resolved
+        # type when multiple were combined (still far better than always
+        # assuming 10-K).
+        _detected_filing_types = state.get("filing_types") or detect_filing_types_in_query(question)
+        detected_filing_type = web_search_form_label(_detected_filing_types)
+
+        if 'md&a' in question_lower or 'management discussion' in question_lower:
+            search_query = f"{target_company} MD&A Management Discussion Analysis {' '.join(years) if years else ''} SEC {detected_filing_type} site:sec.gov"
+        else:
+            search_query = f"{target_company} {detected_filing_type} {' '.join(years) if years else ''} site:sec.gov"
+        logger.info(f"✓ Optimized search: {search_query}")
+    
+    # UNIVERSAL SUB-QUERY WEB SEARCH
+    _wants_recent = any(kw in question_lower for kw in
+        ('news', 'recently announced', 'today', 'this week', 'announcement'))
+    # News questions also search the named company's own newsroom / trade press. Other
+    # questions keep the general list only: a company site returns years-old press
+    # releases and investor decks, which is wrong for a non-news question.
+    _search_domains = TRUSTED_FINANCIAL_DOMAINS + (
+        [d for d in get_extra_web_domains([question, *companies_detected]) if d not in TRUSTED_FINANCIAL_DOMAINS]
+        if _wants_recent else []
+    )
+
+    def _search(q):
+        """
+        Domain-restricted search returning parsed sources. A recent-news question is
+        tried news-first over the last month; if that finds nothing it falls back to the
+        plain search, so a quiet month never yields an empty answer.
+        """
+        if _wants_recent:
+            news_tool = TavilySearch(max_results=5, include_raw_content=True,
+                                     include_domains=_search_domains, topic="news", time_range="month")
+            found = _drop_period_mismatches(question, _parse_tavily_response(news_tool.invoke({"query": q}), q))
+            if found:
+                return found
+            logger.info("   No news in the last month for this query — falling back to the general search")
+        plain_tool = TavilySearch(max_results=5, include_raw_content=True, include_domains=_search_domains)
+        return _drop_period_mismatches(question, _parse_tavily_response(plain_tool.invoke({"query": q}), q))
+
+    documents = []
+    total_chars = 0
+    
+    if sub_queries:
+        logger.info(f"---SUB-QUERY MODE: Searching individually for {len(sub_queries)} specific data points---")
+        seen_doc_ids = set()
+        
+        for i, sq in enumerate(sub_queries, 1):
+            logger.info(f"   {i}. Web searching for: {sq}")
+            
+            # Search specifically for this data point
+            sources = _search(sq)
+
+            for source in sources:
+                doc_content = f"**Source: {source['title']}**\n"
+                if source['url']:
+                    doc_content += f"URL: {source['url']}\n\n"
+                doc_content += source['content']
+                
+                # Deduplicate by URL
+                doc_id = source['url'] if source['url'] else _doc_key({}, doc_content)
+                if doc_id not in seen_doc_ids:
+                    seen_doc_ids.add(doc_id)
+                    doc = Document(
+                        page_content=doc_content,
+                        metadata={
+                            "source": "web_search",
+                            "title": source['title'],
+                            "url": source['url']
+                        }
+                    )
+                    documents.append(doc)
+                    total_chars += len(source['content'])
+            
+            logger.info(f"      → Found {len(sources)} sources, {len(documents)} chunks unique total")
+
+        logger.info(f" ✓ Retrieved {len(documents)} unique chunks across all sub-queries")
+    else:
+        # Standard single search
+        if search_query != question:
+            logger.info(f"Using optimized query for web search: {search_query[:150]}")
+        else:
+            logger.info(f"Using original question for web search: {search_query[:150]}")
+
+        logger.info(f" Restricting search to {len(_search_domains)} trusted domains")
+        sources = _search(search_query)
+
+        for source in sources:
+            doc_content = f"**Source: {source['title']}**\n"
+            if source['url']:
+                doc_content += f"URL: {source['url']}\n\n"
+            doc_content += source['content']
+
+            doc = Document(
+                page_content=doc_content,
+                metadata={
+                    "source": "web_search",
+                    "title": source['title'],
+                    "url": source['url']
+                }
+            )
+            documents.append(doc)
+            total_chars += len(source['content'])
+
+        logger.info(f"Web search produced {len(documents)} chunks ({total_chars} total chars)")
+    
+    if not documents or total_chars < 100:
+        logger.warning("WARNING: Web search returned minimal content, response may be incomplete")
+
+    # Track sub-query results from web search
+    sub_query_results = state.get("sub_query_results", {})
+    if sub_queries and documents:
+        logger.info("---EXTRACTING SUB-QUERY RESULTS FROM WEB SEARCH---")
+        for sq in sub_queries:
+            if sq not in sub_query_results:
+                sub_query_results[sq] = {"found": False, "doc_count": 0, "sources": []}
+            
+            matched_docs = 0
+            for doc in documents:
+                sq_keywords = sq.lower().split()
+                doc_content = doc.page_content.lower()
+                if any(keyword in doc_content for keyword in sq_keywords if len(keyword) > 3):
+                    sub_query_results[sq]["sources"].append(doc.page_content[:500])
+                    matched_docs += 1
+            
+            if matched_docs > 0:
+                sub_query_results[sq]["found"] = True
+                sub_query_results[sq]["doc_count"] = matched_docs
+        
+        found_count = sum(1 for sq_data in sub_query_results.values() if isinstance(sq_data, dict) and sq_data.get("found", False))
+        logger.info(f" Updated sub-query results: {found_count}/{len(sub_queries)} have data")
+
+    return {
+        "documents": documents,
+        "web_searched": True,
+        "sub_query_results": sub_query_results
+    }
+
+
+_QUARTER_WORDS = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3, "fourth": 4, "4th": 4}
+_QUARTER_PATTERNS = (
+    # "third quarter 2026", "third-quarter of 2026", "3rd quarter 2026"
+    (re.compile(r"\b(first|second|third|fourth|1st|2nd|3rd|4th)[\s-]+quarter(?:\s+of)?(?:\s+fiscal)?(?:\s+year)?\s+(?:fy\s?)?(20\d\d)\b", re.I),
+     lambda m: (_QUARTER_WORDS[m.group(1).lower()], int(m.group(2)))),
+    # "Q3 2026", "Q3 FY2026", "Q3-2026"
+    (re.compile(r"\bq([1-4])[\s-]*(?:fy\s?)?(20\d\d)\b", re.I), lambda m: (int(m.group(1)), int(m.group(2)))),
+    # "3Q 2026", "3Q26" is deliberately not matched (ambiguous)
+    (re.compile(r"\b([1-4])q[\s-]*(?:fy\s?)?(20\d\d)\b", re.I), lambda m: (int(m.group(1)), int(m.group(2)))),
+)
+
+
+def _quarters_mentioned(text: str) -> set:
+    """Every (quarter, year) pair the text labels explicitly, e.g. {(3, 2025)}."""
+    found = set()
+    for pattern, to_pair in _QUARTER_PATTERNS:
+        found.update(to_pair(m) for m in pattern.finditer(text or ""))
+    return found
+
+
+def _period_mismatch(question: str, text: str) -> bool:
+    """
+    True when a web document is about a different year's version of the quarter the
+    question names. Search engines happily return "Q3 earnings" for last year, and the
+    model then relabels those figures as the requested period. Only fires when the
+    question names exactly one quarter and the document labels that same quarter for
+    other years but never for the requested one; documents with no quarter label at
+    all are kept.
+    """
+    asked = _quarters_mentioned(question)
+    if len(asked) > 1:
+        return False
+    if len(asked) == 1:
+        (quarter, year), = asked
+        seen = _quarters_mentioned(text)
+        if (quarter, year) in seen:
+            return False
+        return any(q == quarter and y != year for q, y in seen)
+
+    # No quarter named: a single fiscal/full year ("FY2025 net income"). The document must
+    # label some fiscal year to be judged, and none of its labels may be the requested one.
+    year = _single_requested_year(question)
+    if year is None:
+        return False
+    seen_years = _fiscal_years_mentioned(text)
+    return bool(seen_years) and year not in seen_years
+
+
+# Words that make a lone year a range endpoint or baseline ("since 2020", "2020 to 2025"),
+# where a document for a different year is exactly what the user wants.
+_YEAR_RANGE_HINTS = ("since", "from", "between", "through", "over the", "trend", "compare",
+                     "versus", " vs", "cagr", "history", "historical", "change", "growth")
+
+_FISCAL_YEAR_LABEL = re.compile(
+    r"(?:\bfy\s?|\bfiscal(?:\s+year)?\s+|\bfull[\s-]year\s+|\byear\s+ended\s+\w+\s+\d{1,2},?\s+)(20\d\d)\b", re.I)
+
+
+def _fiscal_years_mentioned(text: str) -> set:
+    """Fiscal / full years the text labels explicitly: 'FY2025', 'fiscal year 2025', 'year ended December 31, 2025'."""
+    return {int(m.group(1)) for m in _FISCAL_YEAR_LABEL.finditer(text or "")}
+
+
+def _single_requested_year(question: str):
+    """The one year a full-year question is about, or None when it is a range, a comparison or has no year."""
+    q = (question or "").lower()
+    years = set(re.findall(r"(?<!\d)(20\d\d)(?!\d)", q))  # not \b: "fy2025" has no boundary before the year
+    if len(years) != 1 or any(h in q for h in _YEAR_RANGE_HINTS):
+        return None
+    return int(next(iter(years)))
+
+
+def _period_label(question: str) -> str:
+    """Explicit period for a search query: 'Q3 2026' or 'fiscal year 2025'; '' when the question names none."""
+    asked = _quarters_mentioned(question)
+    if len(asked) == 1:
+        (quarter, year), = asked
+        return f"Q{quarter} {year}"
+    year = _single_requested_year(question)
+    return f"fiscal year {year}" if year else ""
+
+
+def _drop_period_mismatches(question: str, sources: list) -> list:
+    """Remove web sources that are about another year's version of the quarter asked about."""
+    kept = [s for s in sources if not _period_mismatch(question, s.get("content", ""))]
+    if len(kept) < len(sources):
+        logger.info(f"  Dropped {len(sources) - len(kept)} web source(s) labelled for a different year than the quarter asked")
+    return kept
+
+
+def _parse_tavily_response(docs, query):
+    """
+    Helper function to properly parse Tavily search response.
+    Handles various response formats from TavilySearch.
+    Returns list of individual source documents instead of combined content.
+    """
+    sources = []
+    
+    # Debug: Log raw response type
+    logger.info(f"Tavily response type: {type(docs)}")
+
+    # ── Error detection ────────────────────────────────────────────────────────
+    # TavilySearch wraps API / network errors as {'error': <Exception>} instead
+    # of raising.  Detect this early so callers' except-blocks log a clean
+    # message instead of the misleading "Could not parse" warning.
+    if isinstance(docs, dict) and 'error' in docs and len(docs) == 1:
+        err = docs['error']
+        err_msg = str(err) if not isinstance(err, str) else err
+        raise RuntimeError(f"Tavily API error: {err_msg}")
+    
+    if isinstance(docs, str):
+        # Already a string, return as single source
+        return [{"title": "Web Search Result", "url": "", "content": docs}]
+    
+    if isinstance(docs, dict):
+        # Handle dict response (may have 'results' key or direct content)
+        if 'results' in docs:
+            results = docs['results']
+        elif 'answer' in docs and docs['answer']:
+            # Tavily can return a direct answer
+            sources.append({
+                "title": "Direct Answer",
+                "url": "",
+                "content": docs['answer']
+            })
+            results = docs.get('results', [])
+        else:
+            results = [docs]  # Treat the whole dict as a single result
+        
+        for i, result in enumerate(results, 1):
+            if isinstance(result, dict):
+                title = result.get('title', 'No Title')
+                url = result.get('url', '')
+                # Try multiple content fields - Tavily uses different field names
+                content = (
+                    result.get('raw_content') or 
+                    result.get('content') or 
+                    result.get('snippet') or 
+                    result.get('text') or
+                    result.get('description', '')
+                )
+                
+                if content:
+                    sources.append({
+                        "title": title,
+                        "url": url,
+                        "content": content
+                    })
+                    logger.info(f"  Source {i}: {title[:50]}... ({len(content)} chars)")
+    
+    elif isinstance(docs, list):
+        # Handle list of results directly
+        for i, d in enumerate(docs, 1):
+            if isinstance(d, dict):
+                title = d.get('title', 'No Title')
+                url = d.get('url', '')
+                content = (
+                    d.get('raw_content') or
+                    d.get('content') or 
+                    d.get('snippet') or 
+                    d.get('text') or
+                    d.get('description', '')
+                )
+                
+                if content:
+                    sources.append({
+                        "title": title,
+                        "url": url,
+                        "content": content
+                    })
+                    logger.info(f"  Source {i}: {title[:50]}... ({len(content)} chars)")
+            elif isinstance(d, str):
+                sources.append({
+                    "title": "Web Search Result",
+                    "url": "",
+                    "content": d
+                })
+    
+    if not sources:
+        # Fallback: convert entire response to string
+        logger.warning("WARNING: Could not parse Tavily response structure, using raw output")
+        return [{"title": "Web Search Result", "url": "", "content": str(docs)}]
+    
+    return sources
+
+
+def integrate_web_search(state):
+    """
+    WEB SEARCH INTEGRATION: Builds a single query from missing data + ticker + company name,
+    executes one search, and combines results with existing vectorstore documents.
+    """
+    logger.info("---INTEGRATE WEB SEARCH---")
+    messages = state["messages"]
+    question = messages[-1].content
+    existing_documents = state.get("documents", [])
+
+    # Resolve company and ticker identifiers
+    company_filter = state.get("company_filter", [])
+    companies_detected = state.get("sub_query_analysis", {}).get("companies_detected", []) or state.get("companies_detected", [])
+    ticker = state.get("ticker", "")
+
+    company = ""
+    if company_filter:
+        company = company_filter[0] if isinstance(company_filter, list) else company_filter
+    elif companies_detected:
+        company = companies_detected[0]
+
+    # Build a single combined query using ticker, company name, and missing data summary
+    financial_grading = state.get("financial_grading", {})
+    missing_summary = financial_grading.get("missing_data_summary", "")
+
+    missing_summary_str = ""
+    if missing_summary:
+        missing_summary_str = str(missing_summary).strip()
+
+    logger.warning(f"  [DEBUG] grading missing_summary: {repr(missing_summary)}")
+
+    # Is there a valid missing data summary? (Not None, not empty, and not specifically 'no chunks found in vector database')
+    has_valid_missing_target = (
+        bool(missing_summary_str) and
+        missing_summary_str.lower() != "none" and
+        "no chunks found" not in missing_summary_str.lower()
+    )
+
+    if has_valid_missing_target:
+        # Missing data summary is the target - use it directly. It's an
+        # LLM-written sentence that already names the company (e.g. "Google
+        # Q2 2026 net income..."), so append "earnings report" to bias the
+        # search toward an actual reporting article instead of a generic
+        # "what is net income" explainer.
+        logger.warning("  [DEBUG] Using missing data summary for web search target.")
+        target_str = f"{missing_summary_str} earnings report"
+    else:
+        # Fallback to the original question only if there is no explicit missing data summary
+        logger.info("  [DEBUG] Using original question for web search fallback.")
+        target_str = question
+
+    # The grader's missing-data sentence often drops the period the user asked about, and
+    # the search engine then returns whichever year ranks first. State it explicitly.
+    _period = _period_label(question)
+    if _period and _period.lower() not in target_str.lower() and _period.split()[-1] not in target_str:
+        target_str = f"{target_str} {_period}"
+
+    # Only prepend company/ticker if not already named in the target text —
+    # both the missing-data summary and the raw question almost always
+    # already mention the company, so prepending unconditionally produced
+    # queries like "Google Google Q2 2026 net income...".
+    query_parts = []
+    target_lower = target_str.lower()
+    if company and company.lower() not in target_lower:
+        query_parts.append(company)
+    if ticker and ticker.lower() not in target_lower and ticker.lower() != company.lower():
+        query_parts.append(ticker)
+    query_parts.append(target_str)
+
+    search_query = " ".join(query_parts)
+    logger.info(f"  Search query: {search_query}")
+
+    web_search_tool = TavilySearch(
+        max_results=5,
+        include_raw_content=True,
+        # Exclude Investopedia here specifically: this fallback is filling in
+        # a concrete missing NUMBER from a specific filing, and Investopedia's
+        # content is predominantly "what is net income" style definitional
+        # explainers rather than a company's actual reported figures — a risk
+        # the other TRUSTED_FINANCIAL_DOMAINS uses (e.g. general ALPHA/macro
+        # research) don't share, so it stays in the list everywhere else.
+        include_domains=[d for d in TRUSTED_FINANCIAL_DOMAINS if d != "investopedia.com"]
+    )
+
+    web_documents = []
+    seen_doc_ids = set()
+    total_chars = 0
+
+    try:
+        docs = web_search_tool.invoke({"query": search_query})
+        sources = _drop_period_mismatches(question, _parse_tavily_response(docs, search_query))
+        logger.info(f"  Found {len(sources)} sources")
+
+        for source in sources:
+            doc_id = source["url"] if source["url"] else _doc_key({}, source["content"])
+            if doc_id in seen_doc_ids:
+                continue
+            seen_doc_ids.add(doc_id)
+            doc_content = f"**Source: {source['title']}**\n"
+            if source["url"]:
+                doc_content += f"URL: {source['url']}\n\n"
+            doc_content += source["content"]
+            web_documents.append(Document(
+                page_content=doc_content,
+                metadata={
+                    "source": "integrate_web_search",
+                    "title": source["title"],
+                    "url": source["url"],
+                    "search_query": search_query
+    }
+            ))
+            total_chars += len(source["content"])
+    except Exception as e:
+        logger.error(f"  ERROR during web search: {e}")
+
+    combined_documents = existing_documents + web_documents
+    logger.info(f"  Existing chunks: {len(existing_documents)} | New web chunks: {len(web_documents)} | Total: {len(combined_documents)}")
+
+    return {
+        "documents": combined_documents,
+        "web_searched": True
+    }
+
+
+def show_result(state):
+    logger.info("---SHOW RESULT---")
+    Final_answer = AIMessage(content=state["Intermediate_message"])
+
+    logger.info(f'SHOWING THE RESULTS: {Final_answer}')
+    return {
+        "messages": Final_answer
+    }
+
+
+
+def parse_markdown_table(text):
+    """
+    Parse markdown table from the response text.
+    Returns a dictionary of metrics with values for 2 or 3 companies.
+    Automatically detects the number of companies based on table columns.
+    """
+    lines = text.split('\n')
+    table_started = False
+    metrics_data = {}
+    num_companies = None
+    header_cells = []
+    
+    for line in lines:
+        # Check if this is a table row (must have at least 2 pipes and content)
+        if '|' in line and line.count('|') >= 3:  # At least | col1 | col2 | col3 |
+            # Skip separator lines
+            if line.strip().startswith('|---') or set(line.replace('|', '').replace('-', '').replace(' ', '').replace(':', '')) == set():
+                continue
+                
+            cells = [cell.strip() for cell in line.split('|')]
+            # Remove empty cells from start/end (markdown tables often have | at both ends)
+            cells = [c for c in cells if c]
+            
+            if len(cells) >= 3:
+                # Check if this is the header row
+                first_cell_lower = cells[0].lower()
+                if 'metric' in first_cell_lower and not table_started:
+                    table_started = True
+                    header_cells = cells
+                    # Count actual company columns (exclude Metric and Comparison columns)
+                    num_companies = 0
+                    for i, cell in enumerate(cells[1:], 1):  # Skip first column (Metric)
+                        cell_lower = cell.lower()
+                        # Check if this is a company column (not "comparison" or similar)
+                        if 'comparison' not in cell_lower and cell_lower not in ['', 'difference', 'notes']:
+                            num_companies += 1
+                        else:
+                            break  # Stop counting when we hit comparison/notes columns
+                    
+                    logger.info(f" Detected {num_companies} company/companies in table")
+                    logger.info(f"  Header columns: {cells}")
+                    continue
+                
+                # Process data rows
+                if table_started and num_companies:
+                    metric_name = cells[0].replace('**', '').strip()
+                    
+                    # Skip empty or non-quantitative metrics
+                    if not metric_name or metric_name.lower() in ['risk factors', 'profit drivers', 'profit/loss contributing factors']:
+                        continue
+                    
+                    # Extract company values based on detected number of companies
+                    if num_companies == 2 and len(cells) >= 3:
+                        metrics_data[metric_name] = {
+                            'company1': cells[1].strip(),
+                            'company2': cells[2].strip(),
+                            'company3': None
+                        }
+                    elif num_companies == 3 and len(cells) >= 4:
+                        metrics_data[metric_name] = {
+                            'company1': cells[1].strip(),
+                            'company2': cells[2].strip(),
+                            'company3': cells[3].strip()
+                        }
+                    elif num_companies >= 3 and len(cells) >= 4:
+                        # Fallback for edge cases
+                        logger.info(f" Processing 3-company row: {metric_name}")
+                        metrics_data[metric_name] = {
+                            'company1': cells[1].strip(),
+                            'company2': cells[2].strip(),
+                            'company3': cells[3].strip()
+                        }
+    
+    if metrics_data:
+        logger.info(f"✓ Successfully parsed {len(metrics_data)} metrics from table")
+        # Debug: check first metric to see company3 data
+        if metrics_data:
+            first_metric = list(metrics_data.keys())[0]
+            first_data = metrics_data[first_metric]
+            logger.info(f"   Sample metric '{first_metric}': company3='{first_data.get('company3')}'")
+    else:
+        logger.info(" No metrics extracted from table")
+    
+    return metrics_data
+
+
+def extract_numeric_value(value_str):
+    """
+    Extract numeric value from string like "$350.018 billion" or "32%" or "-52.69%".
+    Returns None if value is not numeric or not specified.
+    """
+    if not value_str:
+        return None
+    
+    value_str = value_str.lower().strip()
+    
+    # Check for non-numeric indicators
+    if any(indicator in value_str for indicator in ['not specified', 'n/a', 'various', 'brief summary']):
+        return None
+    
+    # Extract number - match patterns like: 350.018, 32%, $11.870, -52.69%, etc.
+    # Pattern captures optional negative sign followed by digits with optional decimal
+    match = re.search(r'(-?[\d,]+\.?\d*)', value_str)
+    if not match:
+        return None
+    
+    try:
+        # Remove commas and convert to float (preserves negative sign)
+        num = float(match.group(1).replace(',', ''))
+        # "-$11.8B", "($11.8B)" and "(16.1)%" are losses or negatives: the sign sits before the digits
+        prefix = value_str[:match.start()]
+        if not match.group(1).startswith('-') and any(ch in prefix for ch in ('-', '−', '(')):
+            num = -abs(num)
+        return num
+    except (ValueError, AttributeError):
+        return None
+
+
+def prepare_chart_data(metrics_data, company1_name, company2_name, company3_name=None, max_metrics=8, company_periods=None):
+    """
+    Prepare data for chart generation.
+    Supports both 2 and 3 company comparisons.
+    Only includes metrics that have valid numeric values for at least one company.
+
+    Monetary cells are converted to USD billions (see rag/utils/money.py) using
+    the (fiscal year, period-end date) in company_periods[i] (1-based), so a € cell from a 20-F filer
+    is never plotted next to a $ cell, and "millions" is never plotted as billions.
+    Monetary cells that can't be converted are excluded (None), not guessed.
+    """
+    from rag.utils.money import parse_money, monetary_usd_billions, basis_for_metric
+    company_periods = company_periods or {}
+
+    def _value(cell, idx, metric):
+        if parse_money(cell) is not None:
+            period = company_periods.get(idx)
+            if period is None:
+                return None
+            fy, period_end = period
+            return monetary_usd_billions(cell, fy, basis_for_metric(metric), period_end)
+        return extract_numeric_value(cell)
+    chart_data = {
+        'metrics': [],
+        'company1_values': [],
+        'company2_values': [],
+        'company3_values': [],
+        'num_companies': 2 if company3_name is None else 3
+    }
+    
+    count = 0
+    for metric_name, values in metrics_data.items():
+        if count >= max_metrics:
+            break
+        
+        val1 = _value(values['company1'], 1, metric_name)
+        val2 = _value(values['company2'], 2, metric_name)
+        val3 = _value(values.get('company3'), 3, metric_name) if company3_name else None
+        
+        # Include metric if at least one value is valid
+        if val1 is not None or val2 is not None or val3 is not None:
+            chart_data['metrics'].append(metric_name)
+            chart_data['company1_values'].append(val1 if val1 is not None else 0)
+            chart_data['company2_values'].append(val2 if val2 is not None else 0)
+            chart_data['company3_values'].append(val3 if val3 is not None else 0)
+            count += 1
+    
+    return chart_data
+
+
+def _save_and_upload_chart(fig, filename_prefix: str, width: int = 800, height: int = 500, label: str = "Chart") -> dict:
+    """
+    Save a plotly figure locally under generated_charts/ and, if Cloudinary
+    is configured, upload it too. Shared by every chart-generation node
+    (comparison chart, dynamic macro chart, yield curve chart) — this exact
+    ~15-line save+upload sequence was previously duplicated 3 times.
+
+    Returns {"chart_url": str|None, "chart_filename": str}.
+    """
+    import os
+    import datetime
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{filename_prefix}_{timestamp}.png"
+    from app.core.paths import CHARTS_DIR
+    output_dir = str(CHARTS_DIR)
+    os.makedirs(output_dir, exist_ok=True)
+    local_path = os.path.join(output_dir, filename)
+
+    try:
+        fig.write_image(local_path, width=width, height=height)
+        logger.info(f"✓ {label} saved locally: {local_path}")
+    except Exception as e:
+        logger.error(f"Failed to save {label.lower()} locally: {str(e)}")
+        return {"chart_url": None, "chart_filename": filename}
+
+    chart_url = None
+    if os.getenv("CLOUDINARY_CLOUD_NAME"):
+        try:
+            from app.cloudinary import upload_to_cloudinary
+            logger.info(f"Uploading {label.lower()} to Cloudinary...")
+            result = upload_to_cloudinary(local_path)
+            if result.get("success"):
+                chart_url = result.get("url")
+                logger.info(f"✓ {label} uploaded: {chart_url}")
+            else:
+                logger.error(f"Cloudinary upload failed: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Cloudinary upload skipped: {str(e)}")
+    else:
+        logger.info(f"Cloudinary not configured - {label.lower()} saved locally only")
+
+    return {"chart_url": chart_url, "chart_filename": filename}
+
+
+def _comparison_company_periods(state) -> dict:
+    """
+    {column_index: (fiscal_year, period_end_date)} per company column (1-based), for FX
+    conversion. The fiscal year is the requested year if given, else the company's
+    most recent filed fiscal year. The period-end date is that company's own fiscal
+    year end, so balance-sheet rows use the rate on the right date for each company.
+    """
+    from app.utils.company_mapping import get_most_recent_filed_fiscal_year, get_fiscal_period_end
+    _req_year = state.get("year_start") or state.get("year_end")
+    periods = {}
+    for idx, name in enumerate(
+        [state.get("comparison_company1", ""), state.get("comparison_company2", ""), state.get("comparison_company3", "")], 1
+    ):
+        if not name:
+            continue
+        ticker = get_ticker(name.lower()) or name
+        fy = int(_req_year) if _req_year else get_most_recent_filed_fiscal_year(ticker)
+        periods[idx] = (fy, get_fiscal_period_end(ticker, fy))
+    return periods
+
+
+def generate_comparison_chart(state):
+    """
+    Chart node for company comparison. Also rewrites the answer's monetary
+    cells to USD billions (rag/utils/money.py) so the displayed table matches
+    the chart. Returns the chart fields, plus Intermediate_message when the table
+    was rewritten.
+    """
+    result = _generate_comparison_chart_impl(state)
+    answer = state.get("Intermediate_message", "")
+    company_periods = _comparison_company_periods(state)
+    if answer and company_periods:
+        from rag.utils.money import normalize_comparison_table
+        normalized = normalize_comparison_table(answer, company_periods)
+        if normalized != answer:
+            logger.info(" Normalized monetary cells in comparison table to USD billions")
+            result = {**result, "Intermediate_message": normalized}
+    return result
+
+
+def _generate_comparison_chart_impl(state):
+    """
+    SYNCHRONOUS chart generation node for company comparison.
+    Supports both 2 and 3 company comparisons.
+    Parses tabular data, creates bar chart, and uploads to Cloudinary.
+    
+    Note: This is a SYNCHRONOUS function for LangGraph compatibility.
+    All async operations are handled internally where needed.
+    """
+    logger.info("---GENERATING COMPARISON CHART---")
+    
+    try:
+        import plotly.graph_objects as go
+
+        # Get the generated answer
+        answer = state.get("Intermediate_message", "")
+        company1 = state.get("comparison_company1", "")
+        company2 = state.get("comparison_company2", "")
+        company3 = state.get("comparison_company3", None)
+        
+        # Debug logging
+        logger.info(f" DEBUG: company1='{company1}', company2='{company2}', company3='{company3}'")
+        logger.info(f" DEBUG: company3 type={type(company3)}, is None={company3 is None}, is empty={company3 == ''}")
+        
+        if not answer or not company1 or not company2:
+            logger.warning(" Missing data for chart generation")
+            return {"chart_url": None, "chart_filename": None}
+        
+        # Treat empty string as None for company3
+        if company3 == "":
+            company3 = None
+        
+        if company3:
+            logger.info(f"Generating chart for {company1} vs {company2} vs {company3}")
+        else:
+            logger.info(f"Generating chart for {company1} vs {company2}")
+        
+        # Step 1: Parse table. Compute Earnings Growth first and drop the Prior-Year helper
+        # row, so the chart plots the computed growth and never the helper values.
+        from rag.utils.money import _apply_computed_growth
+        answer = _apply_computed_growth(answer, 3 if company3 else 2)
+        metrics_data = parse_markdown_table(answer)
+        if not metrics_data:
+            logger.info("No metrics found in answer")
+            return {"chart_url": None, "chart_filename": None}
+        
+        logger.info(f"✓ Parsed {len(metrics_data)} metrics from table")
+        
+        # Step 2: Prepare chart data
+        company_periods = _comparison_company_periods(state)
+        chart_data = prepare_chart_data(metrics_data, company1, company2, company3, max_metrics=8, company_periods=company_periods)
+        if not chart_data['metrics']:
+            logger.info("No valid numeric metrics for charting")
+            return {"chart_url": None, "chart_filename": None}
+        
+        logger.info(f"✓ Prepared {len(chart_data['metrics'])} metrics for charting")
+        
+        # Step 3: Create grouped bar chart
+        bars = [
+            go.Bar(
+                name=company1,
+                x=chart_data['metrics'],
+                y=chart_data['company1_values'],
+                marker_color='#1f77b4',
+                text=[f"{v:.2f}" for v in chart_data['company1_values']],
+                textposition='outside',
+                cliponaxis=False,
+            ),
+            go.Bar(
+                name=company2,
+                x=chart_data['metrics'],
+                y=chart_data['company2_values'],
+                marker_color='#ff7f0e',
+                text=[f"{v:.2f}" for v in chart_data['company2_values']],
+                textposition='outside',
+                cliponaxis=False,
+            )
+        ]
+        
+        # Add third company if present
+        if company3:
+            bars.append(
+                go.Bar(
+                    name=company3,
+                    x=chart_data['metrics'],
+                    y=chart_data['company3_values'],
+                    marker_color='#2ca02c',
+                    text=[f"{v:.2f}" for v in chart_data['company3_values']],
+                    textposition='outside',
+                    cliponaxis=False,
+                )
+            )
+        
+        fig = go.Figure(data=bars)
+
+        # Pad the y-axis so outside labels on tall and negative bars stay inside the plot
+        # and clear of the x-axis tick labels
+        _all_vals = [v for key in ('company1_values', 'company2_values', 'company3_values')
+                     for v in chart_data.get(key, []) if isinstance(v, (int, float))]
+        _y_max, _y_min = max(_all_vals + [0]), min(_all_vals + [0])
+        _pad = (_y_max - _y_min) * 0.12 or 1
+        _y_range = [_y_min - _pad if _y_min < 0 else 0, _y_max + _pad]
+
+        # Update layout - with support for negative values
+        chart_year = str(state.get("year_start") or state.get("year_end") or datetime.now().year)
+        title = f'Financial Comparison: {company1} vs {company2}'
+        if company3:
+            title += f" vs {company3}"
+        title += f" ({chart_year})"
+        
+        fig.update_layout(
+            title=title,
+            xaxis_title='Financial Metrics',
+            yaxis_title='Value',
+            barmode='group',
+            template='plotly_white',
+            font=dict(size=12),
+            height=600,
+            width=1000 if not company3 else 1200,  # Wider for 3 companies
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            xaxis=dict(tickangle=-45, automargin=True),
+            yaxis=dict(
+                range=_y_range,
+                zeroline=True,
+                zerolinewidth=2,
+                zerolinecolor='gray',
+                gridwidth=1,
+                gridcolor='lightgray'
+            ),
+            hovermode='x unified'
+        )
+        
+        logger.info("✓ Chart created successfully")
+
+        filename_prefix = (
+            f"comparison_{company1}_{company2}_{company3}" if company3
+            else f"comparison_{company1}_{company2}"
+        )
+        return _save_and_upload_chart(
+            fig, filename_prefix,
+            width=1200 if company3 else 1000, height=600,
+            label="Chart",
+        )
+    
+    except ImportError as e:
+        logger.error(f"Missing required package: {e}")
+        logger.error("Install with: pip install plotly kaleido")
+        return {"chart_url": None, "chart_filename": None}
+    except Exception as e:
+        logger.error(f"Chart generation error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"chart_url": None, "chart_filename": None}
+
+
+# ============================================================================
+# ALPHA FRAMEWORK NODES - Stock Buy Timing Analysis
+# ============================================================================
+
+def _extract_ticker_from_free_text(question: str) -> Optional[str]:
+    """
+    Best-effort ticker extraction from a raw free-text question, for the fast
+    keyword-detector nodes (ALPHA/scenario) that run BEFORE the full LLM-based
+    company-extraction node, so `companies_detected` isn't populated yet.
+
+    A naive "first all-caps word <=5 chars" scan (the old approach) matches
+    ordinary sentence-initial words just as readily as a real ticker — e.g.
+    "Give me a bull/bear/base case for MSFT" would match "GIVE" before ever
+    reaching "MSFT", silently producing a report for the wrong company. This
+    checks candidates against the real ticker/company-name table FIRST, and
+    only falls back to the old weak heuristic as a last resort.
+    """
+    if not question:
+        return None
+
+    words = [w.strip(",.?!\"'") for w in question.split()]
+
+    # 1. Any word that's already a KNOWN ticker (e.g. "MSFT", "AAPL").
+    for word in words:
+        if word.lower() in TICKER_TO_COMPANY:
+            return word.upper()
+
+    # 2. Any known company name appearing as a whole word/phrase in the
+    #    question (e.g. "microsoft" in "...case for Microsoft stock").
+    #    Word-boundary match, not a plain substring check — otherwise a short
+    #    company name like "meta" would false-match inside "metadata".
+    question_lower = question.lower()
+    for ticker, company in TICKER_TO_COMPANY.items():
+        if re.search(r'\b' + re.escape(company) + r'\b', question_lower):
+            return ticker.upper()
+
+    # 3. Last resort: the old weak heuristic (first short all-caps-able word).
+    #    Kept only as a fallback for tickers not in our mapping table.
+    for word in words:
+        cleaned = word.upper()
+        if 2 <= len(cleaned) <= 5 and cleaned.isalpha():
+            return cleaned
+
+    return None
+
+
+def detect_alpha_query(state):
+    """
+    Detect if the query is asking about stock buy timing (ALPHA Framework trigger).
+    
+    Patterns detected:
+    - "is it a good time to buy [company/ticker] stock?"
+    - "should i buy [company/ticker]?"
+    - "is now a good entry point for [ticker]?"
+    """
+    logger.info("="*80)
+    logger.info(" ALPHA QUERY DETECTION")
+    logger.info("="*80)
+
+    # Explicit trigger: a dedicated caller (e.g. the /alpha endpoint) can seed
+    # alpha_mode/ticker directly in the initial state, bypassing keyword
+    # detection entirely. This is the only way ALPHA mode gets activated now.
+    if state.get("alpha_mode") and state.get("ticker"):
+        logger.info(" ALPHA MODE (explicit trigger)")
+        logger.info(f"   Target: {state.get('ticker')}")
+        logger.info("="*80 + "\n")
+        return {
+            "alpha_mode": True,
+            "alpha_pillar": state.get("alpha_pillar"),
+            "ticker": state.get("ticker"),
+            "alpha_dimensions": {},
+            "alpha_report": ""
+        }
+
+    # ------------------------------------------------------------------------
+    # Keyword-based FULL ALPHA (5-dimension buy-timing) detection from
+    # free-text chat queries — DISABLED. That framework only triggers
+    # explicitly now (via the dedicated /alpha endpoint with an explicit
+    # ticker), never inferred from general chat text, since phrases like
+    # "should I buy" were firing the full framework unpredictably.
+    #
+    # The single-pillar INSIDER TRADING (Form 4) lookup is still allowed from
+    # general chat, though — it's a targeted factual lookup (not the
+    # multi-dimension buy/sell recommendation), so accidental triggers are
+    # low-risk and it's genuinely useful as a plain chat question.
+    # ------------------------------------------------------------------------
+    messages = state["messages"]
+    question = messages[-1].content.lower()
+
+    # # Buy timing patterns (disabled — see comment above)
+    # alpha_patterns = [
+    #     "good time to buy",
+    #     "should i buy",
+    #     "should i invest in",
+    #     "entry point",
+    #     "right time to buy",
+    #     "buy now",
+    #     "time to invest",
+    #     "good buy",
+    #     "worth buying",
+    #     "ialpha analysis of",
+    #     "alpha analysis of",
+    #     "a 360 degree analysis"
+    # ]
+
+    insider_patterns = [
+        "insider trading",
+        "open-market buying",
+        "open market buying",
+        "open-market selling",
+        "open market selling",
+        "promoters",
+        "key management",
+        "form 4",
+        "form4"
+    ]
+
+    is_insider_query = any(pattern in question for pattern in insider_patterns)
+
+    if is_insider_query:
+        logger.info(" ALPHA MODE ACTIVATED (insider_trading pillar)")
+        logger.info(f"   Query: {question}")
+
+        # Try to extract ticker from state first
+        ticker = state.get("ticker")
+        company_filter = state.get("company_filter", [])
+
+        if ticker:
+            target_ticker = ticker
+        elif company_filter and len(company_filter) > 0:
+            target_ticker = company_filter[0]
+        else:
+            # Fallback: extract from the raw question text (checks known
+            # tickers/company names before falling back to a weak guess —
+            # see _extract_ticker_from_free_text for why the naive "first
+            # short all-caps word" approach is unreliable on its own).
+            target_ticker = _extract_ticker_from_free_text(question)
+
+        if not target_ticker:
+            logger.warning(" WARNING: Could not extract ticker/company")
+            target_ticker = "unknown"
+
+        logger.info(f"   Target: {target_ticker}")
+        logger.info("="*80 + "\n")
+
+        return {
+            "alpha_mode": True,
+            "alpha_pillar": "insider_trading",
+            "ticker": target_ticker,
+            "alpha_dimensions": {},
+            "alpha_report": ""
+        }
+
+    logger.info(" Normal RAG query (not ALPHA)")
+    logger.info("="*80 + "\n")
+    return {
+        "alpha_mode": False
+    }
+
+
+async def _alpha_vdb_search(db_instance, query: str, limit: int, fiscal_year: int):
+    """
+    ALPHA vector search scoped to the LATEST annual report (10-K / 20-F).
+
+    Without a year/filing-type filter the only thing steering a search toward the
+    latest filing was the word "latest" inside the query text, so chunks from older
+    annual reports and from 10-Qs mixed in and the analysis blended periods. Falls
+    back to the prior fiscal year, then (last resort, logged) to no filter, so a
+    ticker whose newest filing isn't indexed still gets data rather than an empty
+    dimension — the chunk labels carry their real fiscal year either way.
+    """
+    for years in ([fiscal_year], [fiscal_year - 1]):
+        results = await db_instance.hybrid_search(
+            query=query, content_type="text", years=years,
+            filing_type=list(ANNUAL_FILING_TYPES), limit=limit,
+        )
+        if results:
+            if years[0] != fiscal_year:
+                logger.warning(f"    ALPHA search: no FY{fiscal_year} annual-report chunks — using FY{years[0]}")
+            return results
+    logger.warning(f"    ALPHA search: no FY{fiscal_year}/{fiscal_year - 1} annual-report chunks — searching without year/type filter")
+    return await db_instance.hybrid_search(query=query, content_type="text", limit=limit)
+
+
+def _alpha_source_label(doc, ticker: str) -> str:
+    """
+    Label for a document shown to an ALPHA chain. Built from metadata — NOT the file
+    name: a 20-F for the year ended 31 Dec 2025 is filed (and named) in 2026, and the
+    model read that as "the 2026 Form 20-F".
+    """
+    m = doc.metadata or {}
+    if m.get('content_type') == 'insider_trading':
+        return "SEC Form 4 — Insider Trading Analysis"
+    ft, yr = m.get('filing_type'), m.get('year')
+    if ft and yr:
+        label = f"{ticker} FY{yr} {ft}"
+        if m.get('period_end_date'):
+            label += f" (period ended {m['period_end_date']})"
+        if m.get('page_num') is not None:
+            label += f", page {m['page_num']}"
+        return label
+    title = m.get('title') or m.get('source_file') or m.get('source') or 'Unknown'
+    if m.get('source') in ('seekingalpha', 'govt_source', 'home_market_source'):
+        return f"Web excerpt ({m['source']}, undated) — {title}"
+    return title
+
+
+def _format_alpha_docs(docs, ticker: str) -> str:
+    if not docs:
+        return "No documents available."
+    parts = [f"Source: {_alpha_source_label(d, ticker)}\n{d.page_content}" for d in docs]
+    # Whole chunks only: filing pages run ~4-5k chars and the key figures can sit
+    # anywhere in them, so a per-chunk character cut hides data. Over budget, the
+    # lowest-ranked whole chunks are dropped instead.
+    kept_idx, dropped, _ = _fit_texts_to_token_budget(parts)
+    if dropped:
+        logger.warning(f"    format_docs: over the {_CONTEXT_TOKEN_BUDGET:,}-token budget — dropped {dropped} whole low-ranked chunk(s)")
+    return "\n\n---\n\n".join(parts[k] for k in kept_idx)
+
+
+async def alpha_dimension_retrieve(state, config=None):
+    """
+    Retrieve dimension-specific data for ALPHA Framework.
+    
+    Fixed retrieval strategies per dimension:
+    - Alignment: VectorDB only
+    - Liquidity: VectorDB (60%) + Web (40%)
+    - Performance: VectorDB only
+    - Horizon: Web only
+    - Action: Web only
+    """
+    logger.info("="*80)
+    logger.info(" ALPHA DIMENSIONAL RETRIEVAL")
+    logger.info("="*80)
+    
+    ticker = state.get("ticker", "").upper()
+    company_filter = state.get("company_filter", [])
+    
+    if not ticker and company_filter:
+        ticker = company_filter[0].upper()
+    
+    logger.info(f" Target: {ticker}\n")
+
+    alpha_pillar = state.get("alpha_pillar")
+
+    if alpha_pillar == "insider_trading":
+        logger.info(" [SINGLE PILLAR] Insider Trading (Form 4)")
+        from app.utils.company_mapping import is_foreign_private_issuer, form4_exemption_message
+        if is_foreign_private_issuer(ticker):
+            # No Form 4 exists for foreign private issuers — say so (and where the
+            # equivalent ownership data lives) rather than "no data found".
+            logger.info(f"    {ticker} is a foreign private issuer — no Form 4 filings exist, skipping lookup")
+            return {
+                "Intermediate_message": (
+                    f"## Insider Trading Analysis — {ticker}\n\n{form4_exemption_message(ticker)}\n\n"
+                    f"You can still ask about director and officer share ownership, major shareholders or "
+                    f"related-party transactions in {ticker}'s latest 20-F."
+                ),
+                "alpha_dimensions": {"insider_trading": {}},
+                "documents": [],
+            }
+        try:
+            from rag.utils.form4_insights.advisory_hub import get_advisory_report
+            form4_report = await get_advisory_report(ticker)
+            sections = []
+            if form4_report and "status" not in form4_report and "error" not in form4_report:
+                for issuer_name, detail in form4_report.items():
+                    if issuer_name in ("error", "status", "message", "ticker"):
+                        continue
+
+                    cur_price = detail.get("Current_Price")
+                    price_str = f"${cur_price:,.2f}" if isinstance(cur_price, float) else "N/A"
+
+                    # ── Build the final response directly ──────────────────
+                    acq_count  = int(detail.get("Acquired_Txn_Count", 0))
+                    disp_count = int(detail.get("Disposed_Txn_Count", 0))
+                    acq_shares = int(detail.get("Total_Acquired_Shares", 0))
+                    disp_shares = int(detail.get("Total_Disposed_Shares", 0))
+
+                    section = []
+                    section.append(f"## Insider Trading Analysis — {issuer_name} ({ticker})")
+                    section.append(f"*Source: SEC Form 4 filings | Current Market Price: {price_str}*\n")
+
+                    section.append(
+                        f"**Acquisitions:** {acq_count} transaction(s) — {acq_shares:,} shares   |   "
+                        f"**Dispositions:** {disp_count} transaction(s) — {disp_shares:,} shares\n"
+                    )
+
+                    section.append("### Summary")
+                    section.append(detail.get("Reason", "No analysis available"))
+                    section.append("")
+
+                    sections.append("\n".join(section))
+
+            final_response = "\n\n---\n\n".join(sections) if sections else f"No Form 4 data found for {ticker}."
+            logger.info("    Form4 data retrieved and formatted successfully.")
+            return {
+                "Intermediate_message": final_response,
+                "alpha_dimensions": {"insider_trading": {}},
+                "documents": [],
+            }
+        except Exception as e:
+            logger.error(f"    Error: {e}")
+            import traceback; traceback.print_exc()
+            return {
+                "Intermediate_message": f"Error retrieving insider trading data for {ticker}: {e}",
+                "documents": [],
+                "alpha_dimensions": {},
+            }
+    
+    from app.services.vectordb_manager import get_vectordb_manager
+    from langchain_tavily import TavilySearch
+    
+    vectordb_mgr = get_vectordb_manager()
+    from app.utils.company_mapping import get_most_recent_filed_fiscal_year
+    _cur_yr = get_most_recent_filed_fiscal_year(ticker)
+    # All web searches restricted to trusted financial domains, capped to the last 1 year
+    web_search = TavilySearch(max_results=3, include_domains=TRUSTED_FINANCIAL_DOMAINS, time_range="year")
+    # Trends / notable trends (Horizon) fetched exclusively from SeekingAlpha, capped to the last 1 year
+    web_search_seekingalpha = TavilySearch(max_results=3, include_domains=["seekingalpha.com"], time_range="year")
+    # Liquidity: latest macro/rate data straight from FDIC and other government sources
+    web_search_govt = TavilySearch(max_results=3, include_domains=GOVT_SOURCE_DOMAINS, time_range="year")
+
+    alpha_dimensions = {}
+
+    # -------------------------------------------------------------------------
+    # ALIGNMENT: VectorDB (MD&A, Governance) + Form4 Insider Trading
+    # -------------------------------------------------------------------------
+    logger.info(" [1/5] Alignment (Stakeholder Interests) - VectorDB + Form4 Insider Data")
+    try:
+        db_instance = vectordb_mgr.get_instance(ticker, create_if_missing=False)
+
+        # Query for MD&A and governance documents — latest filing only
+        from app.utils.company_mapping import is_foreign_private_issuer, form4_exemption_message
+        _foreign_issuer = is_foreign_private_issuer(ticker)
+
+        alignment_queries = [
+            f"{ticker} management discussion analysis MD&A latest fiscal year {_cur_yr}",
+            f"{ticker} governance board independence proxy statement latest {_cur_yr}",
+            f"{ticker} related party transactions latest {_cur_yr}"
+        ]
+        if _foreign_issuer:
+            # 20-F stands in for the missing Form 4 data: Item 6 (directors, senior
+            # management, share ownership) and Item 7 (major shareholders, related parties).
+            # Runs FIRST: only the first 5 docs survive the slice below, and the exemption
+            # note takes slot 0, so the ownership chunks must lead the retrieved ones.
+            alignment_queries.insert(0,
+                f"{ticker} share ownership of directors and senior management major shareholders "
+                f"Item 6 Item 7 related party transactions latest {_cur_yr}"
+            )
+            # A 20-F has no "MD&A" heading; its MD&A is Item 5 (Operating and Financial Review).
+            alignment_queries.append(
+                f"{ticker} operating and financial review and prospects Item 5 management tone "
+                f"outlook risks latest {_cur_yr}"
+            )
+
+        alignment_docs = []
+        _seen_align = set()
+        for query in alignment_queries:
+            results = await _alpha_vdb_search(db_instance, query, 3, _cur_yr)
+            for point in results:
+                if hasattr(point, 'payload'):
+                    meta = point.payload.get('metadata', {})
+                    content = point.payload.get('page_content', '')
+                    _k = _doc_key(meta, content)
+                    if _k in _seen_align:
+                        continue
+                    _seen_align.add(_k)
+                    alignment_docs.append(Document(page_content=content, metadata=meta))
+
+        # ── Form 4 insider trading advisory data ──────────────────────────────
+        logger.info("    Fetching Form 4 insider trading data…")
+        try:
+            from rag.utils.form4_insights.advisory_hub import get_advisory_report
+
+            # Foreign private issuers file no Form 4 — skip the DB lookup and tell the
+            # analysis why insider data is absent and what stands in for it.
+            form4_report = None if _foreign_issuer else await get_advisory_report(ticker)
+
+            if _foreign_issuer:
+                alignment_docs.insert(0, Document(
+                    page_content=(
+                        f"INSIDER TRADING DATA — {ticker}\n\n{form4_exemption_message(ticker)} "
+                        f"Assess alignment from the 20-F ownership and related-party disclosures "
+                        f"below, and state that insider buying/selling data is not available for "
+                        f"this issuer by regulation (not because data is missing)."
+                    ),
+                    metadata={"source": "form4_exemption_note", "company": ticker, "content_type": "insider_trading"}
+                ))
+                logger.info(f"    {ticker} is a foreign private issuer — added Form 4 exemption note instead of insider data")
+            elif form4_report and "status" not in form4_report and "error" not in form4_report:
+                lines = [f"INSIDER TRADING ANALYSIS (SEC Form 4) — {ticker}\n"]
+                for issuer_name, detail in form4_report.items():
+                    if issuer_name in ("error", "status", "message", "ticker"):
+                        continue
+                    lines.append(f"\nAnalyst Insight:\n{detail.get('Reason', 'No analysis available')}\n")
+
+                insider_doc = Document(
+                    page_content="\n".join(lines),
+                    metadata={"source": "form4_insider_trading", "company": ticker, "content_type": "insider_trading"}
+                )
+                # Insert first so it's never cut off by the docs[:5] slice in format_docs
+                alignment_docs.insert(0, insider_doc)
+                logger.info(f"    Form4 insider doc added ({len(form4_report)} issuer(s))")
+            else:
+                logger.warning(f"    No Form4 data in DB for {ticker} — skipping insider doc")
+        except Exception as form4_err:
+            logger.error(f"    Form4 fetch error (non-fatal): {form4_err}")
+        # ─────────────────────────────────────────────────────────────────────
+
+        alpha_dimensions['alignment'] = {
+            'source': 'vectordb+form4',
+            'documents': alignment_docs,  # Form4/exemption doc at [0]; no count cap — a [:N] slice dropped the last query (Item 5)
+            'query_count': len(alignment_queries)
+        }
+        logger.info(f"    Total alignment docs: {len(alignment_docs)}")
+
+    except Exception as e:
+        logger.error(f"    Error: {e}")
+        alpha_dimensions['alignment'] = {'source': 'vectordb+form4', 'documents': [], 'query_count': 0}
+    
+    # -------------------------------------------------------------------------
+    # LIQUIDITY: VectorDB (risk factors) + Web (latest FDIC / govt macro data)
+    # -------------------------------------------------------------------------
+    logger.info(" [2/5] Liquidity (Macro/Micro Environment) - VectorDB + Govt Sources")
+    try:
+        # VectorDB: Risk factors, commodity exposure
+        liquidity_docs = []
+        vdb_queries = [
+            f"{ticker} risk factors competitive pressures",
+            f"{ticker} commodity input cost exposure raw materials"
+        ]
+
+        _seen_liq = set()
+        for query in vdb_queries:
+            results = await _alpha_vdb_search(db_instance, query, 2, _cur_yr)
+            for point in results:
+                if hasattr(point, 'payload'):
+                    meta = point.payload.get('metadata', {})
+                    content = point.payload.get('page_content', '')
+                    _k = _doc_key(meta, content)
+                    if _k in _seen_liq:
+                        continue
+                    _seen_liq.add(_k)
+                    liquidity_docs.append(Document(page_content=content, metadata=meta))
+
+        # Macro context depends on where the issuer is based. FRED/BLS is U.S.-only, so a
+        # domestic filer gets the dated U.S. snapshot and govt-site searches. A foreign
+        # issuer gets its HOME-MARKET policy rate and inflation from its own central bank
+        # and statistics office, and the U.S. snapshot is left out.
+        from app.utils.company_mapping import get_fpi_home_market
+        _home = get_fpi_home_market(ticker)
+        if _home is None:
+            # Dated, authoritative U.S. figures from the local FRED/BLS store. The web
+            # excerpts below carry no date, so they must never be the source of a rate.
+            from app.utils.macro_utils import get_macro_snapshot_text
+            _macro_snapshot = get_macro_snapshot_text()
+            if _macro_snapshot:
+                liquidity_docs.insert(0, Document(
+                    page_content=_macro_snapshot,
+                    metadata={'source': 'macro_snapshot', 'title': 'MACRO SNAPSHOT — FRED / BLS (dated, authoritative)'}
+                ))
+            # Web: Latest macro/liquidity conditions straight from FDIC and other govt sources
+            web_jobs = [
+                (f"{ticker} industry sector credit availability and financing conditions outlook", web_search_govt, 'govt_source'),
+                (f"{ticker} industry supply chain input costs trade policy tariffs outlook", web_search_govt, 'govt_source'),
+            ]
+        else:
+            market = _home['market'] or "home country"
+            rate_label = _home.get('rate') or "central bank policy rate"
+            inflation_label = _home.get('inflation') or "inflation rate"
+            if _home['domains']:
+                home_search = TavilySearch(max_results=3, include_domains=_home['domains'], time_range="year")
+            else:
+                home_search = TavilySearch(max_results=3, time_range="year")
+            web_jobs = [
+                (f"{ticker} {market} {rate_label} latest {_cur_yr}", home_search, 'home_market_source'),
+                (f"{market} {inflation_label} latest official statistics {_cur_yr}", home_search, 'home_market_source'),
+            ]
+            logger.info(f"    {ticker} is a foreign private issuer — home-market macro from {market}; U.S. snapshot omitted")
+
+        for query, search_tool, source_label in web_jobs:
+            web_results = search_tool.invoke({"query": query})
+            # Parse Tavily response using helper
+            sources = _parse_tavily_response(web_results, query)
+            for source in sources:
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={'source': source_label, 'url': source['url'], 'title': source['title']}
+                )
+                liquidity_docs.append(doc)
+
+        alpha_dimensions['liquidity'] = {
+            'source': 'vectordb+govt' if _home is None else 'vectordb+home_market',
+            'documents': liquidity_docs,
+            'query_count': len(vdb_queries) + len(web_jobs)
+        }
+        logger.info(f"    Retrieved {len(liquidity_docs)} chunks (vectordb + govt sources)")
+
+    except Exception as e:
+        logger.error(f"    Error: {e}")
+        alpha_dimensions['liquidity'] = {'source': 'vectordb+govt', 'documents': [], 'query_count': 0}
+    
+    # -------------------------------------------------------------------------
+    # PERFORMANCE: VectorDB only (current year 10-K vs prior 2 years for comparison)
+    # -------------------------------------------------------------------------
+    logger.info(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
+    try:
+        _prior_yr, _prior_yr2 = _cur_yr - 1, _cur_yr - 2
+        performance_queries = [
+            f"{ticker} revenue net income annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2} financial results comparison",
+            f"{ticker} operating cash flow free cash flow income statement annual {_cur_yr} {_prior_yr} {_prior_yr2}",
+            f"{ticker} EBITDA margins ROE profitability metrics annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2}",
+            # MD&A: the drivers behind the numbers. Foreign private issuers (20-F) call it
+            # "Item 5. Operating and Financial Review and Prospects", not MD&A.
+            f"{ticker} management discussion analysis results of operations drivers of revenue and net income {_cur_yr} {_prior_yr} {_prior_yr2}",
+            f"{ticker} operating and financial review and prospects Item 5 results of operations {_cur_yr} {_prior_yr} {_prior_yr2}",
+            # Specific MD&A passages the broad queries above miss: operating income before
+            # the financial result, the financial result, income tax, and the cash-flow table.
+            f"{ticker} operating income before financial result operating margin decreased increased {_cur_yr} {_prior_yr}",
+            f"{ticker} financial result financial income financial expenses income before income tax {_cur_yr} {_prior_yr}",
+            f"{ticker} income tax expense benefit income for the year attributable to controlling interests {_cur_yr} {_prior_yr}",
+            f"{ticker} net cash provided by operating activities cash flow data {_cur_yr} {_prior_yr} {_prior_yr2}",
+        ]
+
+        performance_docs = []
+        _seen_perf = set()
+        for query in performance_queries:
+            results = await _alpha_vdb_search(db_instance, query, 4, _cur_yr)
+            for point in results:
+                if hasattr(point, 'payload'):
+                    meta = point.payload.get('metadata', {})
+                    content = point.payload.get('page_content', '')
+                    # Several queries hit the same page; keep each page once.
+                    _key = _doc_key(meta, content)
+                    if _key in _seen_perf:
+                        continue
+                    _seen_perf.add(_key)
+                    performance_docs.append(Document(page_content=content, metadata=meta))
+
+        alpha_dimensions['performance'] = {
+            'source': 'vectordb',
+            'documents': performance_docs,
+            'query_count': len(performance_queries)
+        }
+        logger.info(f"    Retrieved {len(performance_docs)} unique chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
+
+    except Exception as e:
+        logger.error(f"    Error: {e}")
+        alpha_dimensions['performance'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
+    
+    # -------------------------------------------------------------------------
+    # HORIZON: SeekingAlpha only (trends, competitive positioning, moat)
+    # -------------------------------------------------------------------------
+    logger.info(" [4/5] Horizon (Structural Opportunity & Moat) - SeekingAlpha")
+    try:
+        horizon_queries = [
+            f"{ticker} operating margins vs industry average pricing power",
+            f"{ticker} R&D expenditure vs peers innovation",
+            f"{ticker} market share trends competitive positioning",
+            f"{ticker} competitive moat network effects switching costs"
+        ]
+
+        horizon_docs = []
+        for query in horizon_queries:
+            # All trends and notable trends fetched exclusively from SeekingAlpha
+            web_results = web_search_seekingalpha.invoke({"query": query})
+            sources = _parse_tavily_response(web_results, query)
+            for source in sources:
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={'source': 'seekingalpha', 'url': source['url'], 'title': source['title']}
+                )
+                horizon_docs.append(doc)
+
+        # Web commentary alone let this dimension assert margin/R&D trends no source
+        # backed (and contradict the Performance section). Anchor it in the company's
+        # own latest annual report: business/competition, R&D, and the operating result.
+        horizon_filing_queries = [
+            f"{ticker} competition competitive position market share customers business overview",
+            f"{ticker} research and development expenditure innovation investment",
+            f"{ticker} operating income operating margin results of operations {_cur_yr} {_cur_yr - 1}",
+        ]
+        horizon_filing_docs = []
+        _seen_hz = set()
+        try:
+            for query in horizon_filing_queries:
+                for point in await _alpha_vdb_search(db_instance, query, 3, _cur_yr):
+                    if hasattr(point, 'payload'):
+                        meta = point.payload.get('metadata', {})
+                        content = point.payload.get('page_content', '')
+                        _k = _doc_key(meta, content)
+                        if _k in _seen_hz:
+                            continue
+                        _seen_hz.add(_k)
+                        horizon_filing_docs.append(Document(page_content=content, metadata=meta))
+        except Exception as hz_err:
+            logger.error(f"    Horizon filing retrieval error (non-fatal): {hz_err}")
+        horizon_docs = horizon_filing_docs + horizon_docs
+
+        alpha_dimensions['horizon'] = {
+            'source': 'filing+seekingalpha',
+            'documents': horizon_docs,
+            'query_count': len(horizon_queries) + len(horizon_filing_queries)
+        }
+        logger.info(f"    Retrieved {len(horizon_docs)} chunks ({len(horizon_filing_docs)} filing + {len(horizon_docs) - len(horizon_filing_docs)} SeekingAlpha)")
+
+    except Exception as e:
+        logger.error(f"    Error: {e}")
+        alpha_dimensions['horizon'] = {'source': 'seekingalpha', 'documents': [], 'query_count': 0}
+    
+    # -------------------------------------------------------------------------
+    # ACTION: Web (RSI, SMA200, price, P/E, EBITDA) — all from trusted sources
+    # -------------------------------------------------------------------------
+    logger.info(" [5/5] Action (RSI / SMA200 / Price / P/E / EBITDA) - Web")
+    try:
+        action_docs = []
+
+        # Domains that reliably display live technical indicators, capped to the last 1 year
+        web_search_technical = TavilySearch(
+            max_results=3,
+            include_domains=TRUSTED_FINANCIAL_DOMAINS,
+            time_range="year"
+        )
+
+        web_search_technical_stock_price = TavilySearch(
+            max_results=5,
+            include_domains=TRUSTED_FINANCIAL_DOMAINS,
+            time_range="year"
+        )
+
+        # -- RSI(14) and current price from web --------------------------------
+        logger.info("    Fetching RSI(14) and current price from web...")
+        try:
+            rsi_query = f"{ticker} RSI 14 relative strength index current technical indicators"
+            rsi_results = web_search_technical.invoke({"query": rsi_query})
+            rsi_sources = _parse_tavily_response(rsi_results, rsi_query)
+            for source in rsi_sources:
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'technical'
+                    }
+                )
+                action_docs.append(doc)
+            logger.info(f"    Retrieved {len(rsi_sources)} RSI/price docs from web")
+        except Exception as rsi_err:
+            logger.error(f"    RSI web search error (non-fatal): {rsi_err}")
+
+        # -- SMA200 from web ---------------------------------------------------
+        logger.info("    Fetching SMA200 from web...")
+        try:
+            sma_query = f"{ticker} 200 day moving average SMA200 current stock price technical"
+            sma_results = web_search_technical.invoke({"query": sma_query})
+            sma_sources = _parse_tavily_response(sma_results, sma_query)
+            for source in sma_sources:
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'technical'
+                    }
+                )
+                action_docs.append(doc)
+            logger.info(f"    Retrieved {len(sma_sources)} SMA200 docs from web")
+        except Exception as sma_err:
+            logger.error(f"    SMA200 web search error (non-fatal): {sma_err}")
+        
+        # -- Current Stock Price from web ---------------------------------------------------
+        logger.info("    Fetching Current Stock Price from web...")
+        try:
+            sma_query = f"{ticker} today's stock price current stock price"
+            sma_results = web_search_technical_stock_price.invoke({"query": sma_query})
+            sma_sources = _parse_tavily_response(sma_results, sma_query)
+            for source in sma_sources:
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'technical'
+                    }
+                )
+                action_docs.append(doc)
+            logger.info(f"    Retrieved {len(sma_sources)} Current Stock Price docs from web")
+        except Exception as sma_err:
+            logger.error(f"    Current Stock Price web search error (non-fatal): {sma_err}")
+
+        # -- EBITDA from web search (trusted financial domains) ---------------
+        logger.info("    Fetching EBITDA from web (trusted domains)...")
+        try:
+            ebitda_query = f"{ticker} EBITDA annual earnings current"
+            ebitda_results = web_search.invoke({"query": ebitda_query})
+            ebitda_sources = _parse_tavily_response(ebitda_results, ebitda_query)
+            for source in ebitda_sources:
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'ebitda'
+                    }
+                )
+                action_docs.append(doc)
+            logger.info(f"    Retrieved {len(ebitda_sources)} EBITDA docs from web")
+        except Exception as ebitda_err:
+            logger.error(f"    EBITDA web search error (non-fatal): {ebitda_err}")
+
+        # -- P/E ratio from web search (trusted financial domains) ------------
+        logger.info("    Fetching P/E ratio from web (trusted domains)...")
+        try:
+            pe_query = f"{ticker} P/E ratio price to earnings current valuation"
+            pe_results = web_search.invoke({"query": pe_query})
+            pe_sources = _parse_tavily_response(pe_results, pe_query)
+            for source in pe_sources:
+                doc = Document(
+                    page_content=source['content'],
+                    metadata={
+                        'source': 'web_search',
+                        'url': source['url'],
+                        'title': source['title'],
+                        'data_type': 'pe_ratio'
+                    }
+                )
+                action_docs.append(doc)
+            logger.info(f"    Retrieved {len(pe_sources)} P/E docs from web")
+        except Exception as pe_err:
+            logger.error(f"    P/E web search error (non-fatal): {pe_err}")
+
+        alpha_dimensions['action'] = {
+            'source': 'web',
+            'documents': action_docs,
+            'query_count': 5
+        }
+        logger.info(f"    Total action docs: {len(action_docs)}")
+
+    except Exception as e:
+        logger.error(f"    Error: {e}")
+        alpha_dimensions['action'] = {
+            'source': 'web',
+            'documents': [],
+            'query_count': 0
+        }
+    
+    logger.info("\n" + "="*80)
+    logger.info(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total chunks")
+    logger.info("="*80 + "\n")
+    
+    return {
+        "alpha_dimensions": alpha_dimensions,
+        # always set (even []) so a note from an earlier turn on this thread can never leak into this report
+        "analyst_notes": await _analyst_note_documents(config, [ticker], f"{ticker} investment thesis outlook valuation risks"),
+    }
+
+
+def _analyst_notes_text(state) -> str:
+    """The user's notes for the ALPHA / scenario reports as one block ('' when there are none)."""
+    return "\n\n".join(d.page_content for d in (state.get("analyst_notes") or []) if getattr(d, "page_content", ""))
+
+
+def alpha_generate_report(state):
+    """
+    Generate ALPHA Framework report from dimensional analysis.
+    Creates <100 word summaries for each dimension and combines into final report.
+    """
+    logger.info("="*80)
+    logger.info(" ALPHA REPORT GENERATION")
+    logger.info("="*80 + "\n")
+    
+    ticker = state.get("ticker", "UNKNOWN")
+    alpha_dimensions = state.get("alpha_dimensions", {})
+    
+    import time
+    from langchain_openai import ChatOpenAI
+    from langchain_community.callbacks import get_openai_callback
+    from app.utils.usage_tracker import record_usage
+    from rag.prompts.prompts import (
+        get_alpha_alignment_chain,
+        get_alpha_liquidity_chain,
+        get_alpha_performance_chain,
+        get_alpha_horizon_chain,
+        get_alpha_action_chain,
+        get_alpha_report_combiner_chain
+    )
+
+    llm = get_llm("analysis", timeout=90, track=False)  # this node records usage per dimension itself
+    
+    # Helper to format documents
+    def format_docs(docs):
+        return _format_alpha_docs(docs, ticker)
+
+    dimension_outputs = {}
+    
+    # Generate each dimension
+    dimensions = [
+        ('alignment', get_alpha_alignment_chain, "Alignment"),
+        ('liquidity', get_alpha_liquidity_chain, "Liquidity"),
+        ('performance', get_alpha_performance_chain, "Performance"),
+        ('horizon', get_alpha_horizon_chain, "Horizon"),
+        ('action', get_alpha_action_chain, "Action")
+    ]
+    
+    for dim_key, chain_func, dim_name in dimensions:
+        logger.info(f" Generating {dim_name}...")
+
+        dim_data = alpha_dimensions.get(dim_key, {})
+        docs = dim_data.get('documents', [])
+
+        if dim_key == 'action':
+            technical_docs = [d for d in docs if d.metadata.get('data_type') == 'technical']
+            pe_docs        = [d for d in docs if d.metadata.get('data_type') == 'pe_ratio']
+            ebitda_docs    = [d for d in docs if d.metadata.get('data_type') == 'ebitda']
+            logger.info(f"    ACTION docs → {len(technical_docs)} technical, {len(pe_docs)} P/E, {len(ebitda_docs)} EBITDA")
+
+            verified = _fetch_verified_market_data(ticker)
+            action_document = (
+                (f"=== VERIFIED LIVE MARKET DATA (authoritative — use these values; ignore conflicting web figures) ===\n{verified}\n\n" if verified else "")
+                + f"=== TECHNICAL INDICATORS (web-sourced: RSI-14, SMA200, current price) ===\n"
+                f"{format_docs(technical_docs)}\n\n"
+                f"=== P/E RATIO (web-sourced) ===\n"
+                f"{format_docs(pe_docs)}\n\n"
+                f"=== EBITDA (web-sourced) ===\n"
+                f"{format_docs(ebitda_docs)}"
+            )
+            invoke_kwargs = {
+                "company": ticker,
+                "ticker": ticker,
+                "documents": action_document
+            }
+        else:
+            # For alignment: pass Form4 content as a dedicated variable so the
+            # LLM receives full data, while governance/MD&A docs go in {documents}.
+            invoke_kwargs = {
+                "company": ticker,
+                "ticker": ticker,
+                "documents": format_docs(
+                    [d for d in docs if d.metadata.get('content_type') != 'insider_trading'],
+                )
+            }
+            if dim_key == 'horizon':
+                # Horizon must not contradict what the Performance analysis reported.
+                invoke_kwargs['reported_fundamentals'] = (
+                    dimension_outputs.get('performance', {}).get('analysis')
+                    or "Not available."
+                )
+            if dim_key == 'alignment':
+                form4_doc = next(
+                    (d for d in docs if d.metadata.get('content_type') == 'insider_trading'),
+                    None
+                )
+                invoke_kwargs['form4_analysis'] = (
+                    form4_doc.page_content if form4_doc
+                    else "No SEC Form 4 insider trading data available for this ticker."
+                )
+
+        try:
+            chain = chain_func(llm, ticker=ticker) if dim_key == 'performance' else chain_func(llm)
+            _dim_start = time.perf_counter()
+            with get_openai_callback() as cb:
+                result = chain.invoke(invoke_kwargs)
+            record_usage(
+                stage=f"alpha.{dim_key}", model="gpt-4o",
+                prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
+                total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - _dim_start,
+                detail=f"ticker={ticker}",
+            )
+
+            analysis = result.analysis
+
+            dimension_outputs[dim_key] = {
+                'analysis': analysis,
+                'key_points': result.key_points,
+                'recommendation': getattr(result, 'recommendation', '')
+            }
+            logger.info(f"    ✓ {dim_name}: {len(analysis)} chars, {len(result.key_points)} points")
+
+        except Exception as e:
+            logger.error(f"    ✗ Error: {e}")
+            dimension_outputs[dim_key] = {
+                'analysis': f"Analysis unavailable due to insufficient data.",
+                'key_points': [],
+                'recommendation': ''
+            }
+    
+    # Combine into final report
+    logger.info("\n Combining dimensions into final report...")
+
+    try:
+        notes_text = _analyst_notes_text(state)
+        combiner_chain = get_alpha_report_combiner_chain(llm, analyst_notes=bool(notes_text))
+        combiner_inputs = {
+            "company": ticker,
+            "ticker": ticker,
+            "alignment": dimension_outputs.get('alignment', {}).get('analysis', 'N/A'),
+            "liquidity": dimension_outputs.get('liquidity', {}).get('analysis', 'N/A'),
+            "performance": dimension_outputs.get('performance', {}).get('analysis', 'N/A'),
+            "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
+            "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
+        }
+        if notes_text:
+            combiner_inputs["analyst_notes"] = notes_text
+        _combiner_start = time.perf_counter()
+        with get_openai_callback() as cb:
+            final_report = combiner_chain.invoke(combiner_inputs)
+        record_usage(
+            stage="alpha.combiner", model="gpt-4o",
+            prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
+            total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - _combiner_start,
+            detail=f"ticker={ticker}",
+        )
+        logger.info(f"    ✓ Final report: {len(final_report)} chars")
+
+    except Exception as e:
+        logger.error(f"    ✗ Error: {e}")
+        final_report = f"# ALPHA Framework Analysis: {ticker}\n\nError generating report: {str(e)}"
+    
+    logger.info("\n" + "="*80)
+    logger.info(" ALPHA REPORT COMPLETE")
+    logger.info("="*80 + "\n")
+    
+    # Return final report as AIMessage
+    from langchain_core.messages import AIMessage
+
+    return {
+        "messages": [AIMessage(content=final_report)],
+        "alpha_report": final_report,
+        "Intermediate_message": final_report  # For compatibility with show_result node
+    }
+
+
+# ============================================================================
+# SCENARIO FRAMEWORK – Bull / Bear / Base Case (web-search only)
+# ============================================================================
+
+# Domains specifically useful for analyst ratings & brokerage research aggregators
+SCENARIO_SEARCH_DOMAINS = [
+    # Analyst-rating aggregators
+    "tipranks.com",
+    "marketbeat.com",
+    "benzinga.com",
+    "barrons.com",
+    "thestreet.com",
+    "zacks.com",
+    "finviz.com",
+    # Credit-rating agencies (public pages)
+    "spglobal.com",
+    "moodys.com",
+    "fitchratings.com",
+    "dbrs.com",
+    # Already-trusted general financial domains
+    "seekingalpha.com",
+    "finance.yahoo.com",
+    "bloomberg.com",
+    "reuters.com",
+    "wsj.com",
+    "ft.com",
+    "marketwatch.com",
+    "morningstar.com",
+    "stockanalysis.com",
+    "fool.com",
+    "cnbc.com",
+    "investopedia.com",
+    "gurufocus.com",
+    "macrotrends.net",
+]
+
+# Scenario detection keyword patterns
+SCENARIO_PATTERNS = [
+    "bull case",
+    "bear case",
+    "base case",
+    "bull scenario",
+    "bear scenario",
+    "base scenario",
+    "upside case",
+    "downside case",
+    "bull and bear",
+    "bull/bear",
+    "bull bear base",
+    "scenarios for",
+    "investment scenario",
+    "price target scenario",
+    "upside downside",
+    "scenario analysis",
+    "three scenarios",
+    "3 scenarios",
+]
+
+
+def detect_scenario_query(state):
+    """
+    Detect if the query is asking for Bull / Bear / Base scenario analysis.
+
+    This node is chained AFTER detect_alpha_query so that alpha queries are
+    handled first; scenario detection only fires when alpha_mode is False.
+
+    Returns:
+        scenario_mode: True   → graph routes to scenario_retrieve
+        scenario_mode: False  → graph routes normally
+    """
+    logger.info("=" * 80)
+    logger.info(" SCENARIO QUERY DETECTION")
+    logger.info("=" * 80)
+
+    # If alpha mode already active, skip scenario detection
+    if state.get("alpha_mode", False):
+        logger.warning(" Alpha mode active – skipping scenario detection")
+        logger.info("=" * 80 + "\n")
+        return {"scenario_mode": False}
+
+    messages = state["messages"]
+    question = messages[-1].content.lower()
+
+    is_scenario_query = any(pattern in question for pattern in SCENARIO_PATTERNS)
+
+    if is_scenario_query:
+        logger.info(" SCENARIO MODE ACTIVATED")
+        logger.info(f"   Query: {question}")
+
+        # Resolve ticker from state (set by portfolio/session context)
+        ticker = state.get("ticker")
+        company_filter = state.get("company_filter", [])
+
+        if not ticker and company_filter:
+            ticker = company_filter[0].upper()
+
+        if not ticker:
+            # Fallback: extract from the raw question text (checks known
+            # tickers/company names before falling back to a weak guess —
+            # see _extract_ticker_from_free_text for why the naive "first
+            # short all-caps word" approach is unreliable on its own).
+            ticker = _extract_ticker_from_free_text(question)
+
+        if not ticker:
+            ticker = "UNKNOWN"
+
+        logger.info(f"   Target ticker: {ticker}")
+        logger.info("=" * 80 + "\n")
+        return {
+            "scenario_mode": True,
+            "ticker": ticker,
+            "scenario_data": {},
+            "scenario_report": ""
+    }
+    else:
+        logger.info(" Normal query (not a Scenario request)")
+        logger.info("=" * 80 + "\n")
+        return {"scenario_mode": False}
+
+
+def scenario_data_retrieve(state):
+    """
+    Retrieve data for Bull / Bear / Base scenario analysis using Tavily web search.
+
+    Data buckets collected:
+      1. analyst_data   – ratings, price targets, brokerage views
+      2. valuation_data – P/E, EV/EBITDA, DCF, historical valuation
+      3. catalyst_data  – growth drivers, new products, market expansion
+      4. risk_data      – downside risks, competition, regulatory
+      5. credit_data    – S&P, Moody's, Fitch, DBRS rating commentary
+      6. macro_data     – sector trends, interest rates, macro environment
+    """
+    logger.info("=" * 80)
+    logger.info(" SCENARIO DATA RETRIEVAL (Web-Search Only)")
+    logger.info("=" * 80)
+
+    ticker = state.get("ticker", "UNKNOWN").upper()
+    logger.info(f" Target: {ticker}\n")
+
+    # The user's own wording is the period reference for the wrong-year guard; the queries
+    # below are built from the ticker and carry no period of their own.
+    _msgs = state.get("messages") or []
+    _user_question = getattr(_msgs[-1], "content", "") if _msgs else ""
+
+    web_search_tool = TavilySearch(
+        max_results=4,
+        include_raw_content=True,
+        include_domains=SCENARIO_SEARCH_DOMAINS,
+    )
+
+    scenario_data = {
+        "analyst_data": [],
+        "valuation_data": [],
+        "catalyst_data": [],
+        "risk_data": [],
+        "credit_data": [],
+        "macro_data": []
+    }
+
+    # -------------------------------------------------------------------------
+    # 1. Analyst Ratings & Brokerage Price Targets
+    # -------------------------------------------------------------------------
+    logger.info(" [1/6] Analyst ratings & brokerage price targets")
+    _s_yr = datetime.now().year
+    analyst_queries = [
+        f"{ticker} analyst rating consensus buy sell hold price target {_s_yr}",
+        f"{ticker} Goldman Sachs Morgan Stanley JPMorgan BofA Citi analyst recommendation",
+        f"{ticker} Wells Fargo Barclays UBS Bernstein Wolfe Evercore analyst price target",
+        f"{ticker} analyst upgrade downgrade rating change latest",
+    ]
+    for q in analyst_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
+            for s in sources:
+                scenario_data["analyst_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"]
+    })
+        except Exception as e:
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['analyst_data'])} analyst sources collected")
+
+    # -------------------------------------------------------------------------
+    # 2. Valuation Metrics
+    # -------------------------------------------------------------------------
+    logger.info(" [2/6] Valuation metrics")
+    valuation_queries = [
+        f"{ticker} P/E ratio EV/EBITDA price to sales valuation {_s_yr}",
+        f"{ticker} fair value DCF intrinsic value analyst estimate",
+    ]
+    for q in valuation_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
+            for s in sources:
+                scenario_data["valuation_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"]
+    })
+        except Exception as e:
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['valuation_data'])} valuation sources collected")
+
+    # -------------------------------------------------------------------------
+    # 3. Growth Catalysts (Bull drivers)
+    # -------------------------------------------------------------------------
+    logger.info(" [3/6] Growth catalysts & bull drivers")
+    catalyst_queries = [
+        f"{ticker} growth drivers catalysts bullish case upside {_s_yr} {_s_yr + 1}",
+        f"{ticker} new product launch market expansion revenue growth opportunity",
+        f"{ticker} competitive advantage pricing power margin expansion",
+    ]
+    for q in catalyst_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
+            for s in sources:
+                scenario_data["catalyst_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"]
+    })
+        except Exception as e:
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['catalyst_data'])} catalyst sources collected")
+
+    # -------------------------------------------------------------------------
+    # 4. Downside Risks (Bear drivers)
+    # -------------------------------------------------------------------------
+    logger.info(" [4/6] Downside risks & bear headwinds")
+    risk_queries = [
+        f"{ticker} risks headwinds bearish case downside {_s_yr}",
+        f"{ticker} competition market share loss regulatory risk",
+        f"{ticker} margin compression debt leverage concern analyst warning",
+    ]
+    for q in risk_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
+            for s in sources:
+                scenario_data["risk_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"]
+    })
+        except Exception as e:
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['risk_data'])} risk sources collected")
+
+    # -------------------------------------------------------------------------
+    # 5. Credit Ratings
+    # -------------------------------------------------------------------------
+    logger.info(" [5/6] Credit rating agency reports")
+    credit_queries = [
+        f"{ticker} credit rating S&P Moody's Fitch rating outlook {_s_yr}",
+        f"{ticker} bond rating investment grade speculative debt outlook",
+    ]
+    for q in credit_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
+            for s in sources:
+                scenario_data["credit_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"]
+    })
+        except Exception as e:
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['credit_data'])} credit sources collected")
+
+    # -------------------------------------------------------------------------
+    # 6. Macro & Sector Environment
+    # -------------------------------------------------------------------------
+    logger.info(" [6/6] Macro & sector environment")
+    macro_queries = [
+        f"{ticker} sector macro outlook interest rate impact {_s_yr}",
+        f"{ticker} industry trends tailwinds headwinds economic environment",
+    ]
+    for q in macro_queries:
+        try:
+            results = web_search_tool.invoke({"query": q})
+            sources = _drop_period_mismatches(_user_question, _parse_tavily_response(results, q))
+            for s in sources:
+                scenario_data["macro_data"].append({
+                    "title": s["title"],
+                    "url": s["url"],
+                    "content": s["content"]
+    })
+        except Exception as e:
+            logger.error(f"    Warning: {e}")
+    logger.info(f"    {len(scenario_data['macro_data'])} macro sources collected")
+
+    total = sum(len(v) for v in scenario_data.values())
+    logger.info(f"\n Retrieval complete: {total} total sources across 6 buckets")
+    logger.info("=" * 80 + "\n")
+
+    return {"scenario_data": scenario_data}
+
+
+async def scenario_load_notes(state, config=None):
+    """Scenario branch: load the user's own notes for this ticker (the scenario nodes are sync, so the async lookup
+    lives in its own node). Always sets `analyst_notes`, even to [], so nothing stale carries over."""
+    ticker = (state.get("ticker") or "").upper()
+    notes = await _analyst_note_documents(config, [ticker] if ticker else [], f"{ticker} bull base bear case price target thesis catalysts risks")
+    return {"analyst_notes": notes}
+
+
+def scenario_generate_report(state):
+    """
+    Generate the final Bull / Bear / Base scenario report from collected web data.
+
+    Steps:
+      1. Format each data bucket into readable text
+      2. Run Bull / Bear / Base case chains in sequence
+      3. Run the combiner chain to produce the final markdown report
+      4. Return as AIMessage for show_result compatibility
+    """
+    logger.info("=" * 80)
+    logger.info(" SCENARIO REPORT GENERATION")
+    logger.info("=" * 80 + "\n")
+
+    ticker = state.get("ticker", "UNKNOWN").upper()
+    scenario_data = state.get("scenario_data", {})
+
+    from langchain_openai import ChatOpenAI
+    from rag.prompts.prompts import (
+        get_scenario_bull_chain,
+        get_scenario_bear_chain,
+        get_scenario_base_chain,
+        get_scenario_report_combiner_chain,
+    )
+
+    llm = get_llm("analysis", temperature=0)
+
+    def _format_bucket(bucket_key, budget=_SCENARIO_BUCKET_TOKENS):
+        """
+        Format a data bucket into one string. The same article often comes back for
+        several queries, so each URL is kept once. Entries are kept whole and the
+        bucket is held to a token budget (lowest-ranked entries dropped first), so no
+        source is cut mid-text and no bucket is silently capped at a fixed item count.
+        """
+        items = scenario_data.get(bucket_key, [])
+        if not items:
+            return "No data available from web search."
+        seen, unique = set(), []
+        for item in items:
+            key = item.get("url") or item.get("title", "")
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        parts = [
+            f"**{item.get('title', 'Source')}**\n{item.get('url', '')}\n{item.get('content', '')}"
+            for item in unique
+        ]
+        kept, dropped, _ = _fit_texts_to_token_budget(parts, budget=budget)
+        if dropped:
+            logger.info(f"    {bucket_key}: {dropped} lower-ranked source(s) dropped to fit the token budget")
+        return "\n\n---\n\n".join(parts[i] for i in kept)
+
+    analyst_text = _format_bucket("analyst_data")
+    notes_text = _analyst_notes_text(state)
+    if notes_text:
+        # Prepended AFTER the bucket's token budget is applied, so the user's notes are never the part that gets dropped.
+        analyst_text = (
+            "=== THE USER'S OWN ANALYST NOTES (their views and estimates, NOT market consensus and NOT company "
+            "disclosures: weigh them as one input and attribute them as the user's view) ===\n"
+            f"{notes_text}\n\n=== MARKET ANALYST DATA (web) ===\n{analyst_text}"
+        )
+    valuation_text = _format_bucket("valuation_data")
+    catalyst_text = _format_bucket("catalyst_data")
+    risk_text = _format_bucket("risk_data")
+    credit_text = _format_bucket("credit_data")
+    macro_text = _format_bucket("macro_data")
+
+    # ── Bull Case ─────────────────────────────────────────────────────────────
+    logger.info(" Generating Bull Case...")
+    bull_result = None
+    try:
+        bull_chain = get_scenario_bull_chain(llm)
+        bull_result = bull_chain.invoke({
+            "ticker": ticker,
+            "analyst_data": analyst_text,
+            "valuation_data": valuation_text,
+            "catalyst_data": catalyst_text
+    })
+        logger.info(f"    Bull target: {bull_result.price_target}  upside: {bull_result.upside_downside}")
+    except Exception as e:
+        logger.error(f"    Error: {e}")
+
+    # ── Bear Case ─────────────────────────────────────────────────────────────
+    logger.info(" Generating Bear Case...")
+    bear_result = None
+    try:
+        bear_chain = get_scenario_bear_chain(llm)
+        bear_result = bear_chain.invoke({
+            "ticker": ticker,
+            "analyst_data": analyst_text,
+            "risk_data": risk_text,
+            "credit_data": credit_text
+    })
+        logger.info(f"    Bear target: {bear_result.price_target}  downside: {bear_result.upside_downside}")
+    except Exception as e:
+        logger.error(f"    Error: {e}")
+
+    # ── Base Case ─────────────────────────────────────────────────────────────
+    logger.info(" Generating Base Case...")
+    base_result = None
+    try:
+        base_chain = get_scenario_base_chain(llm)
+        base_result = base_chain.invoke({
+            "ticker": ticker,
+            "analyst_data": analyst_text,
+            "valuation_data": valuation_text,
+            "macro_data": macro_text
+    })
+        logger.info(f"    Base target: {base_result.price_target}  return: {base_result.upside_downside}")
+    except Exception as e:
+        logger.error(f"    Error: {e}")
+
+    def _fmt_list(lst):
+        if not lst:
+            return "N/A"
+        return "\n".join(f"• {item}" for item in lst)
+
+    # Fallback defaults if any case failed
+    def _safe(result, field, default="N/A"):
+        if result is None:
+            return default
+        return getattr(result, field, default) or default
+
+    # ── Cross-case sanity checks ──────────────────────────────────────────────
+    # Bull/Bear/Base run as three INDEPENDENT LLM calls with no visibility into
+    # each other's output, so nothing enforces bull >= base >= bear price
+    # targets or that the three probabilities sum to ~100% — both have been
+    # observed to drift (e.g. probabilities summing to 105%). Rather than
+    # silently trusting three uncoordinated numbers, check them here: rescale
+    # probabilities proportionally when they don't sum close to 100%, and flag
+    # (don't hide) an out-of-order price target set for the reader to verify.
+    def _parse_numeric(value):
+        if not value:
+            return None
+        cleaned = re.sub(r'[^0-9.]', '', str(value))
+        try:
+            return float(cleaned) if cleaned else None
+        except ValueError:
+            return None
+
+    scenario_warnings = []
+
+    bull_target_val = _parse_numeric(_safe(bull_result, "price_target"))
+    base_target_val = _parse_numeric(_safe(base_result, "price_target"))
+    bear_target_val = _parse_numeric(_safe(bear_result, "price_target"))
+
+    if None not in (bull_target_val, base_target_val, bear_target_val):
+        if not (bull_target_val >= base_target_val >= bear_target_val):
+            logger.warning(
+                "Scenario price targets out of expected order: bull=%s base=%s bear=%s",
+                bull_target_val, base_target_val, bear_target_val,
+            )
+            scenario_warnings.append(
+                f"**Note**: the generated price targets did not follow the expected "
+                f"bull ≥ base ≥ bear ordering (bull ${bull_target_val:g}, base ${base_target_val:g}, "
+                f"bear ${bear_target_val:g}) — cross-check against the underlying sources before relying on it."
+            )
+
+    bull_prob_str = _safe(bull_result, "probability")
+    base_prob_str = _safe(base_result, "probability")
+    bear_prob_str = _safe(bear_result, "probability")
+
+    bull_prob_val = _parse_numeric(bull_prob_str)
+    base_prob_val = _parse_numeric(base_prob_str)
+    bear_prob_val = _parse_numeric(bear_prob_str)
+
+    if None not in (bull_prob_val, base_prob_val, bear_prob_val):
+        total_prob = bull_prob_val + base_prob_val + bear_prob_val
+        if total_prob > 0 and abs(total_prob - 100) > 1:
+            scale = 100 / total_prob
+            bull_prob_str = f"{bull_prob_val * scale:.0f}%"
+            base_prob_str = f"{base_prob_val * scale:.0f}%"
+            bear_prob_str = f"{bear_prob_val * scale:.0f}%"
+            logger.warning(
+                "Scenario probabilities summed to %.0f%%, not 100%% — rescaled to bull %s, base %s, bear %s",
+                total_prob, bull_prob_str, base_prob_str, bear_prob_str,
+            )
+
+    # ── Combine into final report ─────────────────────────────────────────────
+    logger.info("\n Combining into final scenario report...")
+    final_report = ""
+    try:
+        combiner_chain = get_scenario_report_combiner_chain(llm)
+        final_report = combiner_chain.invoke({
+            "ticker": ticker,
+            # Bull
+            "bull_target": _safe(bull_result, "price_target"),
+            "bull_upside": _safe(bull_result, "upside_downside"),
+            "bull_probability": bull_prob_str,
+            "bull_drivers": _fmt_list(_safe(bull_result, "key_drivers", [])),
+            "bull_assumptions": _fmt_list(_safe(bull_result, "assumptions", [])),
+            "bull_analysis": _safe(bull_result, "analysis"),
+            # Base
+            "base_target": _safe(base_result, "price_target"),
+            "base_upside": _safe(base_result, "upside_downside"),
+            "base_probability": base_prob_str,
+            "base_drivers": _fmt_list(_safe(base_result, "key_drivers", [])),
+            "base_assumptions": _fmt_list(_safe(base_result, "assumptions", [])),
+            "base_analysis": _safe(base_result, "analysis"),
+            # Bear
+            "bear_target": _safe(bear_result, "price_target"),
+            "bear_upside": _safe(bear_result, "upside_downside"),
+            "bear_probability": bear_prob_str,
+            "bear_drivers": _fmt_list(_safe(bear_result, "key_drivers", [])),
+            "bear_assumptions": _fmt_list(_safe(bear_result, "assumptions", [])),
+            "bear_analysis": _safe(bear_result, "analysis"),
+            # Summaries
+            "analyst_summary": analyst_text or "N/A",
+            "credit_summary": credit_text or "N/A"
+    })
+        logger.info(f"    Final report: {len(final_report)} chars")
+    except Exception as e:
+        logger.error(f"    Error generating combined report: {e}")
+        final_report = (
+            f"# Bull / Bear / Base Scenario Analysis: {ticker}\n\n"
+            f"Error generating combined report: {e}\n\n"
+            f"**Bull Case**: Target {_safe(bull_result, 'price_target')} "
+            f"({_safe(bull_result, 'upside_downside')} upside)\n\n"
+            f"**Base Case**: Target {_safe(base_result, 'price_target')} "
+            f"({_safe(base_result, 'upside_downside')})\n\n"
+            f"**Bear Case**: Target {_safe(bear_result, 'price_target')} "
+            f"({_safe(bear_result, 'upside_downside')} downside)\n"
+        )
+
+    if scenario_warnings:
+        final_report += "\n\n---\n\n" + "\n\n".join(scenario_warnings)
+
+    logger.info("\n" + "=" * 80)
+    logger.info(" SCENARIO REPORT COMPLETE")
+    logger.info("=" * 80 + "\n")
+
+    return {
+        "messages": [AIMessage(content=final_report)],
+        "scenario_report": final_report,
+        "Intermediate_message": final_report,
+        "web_searched": True
+    }
+
+# ============================================================================
+# MACRO FRAMEWORK
+# ============================================================================
+
+def detect_macro_query(state):
+    """Detect if the query is asking for macroeconomic data."""
+    logger.info("=" * 80)
+    logger.info(" MACRO QUERY DETECTION")
+    logger.info("=" * 80)
+
+    # If alpha or scenario mode already active, skip macro detection
+    if state.get("alpha_mode", False) or state.get("scenario_mode", False):
+        logger.warning(" Higher priority mode active – skipping macro detection")
+        logger.info("=" * 80 + "\n")
+        return {"macro_mode": False}
+
+    messages = state["messages"]
+    question = messages[-1].content.lower()
+
+    # Simple keyword detection
+    macro_keywords = [
+        "macro", "gdp", "inflation", "cpi", "pce", "ppi", "eci",
+        "gross domestic product", "consumer price index", "employment cost",
+        "producer price index", "economy", "interest rate",
+        "yield curve", "yield spread", "treasury yield", "treasury curve",
+        "bond yield", "fed funds", "federal funds", "fedfunds",
+        "maturity", "10-year", "2-year", "30-year", "t-bill", "t-bond",
+        "unemployment", "unemployed", "unrate", "jobless rate", "jobless claims",
+        "labor market", "labour market", "jobs report", "nonfarm payroll",
+        "labor force participation", "labour force participation",
+        "u-1", "u1 rate", "u-2", "u2 rate", "u-3", "u-4", "u4 rate",
+        "u-5", "u5 rate", "u-6", "u6 rate", "underemployment", "underemployed",
+        "discouraged workers", "gave up looking for work", "marginally attached",
+        "participation rate", "labor force", "labour force",
+        "employment-population ratio", "employment to population",
+        "employment rate", "employment situation",
+        "job losers", "laid off", "involuntary job loss",
+        "broadest measure of unemployment", "real unemployment rate",
+        "true unemployment rate", "part-time for economic reasons",
+        "15 weeks or longer", "long-term unemployed", "long-term unemployment"
+    ]
+    
+    is_macro = any(kw in question for kw in macro_keywords)
+    
+    if is_macro:
+        logger.info(" MACRO MODE ACTIVATED")
+        logger.info(f"   Query: {question}")
+        logger.info("=" * 80 + "\n")
+        return {"macro_mode": True}
+    else:
+        logger.info(" Normal query (not a Macro request)")
+        logger.info("=" * 80 + "\n")
+        return {"macro_mode": False}
+
+def macro_analyze_query(state):
+    """
+    MACRO STEP 1: Understand the user's macro query.
+    
+    Uses an LLM to extract structured parameters from the natural language query:
+    - Which indicator(s) to fetch
+    - Time granularity (monthly vs quarterly)
+    - Specific periods (or 'latest' if none mentioned)
+    - Comparison type (YoY, QoQ/MoM)
+    
+    Output is fully inspectable in state['macro_analysis'] before any data is fetched.
+    """
+    logger.info("=" * 80)
+    logger.info(" MACRO STEP 1: QUERY ANALYSIS")
+    logger.info("=" * 80)
+    
+    messages = state["messages"]
+    question = messages[-1].content
+    
+    from pydantic import BaseModel, Field
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import SystemMessage, HumanMessage
+    
+    class MacroExtraction(BaseModel):
+        indicator: str = Field(description=(
+            "The macro indicator code. Valid keys are exactly: GDP, GDPCA, CPI, PCE, PPI, ECI, "
+            "FEDFUNDS, GS1M, GS3M, GS6M, GS1, GS2, GS3, GS5, GS7, GS10, GS20, GS30, "
+            "U1, U2, U3, U4, U5, U6, LFPR, EPOP, ALL, UNSUPPORTED.\n"
+            "String-to-key mapping for the alternative unemployment measures — match the user's "
+            "wording against this table, including close paraphrases of the same concept "
+            "(these examples are not exhaustive):\n"
+            "  'U-3' or 'U3' or 'official unemployment rate' or plain 'unemployment rate' -> key = U3\n"
+            "  'U-1' or 'U1' or '15 weeks or longer unemployed' or 'long-term unemployed' or "
+            "'long-term unemployment' -> key = U1\n"
+            "  'U-2' or 'U2' or 'job losers' or 'people who lost their job' or 'laid off' or "
+            "'involuntary job loss' (NOT people who quit or are reentering/new to the labor force) -> key = U2\n"
+            "  'U-4' or 'U4' or 'discouraged workers' or 'gave up looking for work' -> key = U4\n"
+            "  'U-5' or 'U5' or 'marginally attached' -> key = U5\n"
+            "  'U-6' or 'U6' or 'broadest measure of unemployment' or 'underemployment' or "
+            "'real unemployment rate' or 'true unemployment rate' or 'part-time for economic reasons' "
+            "-> key = U6\n"
+            "  'labor force participation rate' or 'participation rate' or people "
+            "'leaving'/'entering'/'dropping out of' the labor force -> key = LFPR\n"
+            "  'employment-population ratio' or 'employment rate' or 'share of people employed' -> key = EPOP\n"
+            "  IMPORTANT: 'employment rate' is EPOP (% employed), NOT the inverse of the unemployment "
+            "rate — if the user's phrasing is ambiguous between 'employment rate' meaning EPOP vs. "
+            "meaning 'how good is the job market' (i.e. really asking about unemployment), prefer U3 "
+            "unless they clearly mean the employed share of the population."
+        ))
+        period1: Optional[str] = Field(None, description=(
+            "The primary period. Use EXACT format from the user's query: "
+            "'Q1 2026' for quarters, 'January 2025' for months. "
+            "Leave None if no specific calendar date is named — this includes relative phrases like "
+            "'this month', 'last month', 'this quarter', 'latest', 'current', 'now'. "
+            "Never invent a calendar month/quarter/year from memory for these; the system resolves "
+            "'latest available' automatically. Only set this when the user names an actual date, e.g. "
+            "'March 2025' or 'Q2 2024'."
+        ))
+        period2: Optional[str] = Field(None, description=(
+            "The comparison period. Same format rules as period1. "
+            "Leave None to auto-calculate based on comparison_type."
+        ))
+        granularity: str = Field("native", description=(
+            "'annual' if user specifies a year (e.g. 2025), "
+            "'monthly' if user specifies months (January, Feb, etc.), "
+            "'quarterly' if user specifies quarters (Q1, Q2), "
+            "'native' if no specific period is mentioned (system uses the metric's default frequency)."
+        ))
+        comparison_type: str = Field("YoY", description=(
+            "The comparison type to use ('YoY', 'QoQ', or 'MoM'). "
+            "If the user does NOT explicitly specify a type: for GDP default to 'QoQ'; "
+            "for U1, U2, U3, U4, U5, U6, LFPR, EPOP default to 'MoM' (monthly labor-market series watched for near-term shifts); "
+            "for all others (CPI, ECI, etc) default to 'YoY'."
+        ))
+        duration: Optional[str] = Field(None, description=(
+            "The lookback window for an automatic trend chart (e.g., '12M', '5Y', '10Y'). "
+            "Default to None — most questions (including direct two-point comparisons like "
+            "'this month vs last month' or 'CPI in March vs April') should NOT get a chart, "
+            "since the two numbers are already shown inline. "
+            "Only set this (default '12M' unless the user names a window) when the question's wording "
+            "signals interest in the path over time, not just two points: 'trend', 'chart', 'plot', 'graph', "
+            "'history', 'over the past/last N months/years', 'how has X changed/evolved', 'trajectory'. "
+            "Leave as None when indicator is 'ALL'/'UNSUPPORTED', or for yield curve/yield spread queries "
+            "(those use their own chart types)."
+        ))
+
+    class MacroQueryPlan(BaseModel):
+        queries: List[MacroExtraction] = Field(description="List of macro queries to execute.")
+
+    planner_llm = get_llm("macro_planner")
+    structured_llm = planner_llm.with_structured_output(MacroQueryPlan)
+    
+    system_prompt = prompt_registry.apply("macro.planner", MACRO_PLANNER_SYSTEM_PROMPT)
+    
+    try:
+        plan = structured_llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=question)
+        ])
+        queries_list = [q.model_dump() for q in plan.queries]
+    except Exception as e:
+        logger.error(f"   ✗ Analysis failed: {e}. Falling back to ALL indicators.")
+        queries_list = [{"indicator": "ALL", "period1": None, "period2": None,
+                         "granularity": "native", "comparison_type": "YoY", "duration": None}]
+    
+    # Log the analysis for transparency
+    logger.info(f"   Extracted {len(queries_list)} query/queries:")
+    for i, q in enumerate(queries_list, 1):
+        logger.info(f"     [{i}] {q['indicator']} | {q['granularity']} | "
+              f"{q.get('period1', 'latest')} vs {q.get('period2', 'auto')} | {q['comparison_type']}")
+    
+    logger.info("=" * 80 + "\n")
+    
+    return {
+        "macro_analysis": {
+            "original_question": question,
+            "queries": queries_list
+        }
+    }
+
+
+def macro_fetch_and_calculate(state):
+    """
+    MACRO STEP 2: Fetch data and run deterministic calculations.
+    
+    This node is 100% deterministic Python — NO LLM involved.
+    Takes the structured analysis from Step 1, fetches the correct data
+    from local CSVs at the correct granularity, and computes the math.
+    
+    Rules enforced here (not by LLM):
+    - No date mentioned → uses latest available data, records actual period used
+    - Future/unavailable date → falls back to latest, records explicit warning
+    - Monthly granularity → skips quarterly aggregation, uses raw monthly values
+    """
+    logger.info("=" * 80)
+    logger.info(" MACRO STEP 2: FETCH & CALCULATE (deterministic)")
+    logger.info("=" * 80)
+    
+    from app.utils.macro_utils import get_macro_comparison, get_all_macro_latest
+    
+    analysis = state.get("macro_analysis", {})
+    queries = analysis.get("queries", [])
+    
+    calculation_results = []
+    
+    for i, q in enumerate(queries, 1):
+        indicator = q["indicator"].upper()
+        period1 = q.get("period1")
+        period2 = q.get("period2")
+        granularity = q.get("granularity") or "native"
+        comparison_type = q.get("comparison_type") or "YoY"
+        duration = q.get("duration")
+        
+        logger.info(f"   [{i}/{len(queries)}] {indicator} | {granularity} | "
+              f"{period1 or 'latest'} vs {period2 or 'auto'} | {comparison_type} | duration={duration}")
+        
+        if indicator == "ALL":
+            result = get_all_macro_latest(comparison_type=comparison_type)
+        else:
+            result = get_macro_comparison(
+                indicator=indicator,
+                period1=period1,
+                period2=period2,
+                comparison_type=comparison_type,
+                granularity=granularity
+            )
+        
+        # Log what actually happened
+        if "error" in result:
+            logger.error(f"       ✗ Error: {result['error']}")
+        else:
+            actual_p1 = result.get("period1", "N/A")
+            actual_p2 = result.get("period2", "N/A")
+            val1 = result.get("val1", "N/A")
+            val2 = result.get("val2", "N/A")
+            logger.info(f"       ✓ {actual_p1}={val1} vs {actual_p2}={val2}")
+            if "info" in result:
+                logger.info(f"       ⚠ Fallback: {result['info']}")
+                
+        # If a trend/duration was requested, fetch the historical data so the LLM can write a factual summary
+        if duration and indicator != "ALL":
+            from app.utils.macro_utils import load_indicator_data
+            import pandas as pd
+            df = load_indicator_data(indicator)
+            if df is not None and not df.empty:
+                df = df.sort_values(by="date")
+                duration_upper = duration.upper()
+                months = int(duration_upper[:-1]) if duration_upper.endswith("M") else (int(duration_upper[:-1]) * 12 if duration_upper.endswith("Y") else 12)
+                
+                latest_date = df['date'].max()
+                start_date = latest_date - pd.DateOffset(months=months)
+                df_history = df[df['date'] >= start_date]
+                
+                history_dict = {}
+                for _, row in df_history.iterrows():
+                    history_dict[row['date'].strftime('%Y-%m')] = row['value']
+                result["history_trend"] = history_dict
+        
+        calculation_results.append({
+            "requested": {
+                "indicator": indicator,
+                "period1": period1,
+                "period2": period2,
+                "granularity": granularity,
+                "comparison_type": comparison_type,
+                "duration": duration
+            },
+            "result": result
+        })
+    
+    # Post-process for Yield Spread (if exactly 2 rate queries)
+    if len(calculation_results) == 2:
+        res1 = calculation_results[0]["result"]
+        res2 = calculation_results[1]["result"]
+        
+        from app.utils.macro_utils import calculate_yield_spread
+        spread_info = calculate_yield_spread(res1, res2)
+        
+        if spread_info:
+            calculation_results.append({
+                "requested": {"special": "yield_spread_calculation"},
+                "result": spread_info
+            })
+
+    logger.info(f"\n   Completed {len(calculation_results)} calculation(s)")
+    logger.info("=" * 80 + "\n")
+    
+    return {"macro_calculation_results": calculation_results}
+
+
+def macro_format_answer(state):
+    """
+    MACRO STEP 3: Format the calculation results into a professional answer.
+    
+    Takes the deterministic calculation results from Step 2 and uses an LLM
+    ONLY for natural language formatting. The numbers are already computed
+    and final — the LLM cannot change them, only present them.
+    
+    Also handles yield curve chart generation if applicable.
+    """
+    logger.info("=" * 80)
+    logger.info(" MACRO STEP 3: FORMAT ANSWER")
+    logger.info("=" * 80)
+    
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
+    
+    analysis = state.get("macro_analysis", {})
+    question = analysis.get("original_question", "")
+    calc_results = state.get("macro_calculation_results", [])
+    
+    # Build data context from deterministic results
+    data_context = ""
+    for i, item in enumerate(calc_results, 1):
+        data_context += f"Query {i}:\n"
+        data_context += f"  Requested: {item['requested']}\n"
+        data_context += f"  Result: {item['result']}\n\n"
+    
+    # ──── Source Attribution: feed citation metadata to LLM ────
+    from app.utils.macro_utils import build_source_attribution_context
+    
+    attribution_text = build_source_attribution_context(calc_results)
+    if attribution_text:
+        data_context += attribution_text
+        logger.info("   Source attribution attached")
+
+    synthesis_prompt = prompt_registry.apply("macro.synthesis", MACRO_SYNTHESIS_PROMPT) + "\n\n" + MACRO_FEW_SHOT
+    
+    generator_llm = get_llm("macro_writer", temperature=0)
+    response = generator_llm.invoke([
+        SystemMessage(content=synthesis_prompt),
+        HumanMessage(content=f"Question: {question}\n\nCalculated Data:\n{data_context}")
+    ])
+    final_answer = response.content
+    logger.info(f"   Generated response: {len(final_answer)} chars")
+    
+    # Dynamic Chart Generation via Tag Parsing
+    chart_info = {"chart_url": None, "chart_filename": None}
+    
+    # Find any [CHART: ...] tag in the final answer
+    chart_tag_pattern = re.compile(r'\[CHART:(.*?)\]', re.IGNORECASE)
+    match = chart_tag_pattern.search(final_answer)
+    
+    if match:
+        tag_content = match.group(1)
+        # Parse key=value pairs, allowing for optional quotes
+        kv_pattern = re.compile(r'(\w+)=["\']?([^"\'\s\]]+)["\']?')
+        params = dict(kv_pattern.findall(tag_content))
+        
+        if "type" in params:
+            c_type = params["type"]
+            c_metrics = params.get("metrics", "").split(',') if params.get("metrics") else []
+            c_duration = params.get("duration", "12M")
+            c_period1 = params.get("period1")
+            c_period2 = params.get("period2")
+            
+            # Fallback to state queries if period parameters are not in the tag
+            if not c_period1 or not c_period2:
+                queries = analysis.get("queries", [])
+                for q in queries:
+                    if not c_period1 and q.get("period1"):
+                        c_period1 = q.get("period1")
+                    if not c_period2 and q.get("period2"):
+                        c_period2 = q.get("period2")
+            
+            logger.info(f"   Extracted CHART tag parameters: {params} | Resolved periods: period1={c_period1}, period2={c_period2}")
+            chart_info = generate_dynamic_chart(c_type, c_metrics, c_duration, c_period1, c_period2)
+            
+            if chart_info and chart_info.get("chart_url"):
+                md_image = f"\n![{c_type} chart]({chart_info['chart_url']})\n"
+                final_answer = final_answer[:match.start()] + md_image + final_answer[match.end():]
+            else:
+                # Remove the tag silently if generation fails
+                final_answer = final_answer[:match.start()] + final_answer[match.end():]
+        else:
+            # Tag malformed, remove it silently
+            final_answer = final_answer[:match.start()] + final_answer[match.end():]
+            
+    logger.info("=" * 80 + "\n")
+    
+    return {
+        "messages": [AIMessage(content=final_answer)],
+        "macro_report": final_answer,
+        "Intermediate_message": final_answer,
+        "chart_url": chart_info.get("chart_url"),
+        "chart_filename": chart_info.get("chart_filename")
+    }
+
+def generate_dynamic_chart(c_type: str, c_metrics: list, c_duration: str, period1: Optional[str] = None, period2: Optional[str] = None) -> dict:
+    """
+    Generate a dynamic macro chart based on type, metrics, and duration.
+    Returns a dict with 'chart_url' and 'chart_filename'.
+    """
+    try:
+        import plotly.graph_objects as go
+        import pandas as pd
+        import datetime
+        import os
+        from app.utils.macro_utils import load_indicator_data
+        
+        fig = go.Figure()
+        
+        def resolve_chart_dates(max_avail, period_str, duration_str):
+            end_dt = max_avail
+            if period_str:
+                try:
+                    from app.utils.macro_utils import parse_period_str
+                    gran = "quarterly" if "Q" in period_str.upper() else "monthly"
+                    p_end = parse_period_str(period_str, gran)
+                    parsed_end = p_end.to_timestamp(how='start')
+                    if parsed_end <= max_avail:
+                        end_dt = parsed_end
+                except Exception as ex:
+                    logger.error(f"Failed to parse chart end period {period_str}: {ex}")
+            
+            try:
+                if duration_str and duration_str.endswith("M"):
+                    months = int(duration_str[:-1])
+                    start_dt = end_dt - pd.DateOffset(months=months)
+                elif duration_str and duration_str.endswith("Y"):
+                    years = int(duration_str[:-1])
+                    start_dt = end_dt - pd.DateOffset(years=years)
+                else:
+                    start_dt = end_dt - pd.DateOffset(months=12)
+            except ValueError:
+                logger.error(f"Failed to parse duration {duration_str}, defaulting to 12M")
+                start_dt = end_dt - pd.DateOffset(months=12)
+                
+            return start_dt, end_dt
+        
+        if c_type == "yield_curve":
+            # For yield curve, we forward the specific periods to show snapshot comparison
+            return generate_yield_curve_chart(period1, period2)
+            
+        elif c_type == "spread_trend":
+            if len(c_metrics) < 2:
+                logger.info("spread_trend requires at least 2 metrics")
+                return {"chart_url": None, "chart_filename": None}
+                
+            df1 = load_indicator_data(c_metrics[0])
+            df2 = load_indicator_data(c_metrics[1])
+            
+            if df1 is None or df2 is None or df1.empty or df2.empty:
+                return {"chart_url": None, "chart_filename": None}
+                
+            # Base end_date on the max date found in either dataset to handle lagging/offline data gracefully
+            max_avail_date = max(df1['date'].max(), df2['date'].max())
+            start_date, end_date = resolve_chart_dates(max_avail_date, period1, c_duration)
+                
+            df1 = df1.set_index('date').sort_index()
+            df2 = df2.set_index('date').sort_index()
+            
+            # Combine the full datasets first, then forward-fill to align dates perfectly
+            df_combined = pd.concat([df1['value'], df2['value']], axis=1, keys=['val1', 'val2']).ffill()
+            
+            # Slice by start_date and end_date, then drop remaining NaNs (points before both series started)
+            df_combined = df_combined[(df_combined.index >= start_date) & (df_combined.index <= end_date)].dropna()
+            
+            if df_combined.empty:
+                logger.info("No overlapping data found in the specified duration")
+                return {"chart_url": None, "chart_filename": None}
+                
+            df_combined['spread'] = df_combined['val1'] - df_combined['val2']
+            
+            fig.add_trace(go.Scatter(
+                x=df_combined.index,
+                y=df_combined['spread'],
+                mode='lines',
+                name=f"{c_metrics[0]} - {c_metrics[1]} Spread",
+                line=dict(color='#d62728', width=3)
+            ))
+            
+            title = f"Yield Spread: {c_metrics[0]} minus {c_metrics[1]} ({c_duration})"
+            y_title = "Spread (%)"
+            
+        elif c_type == "historical_trend":
+            # Load each metric's DataFrame once and cache it — avoids double disk reads
+            loaded_dfs = {}
+            for metric in c_metrics:
+                df = load_indicator_data(metric)
+                if df is not None and not df.empty:
+                    loaded_dfs[metric] = df
+            
+            max_avail_date = max(df['date'].max() for df in loaded_dfs.values()) if loaded_dfs else pd.Timestamp.now()
+            start_date, end_date = resolve_chart_dates(max_avail_date, period1, c_duration)
+                
+            has_data = False
+            for metric, df in loaded_dfs.items():
+                # Filter and sort using the cached DataFrame
+                df_filtered = df[(df['date'] >= start_date) & (df['date'] <= end_date)].sort_values('date')
+                if not df_filtered.empty:
+                    fig.add_trace(go.Scatter(
+                        x=df_filtered['date'],
+                        y=df_filtered['value'],
+                        mode='lines',
+                        name=metric,
+                        line=dict(width=2)
+                    ))
+                    has_data = True
+            
+            if not has_data:
+                logger.info("No data found for any of the metrics in the specified duration")
+                return {"chart_url": None, "chart_filename": None}
+                
+            title = f"Historical Trend: {', '.join(c_metrics)} ({c_duration})"
+            y_title = "Value"
+            
+        else:
+            logger.info(f"Unknown chart type: {c_type}")
+            return {"chart_url": None, "chart_filename": None}
+            
+        fig.update_layout(
+            title=title,
+            xaxis_title="Date",
+            yaxis_title=y_title,
+            template="plotly_white",
+            height=500,
+            width=800,
+            hovermode="x unified"
+        )
+        
+        return _save_and_upload_chart(fig, c_type, width=800, height=500, label="Dynamic chart")
+        
+    except Exception as e:
+        logger.error(f"Dynamic chart generation error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"chart_url": None, "chart_filename": None}
+
+
+def generate_yield_curve_chart(period1: Optional[str] = None, period2: Optional[str] = None) -> dict:
+    """
+    Helper function to generate a Plotly yield curve chart for the specified period(s).
+    Plots maturities from 1-Month to 30-Year.
+    """
+    try:
+        import plotly.graph_objects as go
+        import datetime
+        import os
+        from app.utils.macro_utils import get_macro_comparison
+        
+        maturities = [
+            ("GS1M", "1M"),
+            ("GS3M", "3M"),
+            ("GS6M", "6M"),
+            ("GS1", "1Y"),
+            ("GS2", "2Y"),
+            ("GS3", "3Y"),
+            ("GS5", "5Y"),
+            ("GS7", "7Y"),
+            ("GS10", "10Y"),
+            ("GS20", "20Y"),
+            ("GS30", "30Y")
+        ]
+        
+        x_labels = []
+        y_val1 = []
+        y_val2 = []
+        
+        actual_period1 = None
+        actual_period2 = None
+        
+        for indicator, label in maturities:
+            res = get_macro_comparison(indicator, period1, period2)
+            if "error" not in res:
+                if not actual_period1:
+                    actual_period1 = res.get("period1")
+                if not actual_period2 and period2:
+                    actual_period2 = res.get("period2")
+                
+                x_labels.append(label)
+                y_val1.append(res["val1"])
+                if period2 and "val2" in res:
+                    y_val2.append(res["val2"])
+        
+        if not y_val1:
+            logger.info("No yield curve data found to plot")
+            return {"chart_url": None, "chart_filename": None}
+            
+        fig = go.Figure()
+        
+        # Add primary period line
+        fig.add_trace(go.Scatter(
+            x=x_labels,
+            y=y_val1,
+            mode='lines+markers',
+            name=str(actual_period1 or period1 or "Latest"),
+            line=dict(color='#1f77b4', width=3),
+            marker=dict(size=8, symbol='circle')
+        ))
+        
+        # Add secondary period line if present
+        if y_val2 and len(y_val2) == len(y_val1):
+            fig.add_trace(go.Scatter(
+                x=x_labels,
+                y=y_val2,
+                mode='lines+markers',
+                name=str(actual_period2 or period2),
+                line=dict(color='#ff7f0e', width=3, dash='dash'),
+                marker=dict(size=8, symbol='diamond')
+            ))
+            
+        title = "U.S. Treasury Yield Curve"
+        if actual_period2:
+            title += f": {actual_period1} vs {actual_period2}"
+        elif actual_period1:
+            title += f": {actual_period1}"
+            
+        fig.update_layout(
+            title=title,
+            xaxis_title="Maturity",
+            yaxis_title="Yield (%)",
+            template="plotly_white",
+            height=500,
+            width=800,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            hovermode="x unified"
+        )
+        
+        return _save_and_upload_chart(fig, "yield_curve", width=800, height=500, label="Yield curve chart")
+        
+    except Exception as e:
+        logger.error(f"Yield curve chart generation error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"chart_url": None, "chart_filename": None}
+

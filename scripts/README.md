@@ -151,8 +151,8 @@ QDRANT_URL=http://localhost:6333
 ### Log Files
 
 Logs are stored in:
-- **MCP Logs**: `logs/mcp/*.log`
-- **PID Files**: `logs/mcp/pids/*.pid`
+- **MCP Logs**: `data/logs/mcp/*.log`
+- **PID Files**: `data/logs/mcp/pids/*.pid`
 - **API Logs**: Console output
 
 ##  Troubleshooting
@@ -166,7 +166,7 @@ If you see messages like `WatchFiles detected changes` and the server keeps relo
 
 If using uvicorn directly, specify only the directories to watch:
 ```bash
-python -m uvicorn app.main:app --reload --reload-dir app --reload-dir rag --reload-dir quant --reload-dir schemas --reload-dir ingestion
+cd backend && python -m uvicorn app.main:app --reload --reload-dir app --reload-dir rag --reload-dir quant --reload-dir schemas --reload-dir ingestion
 ```
 
 This approach explicitly watches only your source code directories and completely avoids watching `venv/`.
@@ -204,7 +204,7 @@ python -m uvicorn app.main:app --port 8001
 ```bash
 # Activate venv and install
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 ```
 
 ### MCP Server Logs
@@ -214,7 +214,7 @@ pip install -r requirements.txt
 ./scripts/start_mcp_servers.sh logs
 
 # Or view specific log
-tail -f logs/mcp/stock_info.log
+tail -f data/logs/mcp/stock_info.log
 ```
 
 ##  Testing
@@ -337,7 +337,7 @@ After starting the API:
 -  **Health Check**: http://localhost:8000/health
 -  **Stock System**: http://localhost:8000/quant/health
 -  **Portfolios**: http://localhost:8000/portfolios
--  **Web UI**: Open `static/index.html` in browser
+-  **API docs**: http://localhost:8000/docs
 
 ---
 

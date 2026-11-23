@@ -9,8 +9,9 @@ REM Configuration
 set SCRIPT_DIR=%~dp0
 set PROJECT_ROOT=%SCRIPT_DIR%..
 set VENV_PATH=%PROJECT_ROOT%\venv
-set QUANT_DIR=%PROJECT_ROOT%\quant
-set LOG_DIR=%PROJECT_ROOT%\logs\mcp
+set BACKEND_DIR=%PROJECT_ROOT%\backend
+set QUANT_DIR=%BACKEND_DIR%\quant
+set LOG_DIR=%PROJECT_ROOT%\data\logs\mcp
 
 REM Create log directory if it doesn't exist
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
@@ -18,13 +19,13 @@ if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 REM Server Configurations
 REM 1. Stock Info
 set SERVER1_NAME=stock_info
-set SERVER1_DIR=yahoo-finance-mcp
+set SERVER1_DIR=yahoo_mcp
 set SERVER1_SCRIPT=server.py
 set SERVER1_PORT=8565
 
 REM 2. Technical Analysis
 set SERVER2_NAME=technical
-set SERVER2_DIR=Stock_Analysis
+set SERVER2_DIR=technical_mcp
 set SERVER2_SCRIPT=server_mcp.py
 set SERVER2_PORT=8566
 

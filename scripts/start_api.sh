@@ -24,7 +24,8 @@ NC='\033[0m'
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-VENV_PATH="$PROJECT_ROOT/venv"
+BACKEND_DIR="$PROJECT_ROOT/backend"
+VENV_PATH="$PROJECT_ROOT/venv"   # the virtualenv lives at the repo root, outside backend/
 API_PORT=8000
 
 # Parse arguments
@@ -127,7 +128,7 @@ check_dependencies() {
     
     if ! python -c "import fastapi" 2>/dev/null; then
         print_warning "Dependencies not installed. Installing..."
-        pip install -r "$PROJECT_ROOT/requirements.txt"
+        pip install -r "$BACKEND_DIR/requirements.txt"
         print_success "Dependencies installed"
     else
         print_success "Dependencies check passed"
@@ -204,13 +205,13 @@ start_api() {
     source "$VENV_PATH/bin/activate"
     
     # Navigate to project root
-    cd "$PROJECT_ROOT"
+    cd "$BACKEND_DIR"
     
     print_success "Starting server on http://localhost:$API_PORT"
     echo ""
     print_info "📚 API Documentation: http://localhost:$API_PORT/docs"
     print_info "🏥 Health Check: http://localhost:$API_PORT/health"
-    print_info "💡 Web UI: Open static/index.html in browser"
+    print_info "💡 API docs: http://localhost:$API_PORT/docs"
     echo ""
     
     # Start server
