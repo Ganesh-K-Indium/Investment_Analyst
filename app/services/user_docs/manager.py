@@ -115,9 +115,10 @@ async def sync_index(db: AsyncSession, doc: UserDocument, result: Optional[Dict[
     result = result or load_result(doc.id)
     if result is None:
         return doc
-    items = chunkmod.review_items(result)
+    items = chunkmod.review_items(result, doc.corrections or {})
     pending = chunkmod.pending_by_page(items, doc.corrections or {}, doc.confirmed or [])
-    pages = [p["page"] for p in result["pages"] if (p.get("text") or "").strip()]
+    skipped = chunkmod.skipped_pages(doc.confirmed or [])
+    pages = [p["page"] for p in result["pages"] if (p.get("text") or "").strip() and p["page"] not in skipped]
     policy = doc.index_policy or "after_review"
     meta = base_meta(doc, result)
     indexed = set(doc.indexed_pages or [])
@@ -139,9 +140,9 @@ async def sync_index(db: AsyncSession, doc: UserDocument, result: Optional[Dict[
         stats = dict(doc.stats or {})
         stats.setdefault("_stamps", {})[str(pg)] = stamp
         doc.stats = stats
-    # pages that fell back into review (policy changed) leave the index again
+    # pages that fell back into review (policy changed) or were skipped by a person leave the index again
     for pg in sorted(indexed):
-        if pg in pending and policy in ("after_review", "never"):
+        if pg in skipped or (pg in pending and policy in ("after_review", "never")):
             await store.delete_page(doc.id, pg)
             indexed.discard(pg)
     n_pending = sum(len(v) for v in pending.values())
@@ -268,10 +269,14 @@ async def _read_pdf(db: AsyncSession, doc: UserDocument, pdf: str, settings: Dic
     from app.docproc.engines.strategy import plan as plans
     d = settings["documents"]
     strategy = (doc.reading or {}).get("strategy") or d["reading_strategy"]
+    if force_vision and strategy == "economy":
+        strategy = "balanced"          # "read these pages better" needs a vision model, which economy never calls
     if d["local_only"]:
         strategy = "economy"
-    plan = plans.resolve({"escalate_below": d["escalate_below"], "token_cap": d["token_cap"],
+    plan = plans.resolve({"local_engine": d["local_engine"], "escalate_below": d["escalate_below"], "token_cap": d["token_cap"],
                           "models": [d["vision_model_primary"], d["vision_model_secondary"]]}, {"strategy": strategy})
+    if d["vision_model_primary"] == d["vision_model_secondary"]:
+        logger.warning("Vision readers for %s are the same model (%s): their agreement is weaker evidence than two different models", doc.id, d["vision_model_primary"])
     loop = asyncio.get_running_loop()
     state = {"stage": "reading", "done": 0, "total": 0}
 
@@ -299,12 +304,12 @@ async def _progress(doc_id: str, stage: str, done: int, total: int) -> None:
 # review
 # ---------------------------------------------------------------------------------------------------------------------
 
-async def apply_review(db: AsyncSession, doc: UserDocument, edits: Dict[str, Any], confirm: List[str], confirm_pages: List[int]) -> UserDocument:
+async def apply_review(db: AsyncSession, doc: UserDocument, edits: Dict[str, Any], confirm: List[str], confirm_pages: List[int], skip_pages: Optional[List[int]] = None, unskip_pages: Optional[List[int]] = None) -> UserDocument:
     """`edits` {item id: new value}; `confirm` item ids accepted as they are; `confirm_pages` accepts every pending item on those pages."""
     result = load_result(doc.id)
     if result is None:
         raise ValueError("This document has no extraction to review.")
-    items = {i["id"]: i for i in chunkmod.review_items(result)}
+    items = {i["id"]: i for i in chunkmod.review_items(result, doc.corrections or {})}
     bad = [k for k in list(edits) + list(confirm) if k not in items]
     if bad:
         raise KeyError(f"unknown review items: {bad[:5]}")
@@ -319,6 +324,13 @@ async def apply_review(db: AsyncSession, doc: UserDocument, edits: Dict[str, Any
         for k, it in items.items():
             if it["page"] == pg and k not in corr:
                 conf.add(k)
+    valid_pages = {p["page"] for p in result["pages"]}
+    for pg in skip_pages or []:
+        if pg not in valid_pages:
+            raise KeyError(f"unknown page: {pg}")
+        conf.add(f"{chunkmod.SKIP_PREFIX}{pg}")
+    for pg in unskip_pages or []:
+        conf.discard(f"{chunkmod.SKIP_PREFIX}{pg}")
     doc.corrections, doc.confirmed = corr, sorted(conf)
     flag_modified(doc, "corrections"); flag_modified(doc, "confirmed")
     await db.commit()
@@ -354,3 +366,20 @@ async def update_metadata(db: AsyncSession, doc: UserDocument, **fields: Any) ->
     if payload and doc.indexed_pages:
         await store.set_metadata(doc.id, payload)
     return doc
+
+
+INTERRUPTED = "Reading was interrupted (the server restarted or stopped while this file was being read). Nothing was lost: use Try again."
+
+
+async def recover_interrupted(db: AsyncSession) -> int:
+    """Called once at startup. Ingestion runs inside the API process, so a document left `queued` or `processing` by a restart has no job
+    behind it and would show "Reading" forever. Mark each as failed with a plain message so its owner can retry in one click (restarting
+    them automatically could loop forever on a file that crashes the server). Returns how many were found."""
+    rows = (await db.execute(select(UserDocument).where(UserDocument.status.in_(("queued", "processing"))))).scalars().all()
+    stale = [d for d in rows if d.id not in _jobs]
+    for d in stale:
+        d.status, d.stage, d.error = "failed", "failed", INTERRUPTED
+    if stale:
+        await db.commit()
+        logger.warning("Marked %d interrupted document(s) as failed so they can be retried: %s", len(stale), [d.id for d in stale])
+    return len(stale)

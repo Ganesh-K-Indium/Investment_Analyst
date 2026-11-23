@@ -1,5 +1,6 @@
 from types import SimpleNamespace as D
 
+from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage
 
 from app.services import app_settings
@@ -11,6 +12,9 @@ FW = {"id": "credit", "name": "Credit review", "triggers": ["leverage review"], 
 
 def cfg(**sections):
     return app_settings.use(resolver.resolve(sections))
+
+
+cfgs = cfg
 
 
 def st(q="what is revenue?", **kw):
@@ -124,3 +128,35 @@ def test_prompt_overrides_and_style():
     lst = registry.listing()
     assert {p["name"] for p in lst} == set(registry.EDITABLE) and all(p["default"].strip() for p in lst)
     assert "senior Investment Analyst" in prompts._generator_base_prompt(2026)
+
+
+def test_custom_framework_searches_filings_and_uploads_and_returns_documents(monkeypatch):
+    from types import SimpleNamespace as P
+    from rag.graph import nodes
+    from app.services import vectordb_manager as vm
+    from app.services.user_docs import store as udocs
+    from app.utils import company_mapping
+
+    async def fake_alpha(db, query, limit, year):
+        return [P(payload={"page_content": f"filing: {query[:20]}", "metadata": {"source_file": "AAPL_10-K.pdf"}})]       # raw points, as the real helper returns
+    async def fake_uploads(user_id, query, limit=6, **kw):
+        return [Document(page_content=f"upload: {query[:20]}", metadata={"source_file": "zeta.xlsx"})]
+    monkeypatch.setattr(nodes, "_alpha_vdb_search", fake_alpha)
+    monkeypatch.setattr(nodes, "_analyst_note_documents", lambda *a, **k: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr(vm, "get_vectordb_manager", lambda: P(get_instance=lambda t, create_if_missing=False: object()))
+    monkeypatch.setattr(company_mapping, "get_most_recent_filed_fiscal_year", lambda t: 2025)
+    monkeypatch.setattr(udocs, "search", fake_uploads)
+    fw = {**FW, "sources": ["filings", "uploads"]}
+    state = st("run it", custom_module=fw, ticker="AAPL")
+    cfg = {"configurable": {"user_id": "7"}}
+    import asyncio as aio
+    with cfgs(retrieval={"sources": ["filings", "uploads", "notes"]}):
+        out = aio.run(extras.custom_retrieve(state, cfg))
+    assert set(out["custom_sections"]) == {"Leverage", "Liquidity"} and all(len(v) == 2 for v in out["custom_sections"].values())
+    assert all(isinstance(d, Document) for d in out["documents"]) and {d.metadata["source_file"] for d in out["documents"]} == {"AAPL_10-K.pdf", "zeta.xlsx"}
+    with cfgs(retrieval={"sources": ["uploads"]}):                      # the user switched filings off: only uploads are searched
+        out = aio.run(extras.custom_retrieve(state, cfg))
+    assert {d.metadata["source_file"] for d in out["documents"]} == {"zeta.xlsx"}
+    fake_llm = type("L", (), {"invoke": lambda self, m: P(content="REPORT")})()
+    monkeypatch.setattr(app_settings, "get_llm", lambda role, **k: fake_llm)
+    assert extras.custom_generate({**state, **out})["Intermediate_message"] == "REPORT"

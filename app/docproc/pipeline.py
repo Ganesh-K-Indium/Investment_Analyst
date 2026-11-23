@@ -29,7 +29,7 @@ from app.docproc.services.reading import ocr, pdf_pages, router, tess
 
 logger = logging.getLogger("app.docproc.pipeline")
 
-TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
+TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"      # built-in templates ship next to this module
 PAGE_CONCURRENCY = 4
 AUTO, DISCOVER = "auto", "discover"
 

@@ -256,3 +256,95 @@ def test_documents_agent_builds_and_tools_refuse_without_a_user():
     assert asyncio.run(da.create_documents_agent()) is not None
     out = asyncio.run(da.search_my_documents.ainvoke({"query": "revenue"}, config={"configurable": {}}))
     assert "No signed-in user" in out
+
+
+def test_documents_left_mid_read_by_a_restart_are_marked_failed_and_retryable(db_and_doc):
+    make, _ = db_and_doc
+
+    async def go():
+        db, doc, _r = await make("after_review")
+        doc.status = "processing"
+        await db.commit()
+        assert await manager.recover_interrupted(db) == 1
+        assert doc.status == "failed" and "Try again" in doc.error
+        doc.status = "processing"
+        await db.commit()
+        manager._jobs[doc.id] = object()                       # a live job in this process is left alone
+        try:
+            assert await manager.recover_interrupted(db) == 0 and doc.status == "processing"
+        finally:
+            manager._jobs.pop(doc.id)
+    asyncio.run(go())
+
+
+def test_a_page_of_mostly_doubtful_lines_is_flagged_unreadable_and_can_be_skipped(db_and_doc):
+    make, fake = db_and_doc
+    r = _scan_result()
+    r["pages"][0]["lines"] = [{"text": f"gibberish {i}", "status": "review", "alternatives": [], "reason": "unsure"} for i in range(8)] + [{"text": "ok", "status": "agreed", "alternatives": [], "reason": None}]
+    assert ch.unreadable_pages(r) == {1: {"doubtful": 8, "lines": 9}}
+    r2 = _scan_result()                                                          # one doubtful line out of two: not unreadable
+    assert ch.unreadable_pages(r2) == {}
+    assert ch.skipped_pages(["p1:l0", "skip:3", "skip:x"]) == {3}
+
+    async def go():
+        db, doc, result = await make("after_review")
+        await manager.sync_index(db, doc, result)
+        assert doc.status == "needs_review" and sorted(fake.pages) == [2]
+        await manager.apply_review(db, doc, {}, [], [], skip_pages=[1])
+        assert doc.status == "ready" and doc.review_pending == 0 and sorted(fake.pages) == [2] and 1 not in doc.indexed_pages
+        with pytest.raises(KeyError):
+            await manager.apply_review(db, doc, {}, [], [], skip_pages=[9])
+        await manager.apply_review(db, doc, {}, [], [], unskip_pages=[1])         # changed their mind: the page is waiting for review again
+        assert doc.status == "needs_review" and doc.review_pending == 1
+    asyncio.run(go())
+
+
+def _statement_result(source, cell="880"):
+    rows = [["Cash", "1,200", "1,000"], ["Receivables", cell, "700"], ["Inventory", "500", "450"], ["Total current assets", "2,500", "2,150"]]
+    page = {"page": 1, "source": source, "text": "Balance sheet (in thousands)\nCash 1,200", "lines": [{"text": "x", "status": "agreed", "alternatives": [], "reason": None}],
+            "structure": {"blocks": [{"type": "table", "title": "Balance sheet", "columns": ["Item", "2025", "2024"], "rows": rows, "bbox": [0.1, 0.2, 0.9, 0.6]}], "layout": True},
+            "classification": {"type": "unknown", "label": "Balance sheet"}}
+    return {"pages": [page], "documents": [], "forms": [], "stats": {}}
+
+
+def test_a_scanned_statement_that_does_not_add_up_is_flagged_and_fixable():
+    r = _statement_result("ocr-local")
+    items = ch.review_items(r)
+    kinds = [(i["kind"], i["label"]) for i in items]
+    assert ("check", "A total does not add up") in kinds
+    cells = {i["id"]: i for i in items if i["kind"] == "cell"}
+    assert "t1.0[1].1" in cells and cells["t1.0[1].1"]["value"] == "880" and "Receivables" in cells["t1.0[1].1"]["label"]       # the damaged cell is offered
+    assert all(i["page"] == 1 for i in items)
+    # the table chunk says so in the passage itself, and carries the verdict
+    t = [c for c in ch.page_chunks(r, 1, META) if c["metadata"]["chunk_kind"] == "table"][0]
+    assert "do not add up" in t["text"] and t["metadata"]["arithmetic_check"] == "failed" and t["metadata"]["statement"] is None or t["metadata"]["arithmetic_check"] == "failed"
+    # a person corrects the digit: the arithmetic now holds, so the items go away and the chunk is clean
+    fixed = {"t1.0[1].1": {"original": "880", "value": "800"}}
+    assert ch.review_items(r, fixed) == []
+    t2 = [c for c in ch.page_chunks(r, 1, META, fixed) if c["metadata"]["chunk_kind"] == "table"][0]
+    assert "| Receivables | 800 | 700 |" in t2["text"] and t2["metadata"]["arithmetic_check"] == "passed" and "do not add up" not in t2["text"]
+
+
+def test_digital_and_native_tables_are_not_held_for_review_but_are_noted():
+    for source in ("text-layer", "native"):
+        r = _statement_result(source)
+        assert ch.review_items(r) == []                                   # an exact copy of the source: a mismatch is the document's own
+        t = [c for c in ch.page_chunks(r, 1, META) if c["metadata"]["chunk_kind"] == "table"][0]
+        assert t["metadata"]["arithmetic_check"] == "failed" and "do not add up" in t["text"]
+    clean = [c for c in ch.page_chunks(_statement_result("text-layer", "800"), 1, META) if c["metadata"]["chunk_kind"] == "table"][0]
+    assert clean["metadata"]["arithmetic_check"] == "passed"
+
+
+def test_arithmetic_items_hold_the_page_under_the_default_policy(db_and_doc):
+    make, fake = db_and_doc
+
+    async def go():
+        db, doc, _ = await make("after_review")
+        r = _statement_result("ocr-local")
+        manager.result_path("d1").write_text(json.dumps(r))
+        await manager.sync_index(db, doc, r)
+        assert doc.status == "needs_review" and fake.pages == {} and doc.review_pending >= 2
+        await manager.apply_review(db, doc, {"t1.0[1].1": "800"}, [], [])
+        assert doc.status == "ready" and sorted(fake.pages) == [1]
+        assert any("| Receivables | 800 |" in c["text"] for c in fake.pages[1])
+    asyncio.run(go())

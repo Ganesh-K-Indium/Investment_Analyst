@@ -36,8 +36,11 @@ async def persist(db: AsyncSession, user_id: str, tracker: UsageTracker) -> Dict
         db.add(UsageEvent(user_id=str(user_id), run_label=tracker.run_label[:200], role=role, model=model, prompt_tokens=p, completion_tokens=c, cost_usd=usd))
     if agg:
         await db.commit()
+    p, c = sum(v[0] for v in agg.values()), sum(v[1] for v in agg.values())
     s = tracker.summary()
-    return {"total_tokens": s["total_tokens"], "prompt_tokens": s["total_prompt_tokens"], "completion_tokens": s["total_completion_tokens"],
+    if not agg:                                   # nothing reported per role: fall back to the tracker's own totals
+        p, c = s["total_prompt_tokens"], s["total_completion_tokens"]
+    return {"total_tokens": p + c, "prompt_tokens": p, "completion_tokens": c,
             "estimated_cost_usd": round(total_cost, 4)}
 
 

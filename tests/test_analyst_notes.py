@@ -232,12 +232,17 @@ def _bare_db():
     return db
 
 
+def _prefetch_filter(db):
+    """The filter hybrid_search applies: it lives inside each prefetch (dense and BM25), not on the fused query."""
+    return db.async_qdrant_client.query_points.await_args.kwargs["prefetch"][0].filter
+
+
 def test_hybrid_search_without_extra_conditions_is_unchanged():
     db = _bare_db()
     asyncio.run(db.hybrid_search("q"))
-    assert db.async_qdrant_client.query_points.await_args.kwargs["query_filter"] is None
+    assert _prefetch_filter(db) is None
     asyncio.run(db.hybrid_search("q", content_type="text", years=[2024]))
-    flt = db.async_qdrant_client.query_points.await_args.kwargs["query_filter"]
+    flt = _prefetch_filter(db)
     assert [c.key for c in flt.must] == ["metadata.content_type", "metadata.year"]
 
 
@@ -245,7 +250,7 @@ def test_hybrid_search_ands_extra_conditions_onto_existing_ones():
     db = _bare_db()
     extra = svc.read_filter("u1", ["AAPL"])
     asyncio.run(db.hybrid_search("q", content_type="text", extra_conditions=[extra]))
-    flt = db.async_qdrant_client.query_points.await_args.kwargs["query_filter"]
+    flt = _prefetch_filter(db)
     assert flt.must[0].key == "metadata.content_type" and flt.must[1] is extra
 
 

@@ -78,6 +78,7 @@ from app.api.analysis_tasks import router as analysis_tasks_router
 from app.api.settings import router as settings_router
 from app.api.user_documents import router as user_documents_router
 from app.api.providers import router as providers_router
+from app.api.reading_engines import router as reading_engines_router
 from app.api.documents import router as documents_router
 from app.api.notes import router as notes_router
 import app.api.rag as rag_router_module
@@ -149,6 +150,13 @@ async def startup_event():
 
     logger.info("Initializing database...")
     init_db()
+    try:
+        from app.database.connection import SessionLocal
+        from app.services.user_docs import manager as user_docs_manager
+        async with SessionLocal() as _db:
+            await user_docs_manager.recover_interrupted(_db)
+    except Exception:
+        logger.exception("Could not check for interrupted document reads")
 
     agent_bundle = await AgentBundle().build()
     agent = agent_bundle.rag_agent
@@ -214,6 +222,7 @@ app.include_router(analysis_tasks_router)
 app.include_router(settings_router)
 app.include_router(user_documents_router)
 app.include_router(providers_router)
+app.include_router(reading_engines_router)
 app.include_router(documents_router)
 app.include_router(notes_router)
 

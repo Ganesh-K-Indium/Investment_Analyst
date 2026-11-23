@@ -179,21 +179,27 @@ async def review(doc_id: str, db: AsyncSession = Depends(get_db_session), user: 
         return {"items": [], "pages": [], "status": d.status}
     done = set(d.corrections or {}) | set(d.confirmed or [])
     items = []
-    for it in chunkmod.review_items(result):
+    for it in chunkmod.review_items(result, d.corrections or {}):
         fix = (d.corrections or {}).get(it["id"])
         items.append({**it, "resolved": it["id"] in done, "corrected_value": fix["value"] if fix else None})
+    skipped = chunkmod.skipped_pages(d.confirmed or [])
+    unreadable = chunkmod.unreadable_pages(result)
     by_page: Dict[int, int] = {}
     for it in items:
-        if not it["resolved"]:
+        if not it["resolved"] and it["page"] not in skipped:
             by_page[it["page"]] = by_page.get(it["page"], 0) + 1
     return {"status": d.status, "policy": d.index_policy, "pending": sum(by_page.values()), "items": items,
-            "pages": [{"page": p, "pending": by_page.get(p, 0), "indexed": p in (d.indexed_pages or [])} for p in range(1, d.pages + 1)]}
+            "pages": [{"page": p, "pending": by_page.get(p, 0), "indexed": p in (d.indexed_pages or []), "skipped": p in skipped,
+                       "unreadable": p in unreadable and p not in skipped, "doubtful_lines": unreadable.get(p, {}).get("doubtful"), "lines": unreadable.get(p, {}).get("lines")}
+                      for p in range(1, d.pages + 1)]}
 
 
 class ReviewBody(BaseModel):
     edits: Dict[str, str] = {}
     confirm: List[str] = []
     confirm_pages: List[int] = []
+    skip_pages: List[int] = []         # leave these pages out of search (a page too poor to read)
+    unskip_pages: List[int] = []
 
 
 @router.post("/{doc_id}/review")
@@ -202,7 +208,7 @@ async def apply_review(doc_id: str, body: ReviewBody, db: AsyncSession = Depends
     if d.status == "processing":
         raise HTTPException(409, "Wait until the document has been read.")
     try:
-        await manager.apply_review(db, d, body.edits, body.confirm, body.confirm_pages)
+        await manager.apply_review(db, d, body.edits, body.confirm, body.confirm_pages, body.skip_pages, body.unskip_pages)
     except KeyError as e:
         raise HTTPException(422, str(e).strip("'\""))
     except ValueError as e:

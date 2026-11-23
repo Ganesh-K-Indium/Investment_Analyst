@@ -70,11 +70,14 @@ async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str, 
                 result = await agent.ainvoke(inputs, config)
             else:
                 result = await stream_graph(agent, inputs, config, emit, _ANSWER_NODES)
-        tracker.record(
-            stage="graph_total", model="gpt-4o/gpt-4o-mini (all nodes)",
-            prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
-            total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - start,
-        )
+        # The per-role records (model registry callback) are the detail. The OpenAI callback's aggregate is only a fallback for runs
+        # where no role reported (a node still using a model built outside the registry): recording both would count every token twice.
+        if not any(e.stage != "graph_total" for e in tracker.entries):
+            tracker.record(
+                stage="graph_total", model="gpt-4o/gpt-4o-mini (all nodes)",
+                prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
+                total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - start,
+            )
     summary = tracker.summary()
     if db is not None and user_id is not None:
         try:

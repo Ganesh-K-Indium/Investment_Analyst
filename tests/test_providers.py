@@ -204,3 +204,18 @@ def test_discovery_of_models(client, monkeypatch):
     client.put("/providers/custom", json={"values": {"LLM_CUSTOM_BASE_URL": "http://localhost:1234/v1"}})
     assert client.get("/providers/custom/models").json()["models"] == ["m-a", "m-b"]
     assert client.get("/providers/anthropic/models").json()["models"] == []
+
+
+def test_usage_is_not_double_counted_when_roles_report():
+    from app.services import usage_ledger
+    from app.utils.usage_tracker import UsageTracker
+    t = UsageTracker(run_label="x")
+    t.record("generator", "gpt-4o-mini", 1000, 200)
+    t.record("router", "gpt-4o-mini", 500, 50)
+    t.record("graph_total", "all", 1500, 250)                       # the aggregate must not be added on top of the roles
+
+    class Db:
+        def add(self, *_): pass
+        async def commit(self): pass
+    out = asyncio.run(usage_ledger.persist(Db(), "1", t))
+    assert out["total_tokens"] == 1750 and out["prompt_tokens"] == 1500 and out["completion_tokens"] == 250

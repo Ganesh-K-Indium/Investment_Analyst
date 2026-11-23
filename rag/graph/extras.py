@@ -73,27 +73,53 @@ def route_workflow(state):
     return "normal"
 
 
+def _as_documents(points) -> List[Document]:
+    """Qdrant hits -> Documents (the search helpers return raw points)."""
+    out = []
+    for p in points or []:
+        payload = getattr(p, "payload", None) or {}
+        if payload.get("page_content"):
+            out.append(Document(page_content=payload["page_content"], metadata=dict(payload.get("metadata") or {})))
+    return out
+
+
 async def custom_retrieve(state, config=None):
-    """Search each section of the user's framework for the company in scope; the chunks are grouped by section for the writer."""
+    """Search each section of the user's framework in the sources the framework (and the user's settings) allow: the company's SEC filings,
+    the user's uploaded documents, and their notes. Chunks are grouped by section for the writer."""
     from rag.graph import nodes
     from app.services.vectordb_manager import get_vectordb_manager
     from app.utils.company_mapping import get_most_recent_filed_fiscal_year
     fw = state["custom_module"]
     question = state["messages"][-1].content
+    allowed = set(app_settings.get("retrieval", "sources", [])) & set(fw.get("sources") or ["filings", "uploads", "notes"])
     ticker = state.get("ticker") or next(iter(state.get("company_filter") or []), None) or nodes._extract_ticker_from_free_text(question)
     sections = fw.get("sections") or ["Overview"]
     limit = max(3, int(app_settings.get("retrieval", "top_k", 12)) // 2)
-    by_section: Dict[str, List[Document]] = {}
-    if ticker:
-        db = get_vectordb_manager().get_instance(ticker, create_if_missing=False)
-        year = get_most_recent_filed_fiscal_year(ticker)
-        results = await asyncio.gather(*[nodes._alpha_vdb_search(db, f"{fw['name']} {sec} {ticker}", limit, year) for sec in sections], return_exceptions=True)
-        for sec, res in zip(sections, results):
-            by_section[sec] = [] if isinstance(res, Exception) else list(res)
+    user_id = ((config or {}).get("configurable") or {}).get("user_id")
+    by_section: Dict[str, List[Document]] = {sec: [] for sec in sections}
+
+    if ticker and "filings" in allowed:
+        try:
+            db = get_vectordb_manager().get_instance(ticker, create_if_missing=False)
+            year = get_most_recent_filed_fiscal_year(ticker)
+            hits = await asyncio.gather(*[nodes._alpha_vdb_search(db, f"{fw['name']} {sec} {ticker}", limit, year) for sec in sections], return_exceptions=True)
+            for sec, res in zip(sections, hits):
+                if isinstance(res, Exception):
+                    logger.warning("Custom framework %s: filings search for %r failed: %s", fw["id"], sec, res)
+                else:
+                    by_section[sec].extend(_as_documents(res))
+        except Exception as e:  # a company with no filings collection must not break a framework that also has uploads or notes
+            logger.warning("Custom framework %s: no filings for %s (%s)", fw["id"], ticker, e)
+    if user_id and "uploads" in allowed:
+        from app.services.user_docs import store as udocs
+        hits = await asyncio.gather(*[udocs.search(user_id, f"{fw['name']} {sec} {question}", limit=max(2, limit // 2), doc_ids=state.get("document_ids") or None) for sec in sections], return_exceptions=True)
+        for sec, res in zip(sections, hits):
             if isinstance(res, Exception):
-                logger.warning("Custom framework %s: section %r search failed: %s", fw["id"], sec, res)
+                logger.warning("Custom framework %s: uploads search for %r failed: %s", fw["id"], sec, res)
+            else:
+                by_section[sec].extend(res)
     notes = []
-    if "notes" in (fw.get("sources") or ["notes"]) and "notes" in app_settings.get("retrieval", "sources", ["notes"]):
+    if "notes" in allowed:
         notes = await nodes._analyst_note_documents(config or {}, [ticker] if ticker else [], f"{fw['name']} {question}")
     flat = [d for docs in by_section.values() for d in docs]
     return {"documents": flat + notes, "ticker": ticker, "custom_sections": {k: [d.page_content for d in v] for k, v in by_section.items()}}
