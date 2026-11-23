@@ -31,9 +31,9 @@ instead of skipping them; --stop-on-error aborts the whole run on the first
 failure instead of continuing to the next file.
 
 Examples:
-    python ingestion/batch_ingest.py --manifest q3_10q_batch.json
-    python ingestion/batch_ingest.py --manifest q3_10q_batch.json --retry-failed
-    python ingestion/batch_ingest.py --dir ./10q_filings/AAPL --ticker AAPL --filing-type 10-Q
+    python -m ingestion.batch_ingest --manifest q3_10q_batch.json
+    python -m ingestion.batch_ingest --manifest q3_10q_batch.json --retry-failed
+    python -m ingestion.batch_ingest --dir ./10q_filings/AAPL --ticker AAPL --filing-type 10-Q
 """
 
 import argparse

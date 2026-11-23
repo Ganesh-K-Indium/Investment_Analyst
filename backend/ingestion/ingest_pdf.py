@@ -3,10 +3,10 @@
 Simple PDF Ingestion Script
 
 Usage:
-    python ingest_pdf.py <pdf_file_path> [ticker]
+    python -m ingestion.ingest_pdf <pdf_file_path> [ticker]
 
 Example:
-    python ingest_pdf.py /path/to/apple_10k.pdf AAPL
+    python -m ingestion.ingest_pdf /path/to/apple_10k.pdf AAPL
 """
 
 import sys

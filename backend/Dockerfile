@@ -30,6 +30,9 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 # until it fills up or the process exits.
 ENV PYTHONUNBUFFERED=1
 
+# The MCP servers run from their own folders and import the `app` package, so put the code root on the path.
+ENV PYTHONPATH=/app
+
 # Explicit Tesseract binary path - overridable via ECS task definition env vars
 # Debian slim puts tesseract at /usr/bin/tesseract
 ENV TESSERACT_CMD=/usr/bin/tesseract

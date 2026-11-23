@@ -1,6 +1,6 @@
 """
 Form4 Transaction Verifier
-Usage: python check_form4.py <TICKER>
+Usage: python -m scripts.check_form4 <TICKER>
 Prints a full breakdown of all insider transactions for the ticker so you can
 verify it against the AI-generated report.
 """
@@ -170,8 +170,8 @@ def summarise(ticker: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python check_form4.py <TICKER>")
-        print("Example: python check_form4.py COP")
+        print("Usage: python -m scripts.check_form4 <TICKER>")
+        print("Example: python -m scripts.check_form4 COP")
         sys.exit(1)
 
     summarise(sys.argv[1])
