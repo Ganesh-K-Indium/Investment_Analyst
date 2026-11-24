@@ -21,6 +21,7 @@ from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.services.vectordb_manager import get_vectordb_manager
 from app.utils.company_mapping import get_ticker
 from app.utils.time import to_iso_z
+from app.utils import run_progress
 from app.utils.usage_tracker import track_usage
 from app.services import app_settings, usage_ledger, llm_providers, run_context
 from app.services.graph_stream import stream_graph
@@ -785,7 +786,7 @@ async def alpha_core(
         semaphore = asyncio.Semaphore(_ALPHA_TICKER_CONCURRENCY)
         total = len(resolved_tickers)
 
-        async def _run_one(index: int, ticker: str) -> dict:
+        async def _run_ticker(index: int, ticker: str) -> dict:
             async with semaphore:
                 logger.info("Running ALPHA for ticker: %s", ticker)
 
@@ -824,6 +825,15 @@ async def alpha_core(
                     await on_ticker_done(ticker, index, total)
 
                 return {"ticker": ticker, "report": report, "usage": usage_summary}
+
+        async def _run_one(index: int, ticker: str) -> dict:
+            # Steps reported while this ticker runs belong to its own lane (live progress; no-ops without a background run).
+            with run_progress.lane(ticker):
+                return await _run_ticker(index, ticker)
+
+        # Every ticker's checklist exists from the start, so tickers still waiting on the semaphore show as queued.
+        for ticker in resolved_tickers:
+            run_progress.register_lane(ticker, ticker, run_progress.alpha_plan())
 
         results = await asyncio.gather(
             *(_run_one(i, ticker) for i, ticker in enumerate(resolved_tickers))

@@ -22,6 +22,7 @@ from rag.prompts.prompts import (get_rag_chain,
                                                           MACRO_SYNTHESIS_PROMPT,
                                                           MACRO_FEW_SHOT)
 from rag.vectordb.client import load_vector_database
+from app.utils import run_progress
 from app.utils.company_mapping import get_ticker, TICKER_TO_COMPANY, get_company_name as map_ticker_to_company, get_company_aliases, get_extra_web_domains
 from app.utils.filing_types import (
     ANNUAL_FILING_TYPES, EVENT_FILING_TYPES, group_filing_types,
@@ -2815,6 +2816,12 @@ def _format_alpha_docs(docs, ticker: str) -> str:
     return "\n\n---\n\n".join(parts[k] for k in kept_idx)
 
 
+def _alpha_sources_detail(alpha_dimensions, key) -> str:
+    """'12 sources' for the live progress panel (how much a dimension's retrieval found)."""
+    n = len(alpha_dimensions.get(key, {}).get('documents', []))
+    return f"{n} source{'' if n == 1 else 's'}" if n else "No sources found"
+
+
 async def alpha_dimension_retrieve(state, config=None):
     """
     Retrieve dimension-specific data for ALPHA Framework.
@@ -2923,6 +2930,7 @@ async def alpha_dimension_retrieve(state, config=None):
     # -------------------------------------------------------------------------
     # ALIGNMENT: VectorDB (MD&A, Governance) + Form4 Insider Trading
     # -------------------------------------------------------------------------
+    run_progress.start("read.alignment")
     logger.info(" [1/5] Alignment (Stakeholder Interests) - VectorDB + Form4 Insider Data")
     try:
         db_instance = vectordb_mgr.get_instance(ticker, create_if_missing=False)
@@ -3016,9 +3024,12 @@ async def alpha_dimension_retrieve(state, config=None):
         logger.error(f"    Error: {e}")
         alpha_dimensions['alignment'] = {'source': 'vectordb+form4', 'documents': [], 'query_count': 0}
     
+    run_progress.finish("read.alignment", detail=_alpha_sources_detail(alpha_dimensions, 'alignment'))
+
     # -------------------------------------------------------------------------
     # LIQUIDITY: VectorDB (risk factors) + Web (latest FDIC / govt macro data)
     # -------------------------------------------------------------------------
+    run_progress.start("read.liquidity")
     logger.info(" [2/5] Liquidity (Macro/Micro Environment) - VectorDB + Govt Sources")
     try:
         # VectorDB: Risk factors, commodity exposure
@@ -3098,9 +3109,12 @@ async def alpha_dimension_retrieve(state, config=None):
         logger.error(f"    Error: {e}")
         alpha_dimensions['liquidity'] = {'source': 'vectordb+govt', 'documents': [], 'query_count': 0}
     
+    run_progress.finish("read.liquidity", detail=_alpha_sources_detail(alpha_dimensions, 'liquidity'))
+
     # -------------------------------------------------------------------------
     # PERFORMANCE: VectorDB only (current year 10-K vs prior 2 years for comparison)
     # -------------------------------------------------------------------------
+    run_progress.start("read.performance")
     logger.info(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
     try:
         _prior_yr, _prior_yr2 = _cur_yr - 1, _cur_yr - 2
@@ -3146,9 +3160,12 @@ async def alpha_dimension_retrieve(state, config=None):
         logger.error(f"    Error: {e}")
         alpha_dimensions['performance'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
     
+    run_progress.finish("read.performance", detail=_alpha_sources_detail(alpha_dimensions, 'performance'))
+
     # -------------------------------------------------------------------------
     # HORIZON: SeekingAlpha only (trends, competitive positioning, moat)
     # -------------------------------------------------------------------------
+    run_progress.start("read.horizon")
     logger.info(" [4/5] Horizon (Structural Opportunity & Moat) - SeekingAlpha")
     try:
         horizon_queries = [
@@ -3206,9 +3223,12 @@ async def alpha_dimension_retrieve(state, config=None):
         logger.error(f"    Error: {e}")
         alpha_dimensions['horizon'] = {'source': 'seekingalpha', 'documents': [], 'query_count': 0}
     
+    run_progress.finish("read.horizon", detail=_alpha_sources_detail(alpha_dimensions, 'horizon'))
+
     # -------------------------------------------------------------------------
     # ACTION: Web (RSI, SMA200, price, P/E, EBITDA) — all from trusted sources
     # -------------------------------------------------------------------------
+    run_progress.start("read.action")
     logger.info(" [5/5] Action (RSI / SMA200 / Price / P/E / EBITDA) - Web")
     try:
         action_docs = []
@@ -3346,6 +3366,8 @@ async def alpha_dimension_retrieve(state, config=None):
             'query_count': 0
         }
     
+    run_progress.finish("read.action", detail=_alpha_sources_detail(alpha_dimensions, 'action'))
+
     logger.info("\n" + "="*80)
     logger.info(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total chunks")
     logger.info("="*80 + "\n")
@@ -3406,6 +3428,7 @@ def alpha_generate_report(state):
     
     for dim_key, chain_func, dim_name in dimensions:
         logger.info(f" Generating {dim_name}...")
+        run_progress.start(f"write.{dim_key}")
 
         dim_data = alpha_dimensions.get(dim_key, {})
         docs = dim_data.get('documents', [])
@@ -3485,10 +3508,14 @@ def alpha_generate_report(state):
                 'key_points': [],
                 'recommendation': ''
             }
+            run_progress.finish(f"write.{dim_key}", detail="Not enough data", ok=False)
+        else:
+            run_progress.finish(f"write.{dim_key}")
     
     # Combine into final report
     logger.info("\n Combining dimensions into final report...")
 
+    run_progress.start("combine")
     try:
         notes_text = _analyst_notes_text(state)
         combiner_chain = get_alpha_report_combiner_chain(llm, analyst_notes=bool(notes_text))
@@ -3513,10 +3540,12 @@ def alpha_generate_report(state):
             detail=f"ticker={ticker}",
         )
         logger.info(f"    ✓ Final report: {len(final_report)} chars")
+        run_progress.finish("combine")
 
     except Exception as e:
         logger.error(f"    ✗ Error: {e}")
         final_report = f"# ALPHA Framework Analysis: {ticker}\n\nError generating report: {str(e)}"
+        run_progress.finish("combine", ok=False)
     
     logger.info("\n" + "="*80)
     logger.info(" ALPHA REPORT COMPLETE")

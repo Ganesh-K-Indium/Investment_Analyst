@@ -7,6 +7,8 @@ import time
 from typing import Dict, Any
 from functools import wraps
 
+from app.utils import run_progress
+
 logger = logging.getLogger("rag.graph.benchmark")
 
 class NodeTimer:
@@ -62,26 +64,32 @@ def time_node(node_name: str):
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
                 node_timer.start_node_timer(node_name)
+                run_progress.node_started(node_name)
                 try:
                     result = await func(*args, **kwargs)
                     node_timer.end_node_timer(node_name)
+                    run_progress.node_finished(node_name)
                     return result
                 except Exception as e:
                     logger.error(f" Error in node {node_name}: {str(e)}")
                     node_timer.end_node_timer(node_name)
+                    run_progress.node_finished(node_name, ok=False)
                     raise
             return async_wrapper
 
         @wraps(func)
         def wrapper(*args, **kwargs):
             node_timer.start_node_timer(node_name)
+            run_progress.node_started(node_name)
             try:
                 result = func(*args, **kwargs)
                 node_timer.end_node_timer(node_name)
+                run_progress.node_finished(node_name)
                 return result
             except Exception as e:
                 logger.error(f" Error in node {node_name}: {str(e)}")
                 node_timer.end_node_timer(node_name)
+                run_progress.node_finished(node_name, ok=False)
                 raise
         return wrapper
     return decorator
