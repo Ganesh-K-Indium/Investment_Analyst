@@ -217,3 +217,48 @@ def test_a_table_only_layout_counts_its_columns_as_its_shape():
     assert len(out) == 1 and out[0]["count"] == 2 and out[0]["tables"] == ["results"] and out[0]["fields"] == []
     other = [{"extraction_id": "z", "filename": "z.pdf", "sha": "z", "forms": [table_form("Other", ["Name", "Qty", "Price"])]}]
     assert len(suggest.recurring_shapes(rows + other)) == 1                      # a different table does not join the cluster
+
+
+# ---- a table the readers left rows out of -----------------------------------------------------------------------------------
+
+def _ruled_table_pdf(path, rows=8):
+    d = fitz.open()
+    p = d.new_page(width=612, height=792)
+    p.insert_text((50, 60), "Daily readings", fontsize=14)
+    x = [50, 170, 290, 410]
+    for r in range(rows + 1):
+        p.draw_line((x[0], 90 + r * 22), (x[-1], 90 + r * 22), width=0.7)
+    for c in x:
+        p.draw_line((c, 90), (c, 90 + rows * 22), width=0.7)
+    for c, h in enumerate(["Hour", "Pulse", "Pressure"]):
+        p.insert_text((x[c] + 5, 105), h, fontsize=10)
+    for r in range(1, rows):
+        for c, v in enumerate([f"{6 + r}:00", str(60 + r), f"{110 + r}/7{r}"]):
+            p.insert_text((x[c] + 5, 105 + r * 22), v, fontsize=10)
+    d.save(path)
+
+
+def test_rows_the_readers_left_out_are_filled_from_the_printed_rules(tmp_path):
+    pdf = str(tmp_path / "t.pdf")
+    _ruled_table_pdf(pdf)
+
+    async def reader(model, jpeg, prompt):
+        return {"title": "Daily readings", "tables": [{"title": None, "columns": ["Hour", "Pulse", "Pressure"],
+                                                       "rows": [["7:00", "61", "111/71"], ["8:00", "62", "112/72"], ["9:00", "63", "113/73"]]}]}
+    res = asyncio.run(discover.discover_page(pdf, 1, ["m-big", "m-mini"], reader))
+    rows = next(iter(res["tables"].values()))
+    assert len(rows) == 7                                                              # the page's seven data rows, not the three the models gave
+    assert rows[6]["hour"]["value"] == "13:00" and rows[6]["pulse"]["value"] == "67"
+    assert all(c["status"] == "review" and "printed rules" in c["reason"] for r in rows for c in r.values())
+
+
+def test_a_table_the_readers_read_whole_is_left_as_they_gave_it(tmp_path):
+    pdf = str(tmp_path / "t.pdf")
+    _ruled_table_pdf(pdf)
+    full = [[f"{6 + r}:00", str(60 + r), f"{110 + r}/7{r}"] for r in range(1, 8)]
+
+    async def reader(model, jpeg, prompt):
+        return {"title": "Daily readings", "tables": [{"title": None, "columns": ["Hour", "Pulse", "Pressure"], "rows": full}]}
+    res = asyncio.run(discover.discover_page(pdf, 1, ["m-big", "m-mini"], reader))
+    rows = next(iter(res["tables"].values()))
+    assert len(rows) == 7 and all(c["status"] == "agreed" for r in rows for c in r.values())

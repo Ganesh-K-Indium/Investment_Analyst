@@ -33,6 +33,8 @@ MAX_AREA = 0.85           # an image over nearly the whole page is the scan itse
 EDGE = 0.12               # a small picture in the top or bottom margin is a logo or a stamp
 SMALL_IMAGE = 0.06        # ...small meaning less than this share of the page
 CLUSTER_GAP = 12.0        # drawn parts of one chart (axes, plot, legend) are this close or closer
+PAGE_SHARE = 0.4          # a candidate this much of the page...
+PAGE_WORDS = 120          # ...that holds this many words is the page's own content (a sample form, a screenshot of a statement), not a figure
 MAX_LABELS = 80
 TABLE_OVERLAP = 0.5       # a drawn cluster this much inside a table is the table's rules
 MIN_DRAWN = 8             # a drawing has at least this many pieces; a boxed note has a border and little more
@@ -307,6 +309,8 @@ def find_digital(path: str, page_num: int, tables: Optional[List[Dict[str, Any]]
                     continue                                          # a boxed note: a border round some text
                 if _icon_field(page, b):
                     continue                                          # a grid of small separate icons or bullets, not a drawing
+            if _area(b) / (w * h) >= PAGE_SHARE and len(page.get_text("words", clip=tuple(b))) >= PAGE_WORDS:
+                continue
             kept.append(f)
         for f in _attach_satellites(kept, small):
             b = f["bbox"]

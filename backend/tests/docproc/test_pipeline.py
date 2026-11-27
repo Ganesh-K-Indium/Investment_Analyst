@@ -197,7 +197,7 @@ def test_model_classifier_only_picks_registered_types():
     async def boom(model, prompt):
         raise RuntimeError("down")
 
-    assert asyncio.run(classify.classify_with_model("x", ["m"], good))["type"] == "daily_note"
+    assert asyncio.run(classify.classify_with_model("Daily note: patient seen today", ["m"], good))["type"] == "daily_note"
     assert asyncio.run(classify.classify_with_model("x", ["m"], invented))["type"] == "unknown"
     assert asyncio.run(classify.classify_with_model("x", ["m"], boom))["type"] == "unknown"
 

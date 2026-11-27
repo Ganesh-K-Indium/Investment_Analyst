@@ -78,7 +78,9 @@ def raw_labels(header_rows: List[List[str]], ncols: int) -> List[str]:
 
 def _page_words(path: str, page_num: int, bbox: List[float]) -> List[Tuple[float, float, float, float, str]]:
     with pdf_pages.FITZ_LOCK, pdf_pages.open_pdf(path) as pdf:
-        found = pdf[page_num - 1].get_text("words", clip=tuple(bbox))
+        page = pdf[page_num - 1]
+        noise = pdf_pages._noise(page)                  # the letters of a watermark and the numbers in callout circles are not the page's figures
+        found = [w for w in page.get_text("words", clip=tuple(bbox)) if not noise(w)]
     return [(w[0], w[1], w[2], w[3], w[4]) for w in found if w[4].strip()]
 
 
@@ -260,7 +262,7 @@ def titled(tables: List[Dict[str, Any]], blocks: List[Dict[str, Any]], size: Dic
     for t in tables:
         t = dict(t)
         box = t.get("bbox")
-        if box and size and size.get("width"):
+        if box and size and size.get("width") and not t.get("title"):        # a title bar drawn over the table names it already
             mine = [box[0] / size["width"], box[1] / size["height"], box[2] / size["width"], box[3] / size["height"]]
             for i, b in enumerate(blocks):
                 bb = b.get("bbox")
@@ -274,6 +276,7 @@ def titled(tables: List[Dict[str, Any]], blocks: List[Dict[str, Any]], size: Dic
 
 
 FIELD_LABEL_REACH = 14.0    # a label above a field is at most this far (points) over its top edge
+FIELD_FAR = 240.0           # a label in the column to the left of a field may be this far from it
 FIELD_GAP = 22.0            # words of one label are at most this far apart
 
 
@@ -312,9 +315,28 @@ def fields_from_widgets(widgets: List[Dict[str, Any]], words: List[Dict[str, Any
             continue
         left = [t for t in ws if t[2] <= x0 + 1 and x0 - t[2] <= FIELD_GAP and abs((t[1] + t[3]) / 2 - (y0 + y1) / 2) <= max(6.0, (y1 - y0) * 0.7)
                 and not any(b[0] <= (t[0] + t[2]) / 2 <= b[2] and b[1] <= (t[1] + t[3]) / 2 <= b[3] for b in boxes_at)]
+        label_far = ""
+        if not left:                 # a label in the column to the left (a table of "Provider Name | [field]"): the nearest text on the row, with no other field between
+            row_mid = (y0 + y1) / 2
+            far = [t for t in ws if t[2] <= x0 + 1 and x0 - t[2] <= FIELD_FAR and abs((t[1] + t[3]) / 2 - row_mid) <= max(6.0, (y1 - y0) * 0.7)
+                   and not any(b is not w["bbox"] and b[2] <= x0 + 1 and b[0] >= t[2] - 1 and b[1] <= row_mid <= b[3] for b in boxes_at)
+                   and not any(b[0] <= (t[0] + t[2]) / 2 <= b[2] and b[1] <= (t[1] + t[3]) / 2 <= b[3] for b in boxes_at)]
+            left = far
+            if far:                  # such a label may run over several lines ("Reason for" / "Admission"), centred on its row
+                top_mid = y0 + (far[0][3] - far[0][1]) / 2
+                near = min(far, key=lambda t: (round(min(abs((t[1] + t[3]) / 2 - row_mid), abs((t[1] + t[3]) / 2 - top_mid)) / 3), -t[2]))
+                h = max(1.0, near[3] - near[1])
+                cols = [t for t in far if abs(t[0] - near[0]) <= FIELD_FAR and abs(((t[0] + t[2]) / 2) - ((near[0] + near[2]) / 2)) <= FIELD_FAR]
+                lines_y = sorted({round((t[1] + t[3]) / 2) for t in cols})
+                chain = [round((near[1] + near[3]) / 2)]
+                for yy in sorted(lines_y):
+                    if yy not in chain and min(abs(yy - c) for c in chain) <= h * 1.6:
+                        chain.append(yy)
+                got = sorted((t for t in cols if min(abs((t[1] + t[3]) / 2 - c) for c in chain) <= h * 0.6), key=lambda t: (round((t[1] + t[3]) / 2 / h), t[0]))
+                label_far = " ".join(t[4] for t in got)
         if left:
             near = max(left, key=lambda t: t[2])
-            label = " ".join([_near_run(ws, near, -1), near[4]]).strip()
+            label = label_far or " ".join([_near_run(ws, near, -1), near[4]]).strip()
         else:
             above = [t for t in ws if t[3] <= y0 + 2 and y0 - t[3] <= FIELD_LABEL_REACH and t[2] >= x0 - 2 and t[0] <= x1 + 2 and t not in inside]
             label = ""
@@ -346,8 +368,14 @@ def _title_above(blocks: List[Dict[str, Any]], i: int) -> Optional[str]:
         if prev.get("type") == "paragraph" and re.fullmatch(r"\(.*\)|[\s(]*in (millions|thousands|billions)[^.]*", text, re.I | re.S):
             j -= 1                                       # "(In millions) (Unaudited)": a note on units, the title is above it
             continue
+        if prev.get("type") == "heading" and text and len(re.findall(r"\d", text)) >= 3:
+            return None                                  # "PO BOX 000", "Page 12 of 40": an address or a running line, not a title
         if prev.get("type") == "heading" and text:
             return text.title() if text.isupper() else text
+        items = prev.get("items") or []
+        if prev.get("type") == "key_value" and len(items) == 1 and (not items[0].get("value") or str(items[0]["value"]).startswith("(")):
+            label = str(items[0]["label"]).strip()                  # "CURRENT MEDICATIONS: (include prescriptions ...)" over a table to fill in
+            return label.title() if label.isupper() else label
         if prev.get("type") == "paragraph" and 2 <= len(text.split()) <= 12 and not text.endswith((".", "?")):
             return text.rstrip(": ")
         return None
@@ -360,9 +388,15 @@ def facts_from_structure(blocks: List[Dict[str, Any]], size: Dict[str, Any]) -> 
     for b in blocks:
         if b.get("type") == "key_value":
             for it in b["items"]:
-                if it.get("value") and len(it["value"]) <= 2 * MAX_VALUE_CHARS and len(it["label"]) <= MAX_VALUE_CHARS:
+                if it.get("value") and len(it["value"]) <= 2 * MAX_VALUE_CHARS and len(it["label"]) <= MAX_VALUE_CHARS and not _instruction(it["label"], it["value"]):
                     out.append({"label": it["label"], "value": it["value"], "bbox": _points(it.get("bbox"), size)})
     return out
+
+
+def _instruction(label: str, value: str) -> bool:
+    """A heading with its instruction after it ("ALLERGIES: (include allergies to medications, dyes ...)"): the words tell the person what to write, they are not a value."""
+    v = (value or "").strip()
+    return label.strip().isupper() and v.startswith("(") and v.endswith(")")
 
 
 def boxes_from_structure(blocks: List[Dict[str, Any]], size: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -402,6 +436,8 @@ def table_title(lines: List[str], first_label: str = "") -> Optional[str]:
         letters = [c for c in t if c.isalpha()]
         if _SECTION_MARKER.match(t):
             continue                                   # "PART I", "ITEM 2", "Table of Contents": running headers, not a table's name
+        if re.search(r":\s*\S", t) or t.endswith(":") or t.startswith("[") or len(re.findall(r"\d", t)) >= 3 or len(set(letters)) < 4:
+            continue                                   # "PO BOX 000", a date, a barcode ("IIIIIII"): not a name
         if 4 <= len(t) <= 80 and _TITLE_OK.search(t) and letters and sum(c.isupper() for c in letters) / len(letters) >= 0.7:
             return t.title() if t.isupper() else t
     return None
@@ -431,10 +467,13 @@ def _words_in(path: str, page_num: int, bbox: List[float]) -> List[str]:
     x0, y0, x1, y1 = bbox
     spans: List[Tuple[str, float]] = []
     with pdf_pages.FITZ_LOCK, pdf_pages.open_pdf(path) as pdf:
+        circles = pdf_pages._callouts(pdf[page_num - 1])          # numbers in callout circles are markers, not figures of the table
         for b in pdf[page_num - 1].get_text("dict", flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)["blocks"]:
             for line in b.get("lines", []):
                 for sp in line["spans"]:
                     bx0, by0, bx1, by1 = sp["bbox"]
+                    if any(c[0] - 1 <= (bx0 + bx1) / 2 <= c[2] + 1 and c[1] - 1 <= (by0 + by1) / 2 <= c[3] + 1 for c in circles):
+                        continue
                     if x0 - 1 <= (bx0 + bx1) / 2 <= x1 + 1 and y0 - 1 <= (by0 + by1) / 2 <= y1 + 1:
                         spans.append((sp["text"], sp["size"]))
     sizes = sorted(sz for _, sz in spans)
@@ -518,6 +557,55 @@ def page_title(lines: List[str]) -> Optional[str]:
     return (best.title() if best.isupper() else best) if best else None
 
 
+_GENERIC_HEAD = re.compile(r"(?:Column \d+|Item|Line item|Col \d+|Field|Information|Value|Details?|Parameter)")
+_BOXES = "\u2610\u25a1\u2611\u2612\u2713\u25a0"
+
+
+def _not_a_table(t: Dict[str, Any]) -> bool:
+    """A ruled box that only holds check boxes (a list of conditions to tick), or a box of labels to write beside (Patient Name:, MR#:, DATE:)
+    is a form's fields, not a table of rows."""
+    cells = [str(c).strip() for r in [t.get("headers") or []] + list(t.get("rows") or []) for c in r if str(c).strip()]
+    if len(cells) >= 4 and sum(1 for c in cells if c[0] in _BOXES) / len(cells) >= 0.6:
+        return True
+    if all(_GENERIC_HEAD.fullmatch(str(h)) for h in (t.get("headers") or []) if str(h).strip()) and sum(1 for c in cells if c[:1].islower()) >= 2:
+        return True                                         # no real header, and cells that start in the middle of a sentence: a note cut into columns
+    if cells and sum(1 for c in cells if len(c.split()) >= 4 and not re.search(r"\d", c)) / len(cells) >= 0.4:
+        return True                                         # callout boxes and notes that the columns of the page cut into pieces
+    body = [r for r in (t.get("rows") or [])[1:] if any(str(c).strip() for c in r)]
+    return len(body) <= 1 and bool(cells) and not any(re.search(r"\d", c) for c in cells) and sum(1 for c in cells if c.endswith(":")) >= 2
+
+
+def _label_box(t: Dict[str, Any]) -> bool:
+    """A ruled box whose cells are mostly "LABEL:" and the value beside it (patient, specimen, dates): fields, whatever its first row looks like."""
+    cells = [str(c).strip() for r in list(t.get("rows") or []) for c in r if str(c).strip()]
+    labels_ = [c for c in cells if c.endswith(":") and len(c) > 2]
+    return len(cells) >= 4 and len(labels_) >= 2 and len(labels_) / len(cells) >= 0.2 and len(_box_pairs(t)) >= 2
+
+
+def _box_pairs(t: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """(label, value) pairs of a box whose cells read "LABEL:" then its value (and sometimes a second part, a date then a time)."""
+    out: List[Tuple[str, str]] = []
+    for r in t.get("rows") or []:
+        cells = []
+        for c in r:                                    # a cell that holds several parts ("Doe, John Q. | Age/Sex: | 73/M", ruled as one) is read part by part
+            c = re.sub(r"\s*\(\d+\)$", "", str(c).strip())
+            cells += [x.strip() for x in c.split(" | ")] if " | " in c else [c]
+        i = 0
+        while i < len(cells):
+            if cells[i].endswith(":") and len(cells[i]) > 2:
+                j, parts = i + 1, []
+                while j < len(cells) and not cells[j].endswith(":"):
+                    if cells[j] and not (parts and cells[j] == parts[-1]):
+                        parts.append(cells[j])
+                    j += 1
+                if parts:
+                    out.append((cells[i].rstrip(":").strip(), " ".join(parts)))
+                i = j
+            else:
+                i += 1
+    return out
+
+
 def _cell(value: str, page: int) -> Dict[str, Any]:
     return {"value": value or None, "status": "agreed" if value else "empty", "alternatives": [], "method": "text-layer", "bbox": None, "page": page}
 
@@ -533,7 +621,22 @@ async def read_page(path: str, page_num: int, lines: List[str], tables: List[Dic
     out_cols: Dict[str, List[str]] = {}
     title = None
     unverified: List[str] = []
+    box_fields: Dict[str, Dict[str, Any]] = {}
+    in_tables: set = set()                              # the text of every cell already read as part of a table
     for n, t in enumerate(tables, 1):
+        if t.get("method") == "blank":                  # column labels over empty ruled lines: the columns are the template of the table
+            key = labels.key(t.get("title") or f"{t['headers'][0]} table", f"table_{n}")
+            out_tables[key if key not in out_tables else f"{key}_{n}"], out_cols[key if key not in out_cols else f"{key}_{n}"] = [], list(t["headers"])
+            continue
+        if _not_a_table(t):
+            continue
+        in_tables.update(locate.alnum(c) for r in t.get("rows", []) for c in r if c)
+        if t.get("method") == "grid" and (t.get("header_rows") == 0 or _label_box(t)):          # a ruled box of "LABEL: value" cells (specimen, dates), above a table's header
+            for label, value in _box_pairs(t):
+                key = labels.key(label)
+                if key and key not in box_fields:
+                    box_fields[key] = {**_cell(value, page_num), "label": label, "section": None, "type": "text", "normalized": None, "bbox": locate.find(path, page_num, value, label)}
+            continue
         t, cov, missing = await asyncio.to_thread(verified_table, path, page_num, t)
         header, body = split_header(t)
         body = [r for r in body if any(r)]
@@ -541,7 +644,15 @@ async def read_page(path: str, page_num: int, lines: List[str], tables: List[Dic
         if not body or ncols < 2:
             continue
         cols = await asyncio.to_thread(geometric_labels, path, page_num, t["bbox"], header, ncols) or await header_labels(header, ncols, model, ask, memo)
+        if ncols == 2 and all(_GENERIC_HEAD.fullmatch(c or "") for c in cols):      # a label and its amount, line after line: the page's pairs, not a table
+            for r in body:
+                if r[0].strip() and r[1].strip():
+                    box_fields.setdefault(labels.key(r[0]) or f"field_{n}", {**_cell(r[1].strip(), page_num), "label": r[0].strip(), "section": None, "type": "text", "normalized": None, "bbox": locate.find(path, page_num, r[1].strip(), r[0].strip())})
+            continue
         ttl = t["title"] if "title" in t else table_title(lines, body[0][0] if body[0] else "")      # a layout-found table names itself from the page
+        if not ttl and len(body) >= 4 and body[0] and body[0][0].strip() and not any(c.strip() for c in body[0][1:]):
+            ttl = body[0][0].strip().title() if body[0][0].isupper() else body[0][0].strip()         # its own first line, a section name (COMPLETE BLOOD COUNT)
+            body = body[1:]
         title = title or ttl
         key = labels.key(ttl or "", f"table_{n}")
         key = key if key not in out_tables else f"{key}_{n}"
@@ -554,18 +665,20 @@ async def read_page(path: str, page_num: int, lines: List[str], tables: List[Dic
         if cov < COVERAGE_OK:                               # neither reading captured every number printed in this region
             note = f"{round((1 - cov) * 100)}% of the numbers in this table were not captured (for example {', '.join(missing[:3])})"
             unverified.append(note)
-        for r in body:
-            r = r + [""] * (ncols - len(r))
-            row = {k: {**_cell(r[j], page_num), "label": cols[j]} for j, k in enumerate(keys)}
+        padded = [r + [""] * (ncols - len(r)) for r in body]
+        spots = iter(locate.in_order(path, page_num, t["bbox"], [c for r in padded for c in r]))
+        for r in padded:
+            row = {k: {**_cell(r[j], page_num), "label": cols[j], "bbox": next(spots)} for j, k in enumerate(keys)}
             if note:
                 for c in row.values():
                     if c["value"]:
                         c.update({"status": "review", "reason": note})
             out_tables[key].append(row)
-    fields: Dict[str, Dict[str, Any]] = {}
+    fields: Dict[str, Dict[str, Any]] = dict(box_fields)
+    lines = ["" if locate.alnum(l) in in_tables else l for l in lines]       # a table's own cells are not pairs of their own
     for p in kv.parse_kv(lines):
         label, value = p["label"], p["value"]
-        if len(value) > MAX_VALUE_CHARS or len(lines[p["line"]]) > MAX_PAIR_LINE or re.search(r"\d", label):
+        if len(value) > MAX_VALUE_CHARS or len(lines[p["line"]]) > MAX_PAIR_LINE or re.search(r"\d", label) or _instruction(label, value):
             continue                                   # a sentence, or "Heading: running text": not a labelled value
         key = labels.key(label)
         if key and key not in fields:
@@ -578,6 +691,10 @@ async def read_page(path: str, page_num: int, lines: List[str], tables: List[Dic
             fields[key] = {**_cell(f["value"], page_num), "label": f["label"], "section": None, "type": "text", "normalized": None, "bbox": f.get("bbox")}
     for f in form_fields or []:                        # a fillable form's own fields, named by the text beside them
         key = labels.key(f["label"], "field")
+        same = fields.get(key)
+        if same and (same.get("value") or "").strip() == (f["value"] or "").strip():
+            same["bbox"] = same.get("bbox") or f["bbox"]                  # the table already gave this value: the field only says where it is
+            continue
         base, k = key, 2
         while key in fields:
             key, k = f"{base}_{k}", k + 1

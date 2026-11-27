@@ -99,8 +99,8 @@ def test_deskew_straightens_a_tilted_scan_and_leaves_a_straight_one_alone():
     for k in range(12):
         page.insert_text((50, 40 + k * 20), f"Line {k} revenue 1,234,567 costs 987,654", fontsize=10)
     png = page.get_pixmap(dpi=150).tobytes("png")
-    assert tess.skew_angle(png) is None and tess.deskewed(png) == png                       # straight: byte-for-byte unchanged
+    assert tess.skew_angle(png) == 0.0 and tess.straightened(png) == (png, 0.0)             # straight: byte-for-byte unchanged
     buf = io.BytesIO()
     Image.open(io.BytesIO(png)).convert("L").rotate(1.2, fillcolor=255).save(buf, format="PNG")
-    angle = tess.skew_angle(buf.getvalue())
-    assert angle is not None and -1.5 <= angle <= -0.9                                        # rotating by about -1.2 degrees undoes the tilt
+    out, angle = tess.straightened(buf.getvalue())
+    assert -1.5 <= angle <= -0.9 and out != buf.getvalue()                                   # rotating by about -1.2 degrees undoes the tilt

@@ -82,3 +82,52 @@ def find_with_text(path: str, page_num: int, value: str, label: Optional[str] = 
         if lw:
             best.sort(key=lambda h: min(abs(h[1][1] - w[1]) * 3 + abs(h[1][0] - w[2]) for w in lw))
     return best[0][1], best[0][2], best[0][0]
+
+
+def in_order(path: str, page_num: int, region: List[float], values: List[str]) -> List[Optional[List[float]]]:
+    """Where each of `values` (a table's cells, row by row) is printed inside `region`. A value is looked for after the
+    previous one, so the fifth "0.00" of a table is the fifth one on the page, not the first. A value not found in order
+    is looked for anywhere in the region; one not there at all gets None."""
+    x0, y0, x1, y1 = region
+    ws = [w for w in page_words(path, page_num) if x0 - 2 <= (w[0] + w[2]) / 2 <= x1 + 2 and y0 - 2 <= (w[1] + w[3]) / 2 <= y1 + 2]
+    ws.sort(key=lambda w: (round((w[1] + w[3]) / 8), w[0]))
+    def norm(t: str) -> str:
+        return alnum(t) or "".join(t.split())              # "%" or "-" has no letters or digits: compare it as printed
+    toks = [norm(w[4]) for w in ws]
+
+    def match(v: str, start: int) -> Optional[Tuple[int, int]]:
+        target = norm(v)
+        if not target:
+            return None
+        for i in range(start, len(ws)):
+            acc = ""
+            for j in range(i, min(len(ws), i + 8)):
+                acc += toks[j]
+                if acc == target:
+                    return i, j + 1
+                if not target.startswith(acc):
+                    break
+        return None
+
+    out: List[Optional[List[float]]] = []
+    cursor = 0
+    for v in values:
+        hit = match(v, cursor) or (match(v, 0) if v.strip() else None)
+        if hit and match(v, cursor):
+            cursor = hit[1]
+        out.append(_union(ws[hit[0]:hit[1]]) if hit else None)
+    return out
+
+
+def beside(path: str, page_num: int, label: str, reach: float = 0.45) -> Optional[List[float]]:
+    """The strip on the page to the right of the printed `label`, on its line: where its value is written. Used for a value the page's text
+    does not contain (handwriting, a mark): the highlight cannot be exact, but it points at the right place. None when the label is not found."""
+    box = find(path, page_num, label.rstrip(": ")) if label and len(alnum(label)) >= 3 else None
+    ws = page_words(path, page_num)
+    if not box or not ws:
+        return None
+    right = max(w[2] for w in ws)
+    left = max(w[0] for w in ws)
+    x0 = box[2] + 2
+    x1 = min(right, x0 + max(120.0, reach * max(1.0, right - left)))
+    return [round(x0, 2), round(box[1] - 1, 2), round(x1, 2), round(box[3] + 1, 2)] if x1 - x0 > 20 else None

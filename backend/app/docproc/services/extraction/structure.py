@@ -105,6 +105,12 @@ def _box_items(text: str) -> List[Dict[str, Any]]:
         return []
     items: List[Dict[str, Any]] = []
     before = parts[0].strip()
+    labels_after = [p.strip() for p in parts[2::2]]
+    if before and before.endswith((":", "?")) and labels_after and all(labels_after):
+        # "Flu Vaccine: o Yes o No": a question, then each box with its own option; the question names the group
+        tail = re.compile(r"\s+(?:[Ii]f\b.*|[A-Z][A-Za-z ]{1,20}:.*)$")          # what follows the last option ("... If yes, when?", "... Dose:") is a blank of its own
+        return [{"label": tail.sub("", parts[i + 1].strip()) or parts[i + 1].strip(), "checked": parts[i] in _CHECKED, "group": before.rstrip(":").strip()}
+                for i in range(1, len(parts), 2)]
     if not before:                                           # the box comes first: the option's text follows it
         for i in range(1, len(parts), 2):
             label = parts[i + 1].strip() if i + 1 < len(parts) else ""
@@ -304,6 +310,31 @@ def _pair_captions(rows: List["_Row"]) -> List["_Row"]:
     return out
 
 
+def _box_table_items(table: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The options of a grid whose cells are mostly "<box> text": [{"label", "checked", "group"}], or [] when it is not such a grid.
+    A cell with no box under one that has one carries on its text ("sexually transmitted" / "disease/herpes")."""
+    rows = table.get("rows") or []
+    cells = [c.strip() for r in rows for c in r if c.strip()]
+    if len(cells) < 4 or sum(1 for c in cells if _GLYPH.match(c)) / len(cells) < 0.6:
+        return []
+    items: List[Dict[str, Any]] = []
+    last: Dict[int, Dict[str, Any]] = {}
+    for r in rows:
+        for ci, c in enumerate(r):
+            c = c.strip()
+            m = _GLYPH.match(c)
+            if m and c[1:].strip():
+                last[ci] = {"label": c[1:].strip(), "checked": c[0] in _CHECKED}
+                items.append(last[ci])
+            elif c and ci in last:
+                last[ci]["label"] += " " + c
+    head = " ".join(str(h) for h in (table.get("columns") or [])[:1])
+    group = re.split(r"[(:]", head)[0].strip() or None
+    for it in items:
+        it["group"] = group
+    return items
+
+
 def _given_table(t: Dict[str, Any]) -> Dict[str, Any]:
     """A table another extractor found (digital pages), in the shape of a table block."""
     cols = [re.sub(r"^Col (\d+)$", r"Column \1", str(h)) if str(h).strip() else f"Column {i + 1}" for i, h in enumerate(t.get("columns") or [])]
@@ -322,6 +353,20 @@ def _prose_side(cells: List[Cell]) -> bool:
     words = statistics.fmean(len(c[0].split()) for c in cells)
     lower = sum(1 for c in cells if c[0].strip()[:1].islower()) / len(cells)
     return words >= PROSE_WORDS and lower >= 0.15
+
+
+FORM_BESIDE_ROWS = 25      # a long stretch of rows...
+FORM_BESIDE_GAP = 0.035    # ...with a clear strip between a form or a table on one side...
+FORM_BESIDE_SPREAD = 0.012  # ...and a column of running text on the other, whose lines all start at the same edge (a numbered key beside a report)
+
+
+def _text_beside_form(left: List[Cell], right: List[Cell], n_rows: int) -> bool:
+    if n_rows < FORM_BESIDE_ROWS or not _prose_side(right) or len(right) < FORM_BESIDE_ROWS * 0.6:
+        return False
+    if min(c[1] for c in right) - max(c[3] for c in left) < FORM_BESIDE_GAP:
+        return False
+    starts = [c[1] for c in right]
+    return statistics.pstdev(starts) <= FORM_BESIDE_SPREAD
 
 
 def _reading_order(rows: List[List[Cell]]) -> List[List[Cell]]:
@@ -347,7 +392,7 @@ def _reading_order(rows: List[List[Cell]]) -> List[List[Cell]]:
             if len(run) >= MIN_BAND_ROWS and len(both) >= max(4, len(run) * 0.5):
                 left = [c for r in run for c in r if c[3] <= gx]
                 right = [c for r in run for c in r if c[1] >= gx]
-                if _prose_side(left) and _prose_side(right) and (best is None or len(run) > best[1] - best[0]):
+                if (_prose_side(left) and _prose_side(right) or _text_beside_form(left, right, len(run))) and (best is None or len(run) > best[1] - best[0]):
                     best = (i, j, gx)
             i = j
     if best is None:
@@ -456,6 +501,9 @@ def build_page(rows_in: List[List[Cell]], has_layout: bool = True, tables: Optio
         top = min(r.y0 for r in inside)                     # the table starts at its first row, not at the edge of its box
         marker = _Row([("", x0, top, x1, top + 0.001)])
         marker.kind, marker.table = "given", _given_table(t)
+        items = _box_table_items(marker.table)
+        if items:                                           # a ruled grid of check boxes (a list of conditions to tick) is a list of options
+            marker.kind, marker.boxes = "boxes", items
         marker.order = min(r.order for r in inside) - 0.5
         rows = [r for r in rows if r not in inside]
         rows.append(marker)
@@ -508,7 +556,7 @@ def build_page(rows_in: List[List[Cell]], has_layout: bool = True, tables: Optio
                 q = prev_block["text"]
                 group = q if len(q) <= 130 else q[:127].rsplit(" ", 1)[0] + "..."                          # the question the Yes / No answers
             for it in items:
-                it["group"] = group
+                it["group"] = it.get("group") or group
             blocks.append({"type": "checkboxes", "items": items, "bbox": _box([c for g in rows[i:j] for c in g.cells])})
             i = j
         elif r.kind == "kv":
@@ -557,6 +605,10 @@ def build_page(rows_in: List[List[Cell]], has_layout: bool = True, tables: Optio
                 j += 1
             blocks.append({"type": "paragraph", "text": " ".join(text), "bbox": _box([c for g in rows[i:j] for c in g.cells])})
             i = j
+    for b in blocks:                                        # a line left to write on ("Pregnancies: ________") is an empty blank, not a value
+        for it in b.get("items", []) if b["type"] == "key_value" else []:
+            if isinstance(it.get("value"), str) and re.fullmatch(r"[\s_.\u2014-]{3,}", it["value"]):
+                it["value"] = None
     out = {"blocks": blocks, "entities": _entities(blocks), "layout": has_layout}
     if page_number:
         out["page_number"] = page_number

@@ -233,6 +233,22 @@ def _is_caption_line(words: list) -> bool:
     return bool(words) and longest <= CAPTION_MAX_PHRASE_WORDS
 
 
+def _caption_groups(phrases: list, centers: list):
+    """The columns each caption of a stacked header spans, or None when the line does not split the columns evenly.
+
+    A caption set over a group of columns ("Three Months Ended" over 2025 and 2026) is centred over the group, so its
+    columns are those nearer to it than to the next caption. Used only when there are fewer captions than columns and
+    every caption gets the same number of them, so a header that is simply missing a caption is left alone."""
+    if not 2 <= len(phrases) < len(centers) or len(centers) % len(phrases):
+        return None
+    mids = [(ph[0][0] + ph[-1][2]) / 2 for ph in phrases]
+    bounds = [(a + b) / 2 for a, b in zip(mids, mids[1:])]
+    groups = [[i for i, c in enumerate(centers) if (k == 0 or c >= bounds[k - 1]) and (k == len(mids) - 1 or c < bounds[k])]
+              for k in range(len(mids))]
+    size = len(centers) // len(phrases)
+    return groups if all(len(g) == size for g in groups) else None
+
+
 def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
     """Rebuild a numeric (financial) table from word positions.
 
@@ -310,11 +326,16 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
     centers = [(c["x0"] + c["x1"]) / 2 for c in cols]
     pitch = median([b - a for a, b in zip(centers, centers[1:])]) if len(cols) > 1 else 0.0
     caption_left = edge - max(25.0, 1.2 * pitch)  # wide group captions start left of the first numeric column
-    unit_parts, header_src = [], []
+    unit_parts, header_src, lifted = [], [], []
     for ln in reversed(above):
         left = [w for w in ln["words"] if w[0] < caption_left]
         right = [w for w in ln["words"] if w[0] >= caption_left]
         short = _is_caption_line(right)
+        values = [w for w in right if _is_num(w[4]) and w[4] not in _DASHES and not _YEAR.match(w[4])]
+        if not header_lines and len(values) >= max(2, len(cols) // 2) and all(
+                any(abs(c["x1"] - w[2]) <= 1.5 * COL_CLUSTER_TOL for c in cols) for w in values):
+            lifted.insert(0, ln)  # a data row just above the detected box ("Cash  $ 28,267"): body, and the captions are higher up
+            continue
         if short and not left:
             header_lines.insert(0, ln)
             header_src.append(ln)
@@ -326,6 +347,8 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
             continue  # a section label above the first row ("Assets", "Current assets:"): the captions are further up
         else:
             break
+    # A caption line inside the detected box (often the years line) is the header, not also a body row.
+    in_body = lifted + [ln for ln in in_body if ln not in header_src]
     col_headers = [[] for _ in cols]
     spanning = []
     for ln in header_lines:
@@ -338,6 +361,12 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
             phrases.append(cur)
         if len(phrases) == 1 and len(cols) >= 3:  # one caption over a wide table ("Three Months Ended ...") titles the table
             spanning.append(_join(phrases[0]))
+            continue
+        groups = _caption_groups(phrases, centers)
+        if groups:  # "Three Months Ended" over two year columns, "Six Months Ended" over the next two: each spans its group
+            for ph, idx in zip(phrases, groups):
+                for i in idx:
+                    col_headers[i].append(_join(ph))
             continue
         for ph in phrases:
             px0, px1, text = ph[0][0], ph[-1][2], _join(ph)
@@ -373,9 +402,11 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
     header_top = min((ln["cy"] for ln in header_lines), default=first_data_cy)
     title_lines = [ln for ln in above if ln not in header_src and ln not in in_body and header_top - ln["cy"] <= TITLE_REACH
                    and _is_caption_line(ln["words"]) and _starts_like_caption(ln["words"])][-3:]  # captions only, never prose
-    title_parts = [_join(ln["words"]) for ln in title_lines] + unit_parts + spanning
+    title_parts = [_join(ln["words"]) for ln in title_lines] + unit_parts
     title = re.sub(r"(?i)table of contents", "", " ".join(t for t in title_parts if not t.isdigit()))
-    title = " ".join(title.split())[:200]
+    # A caption over all the columns ("2025" over one block of a segment table, "Three Months Ended ...") says what the
+    # figures are, so it is kept whole: it is never cut off by a long title, and a lone year is not a page number.
+    title = " ".join((" ".join(title.split())[:200] + " " + " ".join(spanning)).split())
 
     headers = ["Line item"] + [" ".join(h) if h else f"Col {i + 1}" for i, h in enumerate(col_headers)]
     all_words = [w for ln in header_lines + in_body for w in ln["words"]]
@@ -460,7 +491,19 @@ def _is_data_line(ln: dict) -> bool:
     label_words = [w for w in ln["words"] if w[2] <= first[0] + 1]
     between = [w for w in ln["words"] if first[2] - 1 <= w[0] and w[2] <= last[2] + 1 and not _is_num(w[4]) and w[4] != "$"]
     if any(re.search(r"[A-Za-z]", w[4]) for w in between):  # "Level 1  Level 2  Level 3": column captions, not values
-        return False
+        # ...but a row that starts with a line number, a date and a description ("1  3/20/22  Medical  Paid  $31.60  $2.15  $0.00") has its
+        # values in the run of numbers at its end
+        run, best = [], []
+        for w in ln["words"]:                       # the longest run of numbers; a code may follow it (PDC)
+            if _is_num(w[4]):
+                run.append(w)
+            elif w[4] != "$":
+                run = []
+            if len(run) > len(best):
+                best = list(run)
+        after = [w for w in ln["words"] if w[0] >= best[-1][2] - 1] if best else []
+        before = [w for w in ln["words"] if w[2] <= best[0][0] + 1] if best else []
+        return len(best) >= 3 and len(after) <= 2 and len(before) <= BORDERLESS_LABEL_WORDS
     return len(label_words) <= BORDERLESS_LABEL_WORDS
 
 
