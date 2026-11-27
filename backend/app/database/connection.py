@@ -46,7 +46,34 @@ engine = create_async_engine(
 SessionLocal = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
+# Any constant shared by every process of this app: the key of the Postgres advisory lock that serialises migrations.
+_MIGRATION_LOCK_KEY = 7310524001
+
+
 def init_db():
+    """Bring the database schema up to date (Alembic). The API and the workers all call this when they start, often at the
+    same moment; a Postgres advisory lock makes them migrate one at a time, so a fresh database is never created twice
+    concurrently (which fails with duplicate-table errors). The first process migrates, the others then find it current."""
+    from sqlalchemy import text
+    from sqlalchemy.pool import NullPool
+
+    url = _to_sync_url(DATABASE_URL)
+    if not url.startswith("postgresql"):
+        _init_db_unlocked()
+        return
+    lock_engine = create_engine(url, poolclass=NullPool)
+    try:
+        with lock_engine.connect() as conn:
+            conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _MIGRATION_LOCK_KEY})
+            try:
+                _init_db_unlocked()
+            finally:
+                conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _MIGRATION_LOCK_KEY})
+    finally:
+        lock_engine.dispose()
+
+
+def _init_db_unlocked():
     """Initialize database tables using Alembic migrations to ensure schema version tracking"""
     from alembic.config import Config
     from alembic import command

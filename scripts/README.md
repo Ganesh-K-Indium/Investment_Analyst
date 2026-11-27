@@ -1,35 +1,23 @@
-# Launch scripts
+# Developer tool and launch scripts
 
-Local development launchers. For Docker, use `docker compose` instead (see the main README).
+## `dev.py`: one command set for Windows, macOS and Linux
 
-## `start_api.sh`
+Needs only Python (3.11–3.13 to create the virtualenv). On Windows write `py scripts\dev.py`.
 
-Starts the API, and optionally the MCP servers and the background workers, from the repo's virtualenv.
-
-```bash
-./scripts/start_api.sh --all --dev    # MCP servers + workers + API with auto-reload: the usual local setup
-./scripts/start_api.sh                # API only
-./scripts/start_api.sh --help
-```
-
-| Option | Does |
+| Command | Does |
 |---|---|
-| `--with-mcp` | Starts the five MCP servers first (via `start_mcp_servers.sh`). |
-| `--with-workers` | Starts the interactive and batch workers next to the API; logs in `data/logs/workers/`; stopped with the API. |
-| `--all` | Both of the above. |
-| `--dev` | Auto-reload on code changes. |
+| `python3 scripts/dev.py setup` | First-time setup: `venv/`, pinned dependencies, Chromium for SEC filings, `.env` from `.env.example`, the web UI's packages (if `investment-analyst-ui` is next to this repo). Checks for Docker and Tesseract. |
+| `python3 scripts/dev.py start` | Postgres, Redis and Qdrant in Docker (if not already running), the five MCP servers, both workers, the API and the web UI. The API logs to the terminal, the rest to `data/logs/dev/`. **Ctrl+C stops everything**, including child processes. |
+| `python3 scripts/dev.py status` | Which ports are serving, and the configuration check (`python -m app.core.config`). |
+| `python3 scripts/dev.py services up` / `down` | Only Postgres, Redis and Qdrant. |
+| `python3 scripts/dev.py mcp` | Only the MCP servers, in the foreground. |
+| `python3 scripts/dev.py install` | Install `backend/requirements.txt` (exact versions) into `venv/`. |
+| `python3 scripts/dev.py lock [--upgrade] [--upgrade-package NAME]` | Re-pin dependencies after editing `backend/pyproject.toml`. |
+| `python3 scripts/dev.py test [pytest args]` | Run the backend tests. |
 
-Before starting it checks for the virtualenv (`venv/` at the repo root), `.env` (created from `.env.example` if missing), and installed dependencies.
+`start` options: `--reload` (restart the API on code changes), `--no-services`, `--no-mcp`, `--no-workers`, `--no-ui`, `--host 0.0.0.0` (reach the API from other machines). Set `UI_DIR` if the UI repository lives elsewhere.
 
-## `start_mcp_servers.sh`
-
-Manages the MCP servers the quant agents call.
-
-```bash
-./scripts/start_mcp_servers.sh start     # also: stop | restart | status | logs
-```
-
-| Server | Port | Folder |
+| MCP server | Port | Folder |
 |---|---|---|
 | Stock information | 8565 | `backend/quant/yahoo_mcp` |
 | Technical analysis | 8566 | `backend/quant/technical_mcp` |
@@ -37,8 +25,12 @@ Manages the MCP servers the quant agents call.
 | Options intelligence | 8568 | `backend/quant/options_mcp` |
 | Postgres query | 8570 | `backend/quant/postgres_mcp` |
 
-Logs and PID files go to `data/logs/mcp/`. Addresses can be changed with `MCP_<NAME>_URL` / `_BIND` / `_ENABLED` or `MCP_HOST` (see `config.example.yaml`).
+Addresses can be changed with `MCP_<NAME>_URL` / `_BIND` / `_ENABLED` or `MCP_HOST` (see `config.example.yaml`).
 
-## Windows
+## Wrappers
 
-`start_api.bat` and `start_mcp_servers.bat` start the API and the MCP servers. The background workers (Arq) are best run under WSL or Docker on Windows.
+| Script | Same as |
+|---|---|
+| `start_api.sh`, `start_api.bat` | `dev.py start` (`--dev` → `--reload`, `--api-only` → API alone) |
+| `start_mcp_servers.bat` | `dev.py mcp` |
+| `start_mcp_servers.sh start \| stop \| restart \| status \| logs` | Background MCP servers with PID files in `data/logs/mcp/` (macOS/Linux) |

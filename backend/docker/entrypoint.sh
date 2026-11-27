@@ -2,7 +2,7 @@
 # =============================================================================
 # Docker Entrypoint - Investment Analyst API
 # =============================================================================
-# Starts the 5 MCP servers in background, runs migrations, then the FastAPI app.
+# Starts the 5 MCP servers in background, then the FastAPI app (which migrates the database on startup).
 # =============================================================================
 
 set -e
@@ -37,9 +37,7 @@ echo "[entrypoint] Postgres MCP server starting on port 8570 (PID: $!)"
 # Give MCP servers a moment to initialize before the API tries to connect
 sleep 3
 
-echo "[entrypoint] Running database migrations..."
+# Database migrations run inside the API (and each worker) at startup, one process at a time (app/database/connection.py).
 cd /app
-alembic upgrade head
-
 echo "[entrypoint] Starting Investment Analyst API on port 8000..."
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000

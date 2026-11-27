@@ -1,166 +1,957 @@
-# =============================================================================
-# Investment Analyst API - Main Requirements
-# =============================================================================
-
-# Core FastAPI and async support
-fastapi>=0.128.0
-uvicorn[standard]>=0.30.0
-pydantic>=2.7.0
-python-multipart>=0.0.9
-aiofiles>=23.2.1
-python-dateutil>=2.9.0
-playwright>=1.61.0
-
-# Core Python utilities
-python-dotenv>=1.0.0
-pydantic-settings>=2.1.0
-typing-extensions>=4.8.0
-numpy
-pandas>=2.0.0
-
-# Database
-sqlalchemy>=2.0.25
-alembic>=1.13.1
-aiosqlite>=0.20.0
-asyncpg>=0.29.0
-
-# Background job queue (async analysis runs)
-arq>=0.26.0
-redis[hiredis]>=5.0.0                 # hiredis: faster Redis protocol parsing for queues and live updates
-
-# LangChain Core & Extensions
-langchain>=0.3.0
-langchain-core>=1.0.0
-langchain-openai>=0.2.0
-langchain-community>=0.3.0
-langchain-qdrant>=0.2.0
-
-# LangGraph & Checkpointing
-langgraph>=1.0.0
-langgraph-checkpoint>=3.0.0
-langgraph-checkpoint-sqlite>=3.0.0
-langgraph-checkpoint-postgres>=2.0
-langgraph-prebuilt>=1.0.0
-langgraph-sdk>=0.2.0
-
-# Stock Analysis Multi-Agent System (Quant)
-langgraph-supervisor>=0.0.31
-langchain-mcp-adapters>=0.2.1
-
-# MCP (Model Context Protocol) Dependencies
-fastmcp>=0.4.0
-mcp>=1.9.2
-
-# Vector Database & Search
-qdrant-client>=1.19.0,<2.0.0
-fastembed>=0.3.0
-
-# LLM Providers & Embeddings
-openai>=1.0.0
-langchain-groq
-langchain_tavily
-tavily-python>=0.3.0
-
-# Stock Market Data & Analysis
-yfinance>=0.2.40
-# pandas-ta  # Disabled: Causes matching distribution errors on python 3.11-slim
-ta>=0.11.0  # Technical Analysis library
-
-# Natural Language Processing
-textblob>=0.18.0
-nltk  # Required by textblob
-
-# Data Visualization
-plotly>=5.18.0
-kaleido>=0.2.1
-
-# Scientific Computing & Statistics
-scipy>=1.11.0
-scikit-learn  # For advanced analytics
-
-# Google AI (for chart analysis)
-google-genai>=0.5.0
-
-# Parsing & Document Processing
-llama_parse
-
-# Media & Cloud Storage
-cloudinary
-
-# HTTP & Async Utilities
-requests>=2.31.0
-httpx>=0.26.0
-aiohttp>=3.9.0
-
-# Testing (optional)
-pytest>=7.4.3
-
-
-# =============================================================================
-# Integration System Dependencies
-# =============================================================================
-# These are for data source connectors (S3, SharePoint, Google Drive, etc.)
-# Can also install separately with: pip install -r requirements_integrations.txt
-
-# Google Drive Integration
-google-api-python-client>=2.116.0
-google-auth>=2.27.0
-google-auth-httplib2>=0.2.0
-google-auth-oauthlib>=1.2.0
-google-genai
-# SharePoint / Microsoft Graph Integration
-msal>=1.26.0  # Microsoft Authentication Library
-
-# Azure Blob Storage Integration
-azure-storage-blob>=12.19.0
-azure-identity>=1.15.0
-
-# AWS S3 Integration
-boto3>=1.34.0
-botocore>=1.34.0
-
-# SFTP Integration
-paramiko>=3.4.0
-cryptography>=42.0.0
-
-# =============================================================================
-# Notes:
-# =============================================================================
-# - For MCP servers (Stock Analysis), see quant/stock_agent/README.md
-# - MCP servers run separately on ports 8565, 8566, 8567
-# - Main API runs on port 8000
-# - All dependencies are compatible and tested togetherpip
-
-fastmcp 
-pytesseract
-
-
-lxml==5.1.0
-pytest==8.0.0
-psycopg2-binary>=2.9.0
-
-# Auth
-python-jose[cryptography]>=3.3.0
-bcrypt>=4.0.0
-
-# PDF export
-fpdf2>=2.7.0
-pillow>=10.0.0
-
-# Rich-text report content — sanitization, HTML<->Markdown conversion, HTML parsing
-nh3>=0.2.17
-markdownify>=0.13.1
-beautifulsoup4>=4.12.0
-markdown>=3.6
-
-# SSL/Network utilities for corporate environments
-pip-system-certs>=5.3
-pymupdf>=2.1.0           # 2.x required: the table detector the extraction engine and its tests rely on differs from 1.x
-pymupdf-layout>=2.1.0     # PyMuPDF's neural layout analysis, used by its table detector
-openpyxl>=3.1.0
-python-docx>=1.1.0
-python-pptx>=1.0.0
-pyyaml>=6.0
-langchain-anthropic>=1.0.0
-langchain-google-genai>=3.0.0
-langchain-ollama>=1.0.0
+# GENERATED from pyproject.toml by `python scripts/dev.py lock`. Do not edit: add or change libraries in
+# pyproject.toml, then re-run the lock. Exact versions for Python 3.11-3.13 on Linux, macOS and Windows.
+aiohappyeyeballs==2.6.1
+    # via aiohttp
+aiohttp==3.12.15
+    # via
+    #   investment-analyst
+    #   langchain-community
+    #   langchain-tavily
+aiosignal==1.4.0
+    # via aiohttp
+aiosqlite==0.21.0
+    # via
+    #   investment-analyst
+    #   langgraph-checkpoint-sqlite
+alembic==1.18.3
+    # via investment-analyst
+annotated-doc==0.0.2
+    # via fastapi
+annotated-types==0.7.0
+    # via pydantic
+anthropic==2.12.0
+    # via langchain-anthropic
+anyio==4.10.0
+    # via
+    #   anthropic
+    #   google-genai
+    #   groq
+    #   httpx
+    #   httpx2
+    #   langsmith
+    #   mcp
+    #   openai
+    #   sse-starlette
+    #   starlette
+    #   watchfiles
+arq==0.28.0
+    # via investment-analyst
+async-timeout==5.0.1 ; python_full_version < '3.11.3'
+    # via redis
+asyncpg==0.31.0
+    # via investment-analyst
+attrs==25.3.0
+    # via
+    #   aiohttp
+    #   cyclopts
+    #   jsonschema
+    #   referencing
+authlib==1.6.7
+    # via fastmcp
+azure-core==1.38.0
+    # via
+    #   azure-identity
+    #   azure-storage-blob
+azure-identity==1.15.0
+    # via investment-analyst
+azure-storage-blob==12.19.0
+    # via investment-analyst
+backports-tarfile==1.2.0 ; python_full_version < '3.12'
+    # via jaraco-context
+bcrypt==5.0.0
+    # via
+    #   investment-analyst
+    #   paramiko
+beartype==0.22.9
+    # via
+    #   py-key-value-aio
+    #   py-key-value-shared
+beautifulsoup4==4.13.5
+    # via
+    #   investment-analyst
+    #   markdownify
+    #   yfinance
+boto3==1.34.34
+    # via investment-analyst
+botocore==1.34.34
+    # via
+    #   boto3
+    #   investment-analyst
+    #   s3transfer
+cachetools==5.5.2
+    # via py-key-value-aio
+certifi==2026.11.20
+    # via
+    #   cloudinary
+    #   curl-cffi
+    #   httpcore
+    #   httpx
+    #   langchain-core
+    #   requests
+cffi==2.0.0
+    # via
+    #   cryptography
+    #   curl-cffi
+    #   pynacl
+charset-normalizer==3.4.3
+    # via requests
+choreographer==1.2.1
+    # via kaleido
+click==8.2.1
+    # via
+    #   arq
+    #   nltk
+    #   typer
+    #   typer-slim
+    #   uvicorn
+cloudinary==1.44.1
+    # via investment-analyst
+cloudpickle==3.1.2
+    # via pydocket
+colorama==0.4.6 ; sys_platform == 'win32'
+    # via
+    #   click
+    #   loguru
+    #   pytest
+    #   tqdm
+    #   uvicorn
+coloredlogs==15.0.1
+    # via onnxruntime
+croniter==6.0.0
+    # via pydocket
+cryptography==42.0.2
+    # via
+    #   authlib
+    #   azure-identity
+    #   azure-storage-blob
+    #   google-auth
+    #   investment-analyst
+    #   msal
+    #   paramiko
+    #   pyjwt
+    #   python-jose
+    #   secretstorage
+curl-cffi==0.13.0
+    # via yfinance
+cyclopts==4.5.1
+    # via fastmcp
+dataclasses-json==0.6.7
+    # via langchain-community
+defusedxml==0.7.1
+    # via fpdf2
+diskcache==5.6.3
+    # via py-key-value-aio
+distro==1.9.0
+    # via
+    #   google-genai
+    #   groq
+    #   langsmith
+    #   openai
+dnspython==2.8.0
+    # via email-validator
+docstring-parser==0.17.0
+    # via
+    #   anthropic
+    #   cyclopts
+docutils==0.22.4
+    # via rich-rst
+ecdsa==0.19.2
+    # via python-jose
+email-validator==2.3.0
+    # via pydantic
+et-xmlfile==2.0.0
+    # via openpyxl
+exceptiongroup==1.3.1
+    # via fastmcp
+fakeredis==2.33.0
+    # via pydocket
+fastapi==0.128.5
+    # via investment-analyst
+fastembed==0.7.4
+    # via investment-analyst
+fastmcp==2.14.5
+    # via investment-analyst
+filelock==3.20.3
+    # via huggingface-hub
+filetype==1.2.0
+    # via langchain-google-genai
+flatbuffers==25.12.19
+    # via onnxruntime
+fonttools==4.63.0
+    # via fpdf2
+fpdf2==2.8.7
+    # via investment-analyst
+frozendict==2.4.7
+    # via yfinance
+frozenlist==1.7.0
+    # via
+    #   aiohttp
+    #   aiosignal
+fsspec==2025.9.0
+    # via huggingface-hub
+google-api-core==2.25.1
+    # via google-api-python-client
+google-api-python-client==2.116.0
+    # via investment-analyst
+google-auth==2.56.2
+    # via
+    #   google-api-core
+    #   google-api-python-client
+    #   google-auth-httplib2
+    #   google-auth-oauthlib
+    #   google-genai
+    #   investment-analyst
+google-auth-httplib2==0.2.0
+    # via
+    #   google-api-python-client
+    #   investment-analyst
+google-auth-oauthlib==1.2.0
+    # via investment-analyst
+google-genai==3.6.1
+    # via
+    #   investment-analyst
+    #   langchain-google-genai
+googleapis-common-protos==1.70.0
+    # via google-api-core
+greenlet==3.2.4
+    # via
+    #   playwright
+    #   sqlalchemy
+groq==0.31.1
+    # via langchain-groq
+grpcio==1.74.0
+    # via qdrant-client
+h11==0.16.0
+    # via
+    #   httpcore
+    #   httpcore2
+    #   uvicorn
+h2==4.3.0
+    # via httpx
+hf-xet==1.2.0 ; platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'
+    # via huggingface-hub
+hiredis==3.5.0
+    # via redis
+hpack==4.1.0
+    # via h2
+httpcore==1.0.9
+    # via httpx
+httpcore2==2.16.2 ; sys_platform != 'emscripten'
+    # via httpx2
+httplib2==0.31.0
+    # via
+    #   google-api-python-client
+    #   google-auth-httplib2
+httptools==0.7.1
+    # via uvicorn
+httpx==0.28.1
+    # via
+    #   fastmcp
+    #   groq
+    #   huggingface-hub
+    #   investment-analyst
+    #   langchain-core
+    #   langgraph-sdk
+    #   mcp
+    #   ollama
+    #   openai
+    #   qdrant-client
+    #   tavily-python
+httpx-sse==0.4.1
+    # via
+    #   langchain-community
+    #   mcp
+httpx2==2.16.2
+    # via
+    #   anthropic
+    #   google-genai
+    #   langsmith
+httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten'
+    # via httpx2
+huggingface-hub==1.3.2
+    # via
+    #   fastembed
+    #   tokenizers
+humanfriendly==10.0
+    # via coloredlogs
+hyperframe==6.1.0
+    # via h2
+idna==3.20
+    # via
+    #   anyio
+    #   email-validator
+    #   httpx
+    #   httpx2
+    #   requests
+    #   yarl
+importlib-metadata==8.7.1
+    # via
+    #   keyring
+    #   opentelemetry-api
+iniconfig==2.3.0
+    # via pytest
+isodate==0.7.2
+    # via azure-storage-blob
+jaraco-classes==3.4.0
+    # via keyring
+jaraco-context==6.1.0
+    # via keyring
+jaraco-functools==4.4.0
+    # via keyring
+jeepney==0.9.0 ; sys_platform == 'linux'
+    # via
+    #   keyring
+    #   secretstorage
+jiter==0.10.0
+    # via
+    #   anthropic
+    #   openai
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
+joblib==1.5.2
+    # via nltk
+jsonpatch==1.33
+    # via langchain-core
+jsonpointer==3.0.0
+    # via jsonpatch
+jsonref==1.1.0
+    # via fastmcp
+jsonschema==4.25.1
+    # via mcp
+jsonschema-path==0.3.4
+    # via fastmcp
+jsonschema-specifications==2025.9.1
+    # via jsonschema
+kaleido==1.2.0
+    # via investment-analyst
+keyring==25.7.0
+    # via py-key-value-aio
+langchain==1.1.3
+    # via
+    #   investment-analyst
+    #   langchain-tavily
+langchain-anthropic==1.7.12
+    # via investment-analyst
+langchain-classic==1.0.0
+    # via langchain-community
+langchain-community==0.4
+    # via investment-analyst
+langchain-core==1.8.4
+    # via
+    #   investment-analyst
+    #   langchain
+    #   langchain-anthropic
+    #   langchain-classic
+    #   langchain-community
+    #   langchain-google-genai
+    #   langchain-groq
+    #   langchain-mcp-adapters
+    #   langchain-ollama
+    #   langchain-openai
+    #   langchain-qdrant
+    #   langchain-tavily
+    #   langchain-text-splitters
+    #   langgraph
+    #   langgraph-checkpoint
+    #   langgraph-prebuilt
+    #   langgraph-supervisor
+langchain-google-genai==4.5.2
+    # via investment-analyst
+langchain-groq==1.1.0
+    # via investment-analyst
+langchain-mcp-adapters==0.2.1
+    # via investment-analyst
+langchain-ollama==1.1.0
+    # via investment-analyst
+langchain-openai==1.1.1
+    # via investment-analyst
+langchain-protocol==0.0.22
+    # via langchain-core
+langchain-qdrant==1.1.0
+    # via investment-analyst
+langchain-tavily==0.2.13
+    # via investment-analyst
+langchain-text-splitters==1.0.0
+    # via langchain-classic
+langgraph==1.0.4
+    # via
+    #   investment-analyst
+    #   langchain
+    #   langgraph-supervisor
+langgraph-checkpoint==3.0.1
+    # via
+    #   investment-analyst
+    #   langgraph
+    #   langgraph-checkpoint-postgres
+    #   langgraph-checkpoint-sqlite
+    #   langgraph-prebuilt
+langgraph-checkpoint-postgres==3.0.0
+    # via investment-analyst
+langgraph-checkpoint-sqlite==3.0.1
+    # via investment-analyst
+langgraph-prebuilt==1.0.5
+    # via
+    #   investment-analyst
+    #   langgraph
+langgraph-sdk==0.2.6
+    # via
+    #   investment-analyst
+    #   langgraph
+langgraph-supervisor==0.0.31
+    # via investment-analyst
+langsmith==0.16.0
+    # via
+    #   langchain-classic
+    #   langchain-community
+    #   langchain-core
+logistro==2.0.1
+    # via
+    #   choreographer
+    #   kaleido
+loguru==0.7.3
+    # via fastembed
+lupa==2.6
+    # via fakeredis
+lxml==6.1.3
+    # via
+    #   investment-analyst
+    #   python-docx
+    #   python-pptx
+mako==1.3.10
+    # via alembic
+markdown==3.10.2
+    # via investment-analyst
+markdown-it-py==4.0.0
+    # via rich
+markdownify==1.2.3
+    # via investment-analyst
+markupsafe==3.0.2
+    # via mako
+marshmallow==3.26.1
+    # via dataclasses-json
+mcp==1.26.0
+    # via
+    #   fastmcp
+    #   investment-analyst
+    #   langchain-mcp-adapters
+mdurl==0.1.2
+    # via markdown-it-py
+mmh3==5.2.0
+    # via fastembed
+more-itertools==10.8.0
+    # via
+    #   jaraco-classes
+    #   jaraco-functools
+mpmath==1.3.0
+    # via sympy
+msal==1.26.0
+    # via
+    #   azure-identity
+    #   msal-extensions
+msal-extensions==1.1.0
+    # via azure-identity
+multidict==6.6.4
+    # via
+    #   aiohttp
+    #   yarl
+multitasking==0.0.12
+    # via yfinance
+mypy-extensions==1.1.0
+    # via typing-inspect
+narwhals==2.5.0
+    # via plotly
+networkx==3.5
+    # via pymupdf
+nh3==0.3.6
+    # via investment-analyst
+nltk==3.9.1
+    # via
+    #   investment-analyst
+    #   textblob
+numpy==2.2.6
+    # via
+    #   fastembed
+    #   investment-analyst
+    #   langchain-community
+    #   onnxruntime
+    #   pandas
+    #   pymupdf
+    #   qdrant-client
+    #   scipy
+    #   ta
+    #   yfinance
+oauthlib==3.3.1
+    # via requests-oauthlib
+ollama==0.6.3
+    # via langchain-ollama
+onnxruntime==1.23.2
+    # via
+    #   fastembed
+    #   pymupdf
+openai==2.9.0
+    # via
+    #   investment-analyst
+    #   langchain-openai
+openapi-pydantic==0.5.1
+    # via fastmcp
+openpyxl==3.1.5
+    # via investment-analyst
+opentelemetry-api==1.39.1
+    # via
+    #   anthropic
+    #   pydocket
+orjson==3.11.3
+    # via
+    #   kaleido
+    #   langgraph-checkpoint-postgres
+    #   langgraph-sdk
+    #   langsmith
+ormsgpack==1.12.0
+    # via langgraph-checkpoint
+packaging==25.0
+    # via
+    #   fastmcp
+    #   huggingface-hub
+    #   kaleido
+    #   langchain-core
+    #   langsmith
+    #   marshmallow
+    #   msal-extensions
+    #   onnxruntime
+    #   plotly
+    #   pytesseract
+    #   pytest
+pandas==2.3.2
+    # via
+    #   investment-analyst
+    #   ta
+    #   yfinance
+paramiko==3.4.0
+    # via investment-analyst
+pathable==0.4.4
+    # via jsonschema-path
+pathvalidate==3.3.1
+    # via py-key-value-aio
+peewee==3.19.0
+    # via yfinance
+pillow==11.3.0
+    # via
+    #   fastembed
+    #   fpdf2
+    #   investment-analyst
+    #   pytesseract
+    #   python-pptx
+pip==26.3
+    # via pip-system-certs
+pip-system-certs==5.3
+    # via investment-analyst
+platformdirs==4.4.0
+    # via
+    #   fastmcp
+    #   yfinance
+playwright==1.61.0
+    # via investment-analyst
+plotly==6.5.1
+    # via investment-analyst
+pluggy==1.6.0
+    # via pytest
+portalocker==2.10.1
+    # via
+    #   msal-extensions
+    #   qdrant-client
+prometheus-client==0.24.1
+    # via pydocket
+propcache==0.3.2
+    # via
+    #   aiohttp
+    #   yarl
+proto-plus==1.26.1
+    # via google-api-core
+protobuf==5.29.6
+    # via
+    #   google-api-core
+    #   googleapis-common-protos
+    #   onnxruntime
+    #   proto-plus
+    #   qdrant-client
+    #   yfinance
+psutil==7.2.2
+    # via pymupdf
+psycopg==3.2.11
+    # via langgraph-checkpoint-postgres
+psycopg-pool==3.2.6
+    # via langgraph-checkpoint-postgres
+psycopg2-binary==2.9.12
+    # via investment-analyst
+py-key-value-aio==0.3.0
+    # via
+    #   fastmcp
+    #   pydocket
+py-key-value-shared==0.3.0
+    # via py-key-value-aio
+py-rust-stemmers==0.1.5
+    # via fastembed
+pyasn1==0.6.1
+    # via
+    #   pyasn1-modules
+    #   python-jose
+    #   rsa
+pyasn1-modules==0.4.2
+    # via google-auth
+pycparser==2.23 ; implementation_name != 'PyPy'
+    # via cffi
+pydantic==2.12.5
+    # via
+    #   anthropic
+    #   fastapi
+    #   fastmcp
+    #   google-genai
+    #   groq
+    #   investment-analyst
+    #   langchain
+    #   langchain-anthropic
+    #   langchain-classic
+    #   langchain-core
+    #   langchain-google-genai
+    #   langchain-qdrant
+    #   langgraph
+    #   langsmith
+    #   mcp
+    #   ollama
+    #   openai
+    #   openapi-pydantic
+    #   pydantic-settings
+    #   qdrant-client
+pydantic-core==2.41.5
+    # via pydantic
+pydantic-settings==2.10.1
+    # via
+    #   investment-analyst
+    #   langchain-community
+    #   mcp
+pydocket==0.17.5
+    # via fastmcp
+pyee==13.0.1
+    # via playwright
+pyflakes==4.1.0
+    # via investment-analyst
+pygments==2.19.2
+    # via
+    #   pytest
+    #   rich
+pyjwt==2.11.0
+    # via
+    #   mcp
+    #   msal
+    #   redis
+pymupdf==2.1
+    # via
+    #   investment-analyst
+    #   pymupdf-layout
+    #   pymupdf4llm
+pymupdf-layout==2.1
+    # via
+    #   investment-analyst
+    #   pymupdf
+    #   pymupdf4llm
+pymupdf4llm==2.1
+    # via
+    #   pymupdf
+    #   pymupdf-layout
+pynacl==1.6.2
+    # via paramiko
+pyparsing==3.2.4
+    # via httplib2
+pyperclip==1.11.0
+    # via fastmcp
+pyreadline3==3.5.6 ; sys_platform == 'win32'
+    # via humanfriendly
+pytesseract==0.3.13
+    # via investment-analyst
+pytest==9.0.2
+    # via
+    #   investment-analyst
+    #   pytest-timeout
+pytest-timeout==2.4.0
+    # via kaleido
+python-dateutil==2.9.0.post0
+    # via
+    #   botocore
+    #   croniter
+    #   investment-analyst
+    #   pandas
+python-docx==1.2.0
+    # via investment-analyst
+python-dotenv==1.2.1
+    # via
+    #   fastmcp
+    #   investment-analyst
+    #   pydantic-settings
+    #   uvicorn
+python-jose==3.5.0
+    # via investment-analyst
+python-json-logger==4.0.0
+    # via pydocket
+python-multipart==0.0.20
+    # via
+    #   investment-analyst
+    #   mcp
+python-pptx==1.0.2
+    # via investment-analyst
+pytz==2025.2
+    # via
+    #   croniter
+    #   pandas
+    #   yfinance
+pywin32==312 ; sys_platform == 'win32'
+    # via
+    #   mcp
+    #   portalocker
+pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
+    # via keyring
+pyyaml==6.0.2
+    # via
+    #   huggingface-hub
+    #   investment-analyst
+    #   jsonschema-path
+    #   langchain-classic
+    #   langchain-community
+    #   langchain-core
+    #   pymupdf
+    #   uvicorn
+qdrant-client==1.19.0
+    # via
+    #   investment-analyst
+    #   langchain-qdrant
+redis==5.3.1
+    # via
+    #   arq
+    #   fakeredis
+    #   investment-analyst
+    #   py-key-value-aio
+    #   pydocket
+referencing==0.36.2
+    # via
+    #   jsonschema
+    #   jsonschema-path
+    #   jsonschema-specifications
+regex==2025.9.1
+    # via
+    #   nltk
+    #   tiktoken
+requests==2.32.5
+    # via
+    #   azure-core
+    #   fastembed
+    #   google-api-core
+    #   google-auth
+    #   google-genai
+    #   investment-analyst
+    #   jsonschema-path
+    #   langchain-classic
+    #   langchain-community
+    #   langchain-tavily
+    #   langsmith
+    #   msal
+    #   requests-oauthlib
+    #   requests-toolbelt
+    #   tavily-python
+    #   tiktoken
+    #   yfinance
+requests-oauthlib==2.0.0
+    # via google-auth-oauthlib
+requests-toolbelt==1.0.0
+    # via langsmith
+rich==14.3.2
+    # via
+    #   cyclopts
+    #   fastmcp
+    #   pydocket
+    #   rich-rst
+    #   typer
+rich-rst==1.3.2
+    # via cyclopts
+rpds-py==0.27.1
+    # via
+    #   jsonschema
+    #   referencing
+rsa==4.9.1
+    # via python-jose
+s3transfer==0.10.4
+    # via boto3
+scipy==1.17.0
+    # via investment-analyst
+secretstorage==3.5.0 ; sys_platform == 'linux'
+    # via keyring
+shellingham==1.5.4
+    # via
+    #   huggingface-hub
+    #   typer
+simplejson==3.20.2
+    # via choreographer
+six==1.17.0
+    # via
+    #   cloudinary
+    #   ecdsa
+    #   markdownify
+    #   python-dateutil
+sniffio==1.3.1
+    # via
+    #   anthropic
+    #   anyio
+    #   google-genai
+    #   groq
+    #   langsmith
+    #   openai
+sortedcontainers==2.4.0
+    # via fakeredis
+soupsieve==2.8
+    # via beautifulsoup4
+sqlalchemy==2.0.43
+    # via
+    #   alembic
+    #   investment-analyst
+    #   langchain-classic
+    #   langchain-community
+sqlite-vec==0.1.6
+    # via langgraph-checkpoint-sqlite
+sse-starlette==3.2.0
+    # via mcp
+starlette==0.52.1
+    # via
+    #   fastapi
+    #   mcp
+    #   sse-starlette
+sympy==1.14.0
+    # via onnxruntime
+ta==0.11.0
+    # via investment-analyst
+tabulate==0.10.0
+    # via pymupdf
+tavily-python==0.7.14
+    # via investment-analyst
+tenacity==9.1.2
+    # via
+    #   google-genai
+    #   langchain-community
+    #   langchain-core
+textblob==0.19.0
+    # via investment-analyst
+tiktoken==0.11.0
+    # via
+    #   langchain-openai
+    #   tavily-python
+tokenizers==0.22.2
+    # via fastembed
+tqdm==4.67.1
+    # via
+    #   fastembed
+    #   huggingface-hub
+    #   nltk
+    #   openai
+truststore==0.10.5 ; sys_platform != 'emscripten'
+    # via
+    #   httpcore2
+    #   httpx2
+typer==0.21.1
+    # via pydocket
+typer-slim==0.21.1
+    # via huggingface-hub
+typing-extensions==4.15.0
+    # via
+    #   aiosignal
+    #   aiosqlite
+    #   alembic
+    #   anthropic
+    #   anyio
+    #   azure-core
+    #   azure-storage-blob
+    #   beautifulsoup4
+    #   exceptiongroup
+    #   fastapi
+    #   google-genai
+    #   groq
+    #   httpx2
+    #   huggingface-hub
+    #   investment-analyst
+    #   langchain-core
+    #   langchain-mcp-adapters
+    #   langchain-protocol
+    #   langsmith
+    #   mcp
+    #   openai
+    #   opentelemetry-api
+    #   psycopg
+    #   psycopg-pool
+    #   py-key-value-shared
+    #   pydantic
+    #   pydantic-core
+    #   pydocket
+    #   pyee
+    #   python-docx
+    #   python-pptx
+    #   referencing
+    #   sqlalchemy
+    #   starlette
+    #   typer
+    #   typer-slim
+    #   typing-inspect
+    #   typing-inspection
+typing-inspect==0.9.0
+    # via dataclasses-json
+typing-inspection==0.4.2
+    # via
+    #   fastapi
+    #   mcp
+    #   pydantic
+    #   pydantic-settings
+tzdata==2025.2
+    # via
+    #   pandas
+    #   psycopg
+uritemplate==4.2.0
+    # via google-api-python-client
+urllib3==2.0.7
+    # via
+    #   botocore
+    #   cloudinary
+    #   qdrant-client
+    #   requests
+uuid-utils==0.12.0
+    # via
+    #   langchain-core
+    #   langsmith
+uvicorn==0.38.0
+    # via
+    #   fastmcp
+    #   investment-analyst
+    #   mcp
+uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
+    # via uvicorn
+watchfiles==1.1.1
+    # via uvicorn
+websockets==16.0
+    # via
+    #   fastmcp
+    #   google-genai
+    #   langsmith
+    #   uvicorn
+    #   yfinance
+win32-setctime==1.2.1 ; sys_platform == 'win32'
+    # via loguru
+xlsxwriter==3.3.4
+    # via python-pptx
+xxhash==3.5.0
+    # via
+    #   langgraph
+    #   langsmith
+yarl==1.20.1
+    # via aiohttp
+yfinance==1.1.0
+    # via investment-analyst
+zipp==3.23.0
+    # via importlib-metadata
+zstandard==0.24.0
+    # via langsmith

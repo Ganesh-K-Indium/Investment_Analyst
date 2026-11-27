@@ -66,5 +66,5 @@ RUN chmod +x docker/*.sh
 # The API. MCP servers (8565-8568, 8570) listen on loopback inside the container; the workers share its network.
 EXPOSE 8000
 
-# Start MCP servers (background), run migrations, then the FastAPI app
+# Start MCP servers (background), then the FastAPI app (it migrates the database on startup)
 ENTRYPOINT ["./docker/entrypoint.sh"]

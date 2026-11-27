@@ -1,0 +1,116 @@
+# Investment Analyst backend: project metadata and DIRECT dependencies (version ranges).
+#
+# This is the file to edit when adding, removing or upgrading a library. Then, from the repo root:
+#     python scripts/dev.py lock       # re-resolve requirements.txt (exact pins for every OS), keeping other versions
+#     python scripts/dev.py install    # install the new pins into venv/
+# Commit both files. requirements.txt is generated: never edit it by hand.
+
+[project]
+name = "investment-analyst"
+version = "2.2.0"
+description = "AI research for investment teams: SEC filings and your own documents, quant agents, traceable answers."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # Web API
+    "fastapi>=0.128.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.1.0",
+    "python-multipart>=0.0.9",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+    "typing-extensions>=4.8.0",
+    "python-dateutil>=2.9.0",
+    "pip-system-certs>=5.3",  # use the operating system's certificate store (corporate proxies)
+    # Auth and security
+    "python-jose[cryptography]>=3.3.0",
+    "bcrypt>=4.0.0",
+    "cryptography>=42.0.0",
+    "nh3>=0.2.17",  # HTML sanitising
+    # Database and job queue
+    "sqlalchemy>=2.0.25",
+    "alembic>=1.13.1",
+    "asyncpg>=0.29.0",
+    "psycopg2-binary>=2.9.0",  # Alembic migrations (sync driver)
+    "aiosqlite>=0.20.0",  # tests
+    "arq>=0.26.0",
+    "redis[hiredis]>=5.0.0",
+    # LangChain, LangGraph and model providers
+    "langchain>=0.3.0",
+    "langchain-core>=1.0.0",
+    "langchain-community>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langchain-anthropic>=1.0.0",
+    "langchain-google-genai>=3.0.0",
+    "langchain-ollama>=1.0.0",
+    "langchain-groq",
+    "langchain-qdrant>=0.2.0",
+    "langchain-tavily",
+    "langchain-mcp-adapters>=0.2.1",
+    "langgraph>=1.0.0",
+    "langgraph-checkpoint>=3.0.0",
+    "langgraph-checkpoint-sqlite>=3.0.0",
+    "langgraph-checkpoint-postgres>=2.0",
+    "langgraph-prebuilt>=1.0.0",
+    "langgraph-sdk>=0.2.0",
+    "langgraph-supervisor>=0.0.31",
+    "openai>=1.0.0",
+    "google-genai>=0.5.0",
+    "tavily-python>=0.3.0",
+    # MCP servers
+    "fastmcp>=0.4.0",
+    "mcp>=1.9.2",
+    # Vector search
+    "qdrant-client>=1.19.0,<2.0.0",
+    "fastembed>=0.3.0",  # BM25 sparse vectors and the local re-ranker
+    # Market data and analytics
+    "yfinance>=0.2.40",
+    "ta>=0.11.0",  # technical indicators
+    "numpy>=2.0,<2.3",  # tested on 2.2.x (pandas, fastembed, onnx stack)
+    "pandas>=2.0.0",
+    "scipy>=1.11.0",
+    "textblob>=0.18.0",
+    "nltk",  # used by textblob
+    "plotly>=5.18.0",
+    "kaleido>=0.2.1",  # plotly image export
+    # Documents, PDFs and OCR
+    "pymupdf>=2.1.0",  # 2.x required: the table detector the extraction engine relies on differs from 1.x
+    "pymupdf-layout>=2.1.0",
+    "playwright>=1.61.0",  # renders SEC filings to PDF; then run: playwright install chromium
+    "pytesseract",
+    "pillow>=10.0.0",
+    "openpyxl>=3.1.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=1.0.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.3.0",  # 5.3+ ships wheels for Python 3.13 (no compiler needed on Windows)
+    "markdown>=3.6",
+    "markdownify>=0.13.1",
+    "fpdf2>=2.7.0",
+    # HTTP and charts
+    "requests>=2.31.0",
+    "httpx>=0.26.0",
+    "aiohttp>=3.9.0",
+    "cloudinary",
+    # File and data-source connectors
+    "google-api-python-client>=2.116.0",  # Google Drive
+    "google-auth>=2.27.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.0",
+    "azure-storage-blob>=12.19.0",  # Azure Blob
+    "azure-identity>=1.15.0",
+    "boto3>=1.34.0",  # S3
+    "botocore>=1.34.0",
+    "paramiko>=3.4.0",  # SFTP
+]
+
+[project.optional-dependencies]
+# Tools for running the test suite; installed by `python scripts/dev.py install` and in the Docker image.
+dev = [
+    "pytest>=8.0",
+    "pyflakes>=3.0",
+]
+
+
+[tool.uv]
+package = false          # an application, not a library: nothing to build or publish

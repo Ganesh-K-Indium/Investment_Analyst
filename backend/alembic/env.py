@@ -1,6 +1,4 @@
 from logging.config import fileConfig
-from dotenv import load_dotenv
-load_dotenv(override=True)
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
@@ -10,8 +8,12 @@ import sys
 # Add the parent directory to the path so we can import our models
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# Import your Base and models
-from app.database.models import Base
+# Import your Base and models. The database URL comes from the app's configuration (environment > .env > config.yaml),
+# never from a second .env load: migrations also run inside the API process at startup, and overriding the environment
+# there would change the configuration of the whole running app.
+from app.core.config import get_settings  # noqa: E402
+from app.database.connection import _to_sync_url  # noqa: E402
+from app.database.models import Base  # noqa: E402
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -34,10 +36,8 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 target_metadata = Base.metadata
 
-# Override sqlalchemy.url with DATABASE_URL environment variable if it exists
-database_url = os.getenv("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+# The configured DATABASE_URL, in the sync (psycopg2) form Alembic needs
+config.set_main_option("sqlalchemy.url", _to_sync_url(get_settings().database_url))
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

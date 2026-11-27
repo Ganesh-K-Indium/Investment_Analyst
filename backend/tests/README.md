@@ -2,7 +2,7 @@
 
 ```bash
 cd backend
-pytest                       # whole suite, about 2 minutes
+python ../scripts/dev.py test   # or plain `pytest` with the virtualenv active; about 2 minutes
 pytest tests/test_config.py  # one file
 pytest -k streaming          # by name
 ```

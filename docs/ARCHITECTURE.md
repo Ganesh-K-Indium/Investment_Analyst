@@ -36,9 +36,9 @@ flowchart LR
 | Process | Started by | Does |
 |---|---|---|
 | **API** (`app/main.py`) | `uvicorn app.main:app` | HTTP routes, auth, file uploads, document reading, settings. Hands chats and long analyses to the workers and relays their live events to the browser. |
-| **Interactive worker** (`app/worker.py`) | `arq app.worker.InteractiveWorkerSettings` | Streamed chats, queued asks/compares, quant queries. Up to `WORKER_INTERACTIVE_MAX_JOBS` at once. |
-| **Batch worker** | `arq app.worker.BatchWorkerSettings` | Multi-ticker ALPHA runs, so they never delay a chat. |
-| **MCP servers** (`quant/*_mcp`) | the API container's entrypoint, or `scripts/start_mcp_servers.sh` | Market-data tools the quant agents call: stock info 8565, technical 8566, research 8567, options 8568, Postgres 8570. |
+| **Interactive worker** (`app/worker.py`) | `python -m app.worker interactive` (Docker: `arq app.worker.InteractiveWorkerSettings`) | Streamed chats, queued asks/compares, quant queries. Up to `WORKER_INTERACTIVE_MAX_JOBS` at once. |
+| **Batch worker** | `python -m app.worker batch` | Multi-ticker ALPHA runs, so they never delay a chat. |
+| **MCP servers** (`quant/*_mcp`) | the API container's entrypoint, or `scripts/dev.py start` / `dev.py mcp` | Market-data tools the quant agents call: stock info 8565, technical 8566, research 8567, options 8568, Postgres 8570. |
 | **PostgreSQL** | compose / managed | All application data, plus the LangGraph checkpointer shared by RAG and quant. |
 | **Redis** | compose / managed | Arq job queues, live-update pub/sub, worker health keys. |
 | **Qdrant** | compose / Qdrant Cloud | One hybrid collection per ticker (`ticker_<t>`), plus `user_documents` and `analyst_notes`. |
@@ -285,7 +285,7 @@ The API process is a single process by design: heavy work runs on workers, and a
 | `integrations`, `user_mcp_servers`, `user_data_sources` | Connected file/database sources, MCP servers and market-data providers, credentials encrypted. |
 | `form4_transactions` | Insider transactions, indexed by issuer and date. |
 
-LangGraph's checkpoint tables live in the same database. Migrations are one linear Alembic chain (head `025_user_data_sources`); the API runs `alembic upgrade head` at startup.
+LangGraph's checkpoint tables live in the same database. Migrations are one linear Alembic chain (head `025_user_data_sources`); the API and each worker run `alembic upgrade head` at startup, one process at a time (a Postgres advisory lock), so a fresh database is never migrated twice at once.
 
 ---
 
@@ -318,6 +318,8 @@ Interactive documentation is served at `/docs`. Every route needs a JWT except s
 
 ## 13. Extending the system
 
+**A Python library.** Add it with a version range to `dependencies` in `backend/pyproject.toml`, run `python scripts/dev.py lock` (re-pins only what changed) and `python scripts/dev.py install`, and commit `pyproject.toml`, `uv.lock` and `requirements.txt` together. Prefer libraries that ship wheels for Windows, macOS and Linux; run blocking ones off the event loop (rule 5).
+
 **A deployment setting.** Add a typed field with a default and `description` to `Settings` in `app/core/config.py`, under the right `# ──` group. Read it with `get_settings().<name>` at the point of use (not at import time, if tests or reloads should see changes). Regenerate the example: `python -m app.core.config --example > ../config.example.yaml`. Add it to `.env.example` only if it is a secret or something everyone sets.
 
 **A product setting (Settings screen).** Add a field to the right section of `SECTIONS` in `app/services/app_settings/schema.py` with `_f(type, default, label, help, ...)`. It is then validated, stored, layered, returned by `GET /settings/schema` and rendered by the UI. Read it with `app_settings.get(section, key)` inside a run.
@@ -326,7 +328,7 @@ Interactive documentation is served at `/docs`. Every route needs a JWT except s
 
 **A long-running action.** Write the logic once as an `async def *_core(...)`, call it from the route, and add a job in `app/jobs/` that calls the same function (register it in `_FUNCTIONS` in `app/worker.py`). Pick the interactive queue for anything a user waits on, batch otherwise.
 
-**A quant agent or MCP server.** Add the server under `quant/<name>_mcp/`, register it in `_DEFAULTS` in `app/services/mcp_registry.py` (and its `mcp_<name>_*` fields in config), start it in `backend/docker/entrypoint.sh` and `scripts/start_mcp_servers.sh`, then create the agent in `app/services/stock_agent.py` and add it to `QUANT_AGENTS` in the settings schema. Run blocking library calls in a thread inside the server.
+**A quant agent or MCP server.** Add the server under `quant/<name>_mcp/`, register it in `_DEFAULTS` in `app/services/mcp_registry.py` (and its `mcp_<name>_*` fields in config), start it in `backend/docker/entrypoint.sh` and add it to `MCP_SERVERS` in `scripts/dev.py` (and `scripts/start_mcp_servers.sh`), then create the agent in `app/services/stock_agent.py` and add it to `QUANT_AGENTS` in the settings schema. Run blocking library calls in a thread inside the server.
 
 **A database change.** Edit `app/database/models.py`, then from `backend/`: `alembic revision -m "short_name"` with a revision id following the chain (`026_...`), write `upgrade`/`downgrade`, and run `alembic upgrade head`.
 

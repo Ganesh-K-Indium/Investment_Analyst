@@ -79,3 +79,16 @@ class BatchWorkerSettings:
     max_jobs = get_settings().worker_batch_max_jobs
     job_timeout = get_settings().worker_batch_job_timeout  # multi-ticker alpha runs can take well over 5 min
     health_check_interval = 30
+
+
+WORKERS = {"interactive": InteractiveWorkerSettings, "batch": BatchWorkerSettings}
+
+if __name__ == "__main__":
+    # Same on every OS (no shell needed):  python -m app.worker interactive   |   python -m app.worker batch
+    import sys
+    from arq.worker import run_worker
+
+    name = sys.argv[1] if len(sys.argv) > 1 else "interactive"
+    if name not in WORKERS:
+        raise SystemExit(f"usage: python -m app.worker [{' | '.join(WORKERS)}]")
+    run_worker(WORKERS[name])

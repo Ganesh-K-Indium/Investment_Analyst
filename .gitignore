@@ -122,3 +122,6 @@ node_modules/
 
 # Deployment configuration (copy config.example.yaml); may hold deployment-specific values
 /config.yaml
+
+# Tool caches (uv, used by scripts/dev.py lock)
+/.cache/

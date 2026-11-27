@@ -222,7 +222,9 @@ async def _save_figure(fig: go.Figure, filename: str) -> dict:
         logger.error("Cloudinary error: %s", e)
 
     try:
-        local_path = f"/tmp/{filename}"
+        from app.core.paths import CHARTS_DIR          # same folder as the RAG charts; works on every OS (no /tmp on Windows)
+        CHARTS_DIR.mkdir(parents=True, exist_ok=True)
+        local_path = str(CHARTS_DIR / filename)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: fig.write_image(local_path, width=1200, height=720))
         return {"chart_url": local_path, "chart_generated": True, "storage": "local"}

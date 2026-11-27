@@ -22,6 +22,7 @@
 [Features](#features) ·
 [Architecture](#architecture) ·
 [Quick start](#quick-start) ·
+[Adding or updating a library](#adding-or-updating-a-library) ·
 [Configuration](#configuration) ·
 [Running in production](#running-in-production) ·
 [Testing](#testing) ·
@@ -109,8 +110,8 @@ flowchart LR
 | Process | What it does |
 |---|---|
 | **API** (`uvicorn app.main:app`) | HTTP routes, auth, uploads, document reading, settings. Hands chats and long analyses to the workers and relays their live progress to the browser. |
-| **Interactive worker** (`arq app.worker.InteractiveWorkerSettings`) | Chats and quick runs. Add more of these to serve more users at once. |
-| **Batch worker** (`arq app.worker.BatchWorkerSettings`) | Multi-ticker ALPHA runs, kept apart so they never slow a chat. |
+| **Interactive worker** (`python -m app.worker interactive`) | Chats and quick runs. Add more of these to serve more users at once. |
+| **Batch worker** (`python -m app.worker batch`) | Multi-ticker ALPHA runs, kept apart so they never slow a chat. |
 | **MCP servers** (`backend/quant/*_mcp`) | Market-data tools for the quant agents, on ports 8565–8568 and 8570. |
 | **PostgreSQL · Redis · Qdrant** | Application data and agent checkpoints · job queues and live updates · vectors. |
 
@@ -126,10 +127,12 @@ How a request flows, the RAG graph, ingestion, the document pipeline, the quant 
 |---|---|
 | **Git** and both repositories side by side | `Investment_Analyst` (this one) and `investment-analyst-ui`. |
 | **Docker** with Docker Compose | Runs Postgres, Redis and Qdrant, or the whole stack. |
-| **Python 3.11+** | For running the backend on your machine (3.11 to 3.13). Not needed for the all-Docker route. |
+| **Python 3.11, 3.12 or 3.13** | For running the backend on your machine. Not needed for the all-Docker route. |
 | **Node.js 20.19+** (22 LTS recommended) | For running the web UI on your machine. Not needed for the all-Docker route. |
 | **Tesseract OCR** | Reads scans. `brew install tesseract` · `sudo apt install tesseract-ocr` · Windows: the UB-Mannheim installer, then set `TESSERACT_CMD`. Included in the Docker image. |
 | **API keys** | **OpenAI** (required), **FRED** (macro data), **Google** (quant chart summaries). Optional: Tavily (web search), Anthropic, Gemini, Groq, Cohere, BLS, Cloudinary. |
+
+Works the same on **Windows, macOS and Linux**. Every pinned package installs from a pre-built wheel on Windows x64, Linux (x86-64 and ARM) and Apple-silicon Macs, so no compiler is needed. On an Intel Mac, PyMuPDF builds from source (install Xcode's command-line tools first), or use Docker.
 
 ```bash
 git clone https://github.com/Ganesh-K-Indium/Investment_Analyst.git
@@ -154,50 +157,47 @@ This starts Postgres, Redis, Qdrant, the API (with the five MCP servers inside i
 
 ### Option B: develop on your machine
 
-**1. Backend dependencies** (the virtualenv lives at the repo root; the code is in `backend/`):
+One tool, `scripts/dev.py`, does the same thing on every OS. It needs nothing but Python. On Windows write `py scripts\dev.py` (or `python`) instead of `python3 scripts/dev.py`.
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate                  # Windows: venv\Scripts\activate
-pip install -r backend/requirements.txt
-playwright install chromium               # renders SEC filings to PDF
+python3 scripts/dev.py setup     # virtualenv, pinned dependencies, Chromium for filings, .env, and the web UI's packages
+                                 # now fill in .env (at least OPENAI_API_KEY)
+python3 scripts/dev.py start     # Postgres/Redis/Qdrant (Docker), the 5 MCP servers, both workers, the API and the UI
 ```
 
-**2. Services:**
+| URL | What |
+|---|---|
+| http://localhost:5173 | Web UI. Create an account on the sign-in page. |
+| http://localhost:8000/docs | API documentation |
+
+`start` prints the API's log in the terminal and writes the others to `data/logs/dev/`; **Ctrl+C stops everything**. Useful options: `--reload` (restart the API on code changes), `--no-ui`, `--no-workers`, `--no-mcp`, `--no-services` (you run Postgres, Redis and Qdrant yourself). The services are published on 5433 (Postgres, so it never clashes with a local one), 6379 and 6333, which is what `.env.example` points at.
+
+| Command | Does |
+|---|---|
+| `dev.py status` | What is running, plus the configuration check (values in force, problems) |
+| `dev.py services up` / `down` | Only Postgres, Redis and Qdrant |
+| `dev.py mcp` | Only the five MCP servers (run the API from your IDE's debugger meanwhile) |
+| `dev.py install` | Install the pinned dependencies again, e.g. after a `git pull` changed them |
+| `dev.py lock` | Re-pin dependencies after editing `backend/pyproject.toml` (see [Adding or updating a library](#adding-or-updating-a-library)) |
+| `dev.py test` | Run the test suite; extra arguments go to pytest, e.g. `dev.py test -k config` |
+
+<details>
+<summary><b>Running each part by hand</b></summary>
+
+From `backend/`, with the virtualenv activated (`source ../venv/bin/activate`, or `..\venv\Scripts\activate` on Windows):
 
 ```bash
-docker compose up -d postgres redis qdrant
+python -m uvicorn app.main:app --reload --port 8000    # API (migrates the database on startup)
+python -m app.worker interactive                       # chats and quick runs
+python -m app.worker batch                             # multi-ticker ALPHA runs
+python ../scripts/dev.py mcp                           # the five MCP servers
 ```
 
-Postgres is published on host port **5433** (so it never clashes with a local Postgres), Redis on 6379 and Qdrant on 6333, which is what `.env.example` points at.
+The web UI: `cd ../investment-analyst-ui && npm ci && cp .env.example .env && npm run dev`.
 
-**3. API, workers and MCP servers**, all with one command (auto-reload on code changes):
-
-```bash
-./scripts/start_api.sh --all --dev
-```
-
-Or run each part yourself, from `backend/`:
-
-```bash
-python -m uvicorn app.main:app --reload --port 8000     # API (runs database migrations on startup)
-arq app.worker.InteractiveWorkerSettings                # chats and quick runs
-arq app.worker.BatchWorkerSettings                      # multi-ticker ALPHA runs
-../scripts/start_mcp_servers.sh start                   # the five MCP servers (also: stop | status | logs)
-```
+</details>
 
 Without the workers, chats still work (the API runs them itself) but background runs wait in the queue. Without the MCP servers, the quant agents that need them are left out.
-
-**4. Web UI:**
-
-```bash
-cd ../investment-analyst-ui
-npm install
-echo "VITE_API_BASE_URL=http://localhost:8000" > .env
-npm run dev                               # http://localhost:5173
-```
-
-**5. Check it:** open http://localhost:5173, create an account, and run `cd backend && python -m app.core.config` to see the configuration in force and any problems.
 
 ### Load some data
 
@@ -223,6 +223,27 @@ Tesseract is enough to start. For difficult scans an administrator can add an en
 Then **Settings → Your documents → Reading engines** downloads models, tests an engine on a sample page and selects it. From a terminal: `python -m app.docproc.engines.warmup --status` and `python -m app.docproc.engines.warmup`. Packages are deliberately not installed from the web UI.
 
 </details>
+
+---
+
+## Adding or updating a library
+
+Dependencies are declared once, in **`backend/pyproject.toml`** (version ranges). `backend/requirements.txt` is generated from it with the exact version of every package for Python 3.11–3.13 on Linux, macOS and Windows, so every developer, the Docker image and the server install the same thing.
+
+```bash
+# 1. add the library to the dependencies list in backend/pyproject.toml, e.g.  "humanize>=4.0",
+python3 scripts/dev.py lock       # 2. re-pin: only the new library (and anything it needs) is added; nothing else moves
+python3 scripts/dev.py install    # 3. install it
+# 4. commit pyproject.toml, uv.lock and requirements.txt together
+```
+
+| To | Run |
+|---|---|
+| Upgrade one library | `dev.py lock --upgrade-package <name>`, then `dev.py install` |
+| Upgrade everything within the allowed ranges | `dev.py lock --upgrade`, then `dev.py install` and `dev.py test` |
+| Remove a library | delete it from `pyproject.toml`, then `dev.py lock` |
+
+Never edit `requirements.txt` or `uv.lock` by hand. `lock` installs the resolver it needs (`uv`) into the virtualenv by itself. Docker builds use the same `requirements.txt`.
 
 ---
 
@@ -276,8 +297,8 @@ Hosting on an internal virtual machine is covered in [docs/VM_Hosting_Proposal.p
 ## Testing
 
 ```bash
+python3 scripts/dev.py test              # or, from backend/: pytest. About 2 minutes; needs no running Postgres, Redis or Qdrant
 cd backend
-pytest                                   # about 2 minutes; needs no running Postgres, Redis or Qdrant
 python scripts/extraction_eval.py        # finance extraction accuracy on sample statements (local OCR, no model calls)
 EVAL_TOKEN=… EVAL_THREAD_ID=… python scripts/rag_eval.py    # question set against a running API (uses models)
 ```
@@ -306,9 +327,12 @@ Investment_Analyst/
 │   ├── alembic/             Database migrations
 │   ├── scripts/             Ingestion CLI, evaluations, developer tools
 │   ├── tests/               pytest suite
-│   └── docker/              Container entrypoints
+│   ├── docker/              Container entrypoints
+│   ├── pyproject.toml       Direct dependencies (edit this) and supported Python versions
+│   ├── uv.lock              Resolved dependency graph (generated)
+│   └── requirements.txt     Exact versions for every OS (generated; what pip and Docker install)
 ├── docs/                    Architecture guide and reference documents
-├── scripts/                 Local launchers: start_api, start_mcp_servers
+├── scripts/                 dev.py: setup, start, test, lock on any OS (start_api / start_mcp_servers wrap it)
 ├── data/                    Runtime files (git-ignored)
 ├── docker-compose.yml
 ├── .env.example             Secrets and connection strings
@@ -322,10 +346,13 @@ Investment_Analyst/
 | Symptom | Likely cause and fix |
 |---|---|
 | The API refuses to start with a configuration error | Read the message: a production secret is missing, or a value in `config.yaml` / a `SETTINGS__` variable is misspelled or invalid. `python -m app.core.config` shows what is in force. |
-| Background runs stay queued | The workers are not running. Start them (`./scripts/start_api.sh --with-workers`, or the two `arq` commands). |
+| Background runs stay queued | The workers are not running. `dev.py start` runs them; check `dev.py status` and `data/logs/dev/worker-*.log`. |
+| `dev.py setup` says the Python version is wrong | Run it with Python 3.11–3.13: `py -3.12 scripts\dev.py setup` (Windows), `python3.12 scripts/dev.py setup` (macOS/Linux). |
+| A process stops right after `dev.py start` | Its log in `data/logs/dev/` says why; usually a missing key in `.env` or a service that is not running. |
+| Installing dependencies tries to compile something | You are on an Intel Mac (PyMuPDF has no wheel there) or an unsupported Python. Use Python 3.11–3.13, install Xcode's command-line tools, or use Docker. |
 | Everyone is signed out on each restart | `JWT_SECRET_KEY` is unset, so a new key is generated per start. Set it in `.env`. |
 | Saved provider keys stop working | `APP_SECRET_KEY` changed. Users re-enter their keys. |
-| A quant answer says an agent is unavailable | Its MCP server is not running. `./scripts/start_mcp_servers.sh status`, and check `/quant/health`. |
+| A quant answer says an agent is unavailable | Its MCP server is not running. `dev.py status`, the `mcp-*.log` files in `data/logs/dev/`, and `/quant/health`. |
 | The API in Docker cannot reach the database | `COMPOSE_DATABASE_URL` points somewhere unreachable; leave it unset to use the compose Postgres. |
 | Scans are not read | Tesseract is missing. Install it, or set `TESSERACT_CMD`. |
 | Table extraction tests fail | PyMuPDF 1.x is installed. `pip install "pymupdf>=2.1"`. |
@@ -342,7 +369,7 @@ Investment_Analyst/
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Code layout and rules, configuration, request and chat flows, RAG, ingestion, documents, quant, concurrency, data model, API reference, how to extend, known limitations |
 | [config.example.yaml](config.example.yaml) | Every deployment setting with its default and meaning |
 | [backend/tests/README.md](backend/tests/README.md) | The test suite and how to add tests |
-| [scripts/README.md](scripts/README.md) | Local launch scripts |
+| [scripts/README.md](scripts/README.md) | The developer tool (`dev.py`) and launch scripts |
 | [docs/options_mcp/](docs/options_mcp/) | The options intelligence agent and the raw data it works from |
 | [docs/RAG_TEST_QUESTIONS.md](docs/RAG_TEST_QUESTIONS.md) | Manual question checklist for the research agent |
 | [docs/VM_Hosting_Proposal.pdf](docs/VM_Hosting_Proposal.pdf) | Hosting on an internal virtual machine |
