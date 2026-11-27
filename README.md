@@ -170,7 +170,7 @@ python3 scripts/dev.py start     # Postgres/Redis/Qdrant (Docker), the 5 MCP ser
 | http://localhost:5173 | Web UI. Create an account on the sign-in page. |
 | http://localhost:8000/docs | API documentation |
 
-`start` prints the API's log in the terminal and writes the others to `data/logs/dev/`; **Ctrl+C stops everything**. Useful options: `--reload` (restart the API on code changes), `--no-ui`, `--no-workers`, `--no-mcp`, `--no-services` (you run Postgres, Redis and Qdrant yourself). The services are published on 5433 (Postgres, so it never clashes with a local one), 6379 and 6333, which is what `.env.example` points at.
+`start` prints the API's log in the terminal and writes the others to `data/logs/dev/`; **Ctrl+C stops everything**. Useful options: `--reload` (restart the API, workers and MCP servers when their Python code changes; the web UI always updates live), `--no-ui`, `--no-workers`, `--no-mcp`, `--no-services` (you run Postgres, Redis and Qdrant yourself). The services are published on 5433 (Postgres, so it never clashes with a local one), 6379 and 6333, which is what `.env.example` points at.
 
 | Command | Does |
 |---|---|

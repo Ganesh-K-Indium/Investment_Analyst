@@ -10,12 +10,12 @@ Needs only Python (3.11–3.13 to create the virtualenv). On Windows write `py s
 | `python3 scripts/dev.py start` | Postgres, Redis and Qdrant in Docker (if not already running), the five MCP servers, both workers, the API and the web UI. The API logs to the terminal, the rest to `data/logs/dev/`. **Ctrl+C stops everything**, including child processes. |
 | `python3 scripts/dev.py status` | Which ports are serving, and the configuration check (`python -m app.core.config`). |
 | `python3 scripts/dev.py services up` / `down` | Only Postgres, Redis and Qdrant. |
-| `python3 scripts/dev.py mcp` | Only the MCP servers, in the foreground. |
+| `python3 scripts/dev.py mcp [--reload]` | Only the MCP servers, in the foreground. |
 | `python3 scripts/dev.py install` | Install `backend/requirements.txt` (exact versions) into `venv/`. |
 | `python3 scripts/dev.py lock [--upgrade] [--upgrade-package NAME]` | Re-pin dependencies after editing `backend/pyproject.toml`. |
 | `python3 scripts/dev.py test [pytest args]` | Run the backend tests. |
 
-`start` options: `--reload` (restart the API on code changes), `--no-services`, `--no-mcp`, `--no-workers`, `--no-ui`, `--host 0.0.0.0` (reach the API from other machines). Set `UI_DIR` if the UI repository lives elsewhere.
+`start` options: `--reload` (restart the API, the workers and the MCP servers when their Python code changes; the web UI always hot-reloads), `--no-services`, `--no-mcp`, `--no-workers`, `--no-ui`, `--host 0.0.0.0` (reach the API from other machines). Set `UI_DIR` if the UI repository lives elsewhere.
 
 | MCP server | Port | Folder |
 |---|---|---|

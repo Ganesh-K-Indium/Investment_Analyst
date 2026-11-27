@@ -107,9 +107,21 @@ def wait_port(port: int, seconds: float) -> bool:
 
 def backend_env() -> dict:
     env = dict(os.environ)
+    env["PATH"] = str(venv_python().parent) + os.pathsep + env.get("PATH", "")      # `python` = the virtualenv's
     env["PYTHONPATH"] = str(BACKEND) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env.setdefault("PYTHONUNBUFFERED", "1")
     return env
+
+
+# Code each kind of process imports, watched for --reload (paths relative to backend/).
+BACKEND_CODE = ["app", "rag", "quant", "ingestion", "schemas"]
+
+
+def reloading(command: str, watch: list) -> list:
+    """Run `command` (e.g. "python -m app.worker batch") under watchfiles: restarted whenever a .py file in `watch`
+    changes. The command names `python`, which is the virtualenv's because backend_env() puts it first on PATH."""
+    return [venv_python(), "-m", "watchfiles", "--filter", "python", "--target-type", "command",
+            "--sigint-timeout", "10", command, *[str(w) for w in watch]]
 
 
 def docker_compose() -> list | None:
@@ -226,6 +238,12 @@ def cmd_test(args) -> None:
     raise SystemExit(subprocess.call([str(py), "-m", "pytest", *args.pytest_args], cwd=str(BACKEND), env=backend_env()))
 
 
+def spawn_mcp(sup, py, name: str, folder: str, script: str, reload: bool) -> None:
+    cwd = BACKEND / "quant" / folder
+    cmd = reloading(f"python {script}", [cwd, BACKEND / "app"]) if reload else [py, script]
+    sup.spawn(f"mcp-{name}", cmd, cwd=cwd)
+
+
 class Supervisor:
     """Starts child processes, sends their output to log files (the API's to this console), stops them all on exit."""
 
@@ -297,14 +315,16 @@ def cmd_start(args) -> None:
                 if port_open(port):
                     say(f"MCP {name} already running on :{port}", "ok")
                     continue
-                sup.spawn(f"mcp-{name}", [py, script], cwd=BACKEND / "quant" / folder)
+                spawn_mcp(sup, py, name, folder, script, args.reload)
             for name, _, _, port in MCP_SERVERS:
                 say(f"MCP {name} :{port}", "ok" if wait_port(port, 40) else "warn")
 
         if not args.no_workers:
             for kind in ("interactive", "batch"):
-                sup.spawn(f"worker-{kind}", [py, "-m", "app.worker", kind], cwd=BACKEND)
-            say("Workers started (interactive, batch)", "ok")
+                cmd = (reloading(f"python -m app.worker {kind}", [BACKEND / d for d in BACKEND_CODE]) if args.reload
+                       else [py, "-m", "app.worker", kind])
+                sup.spawn(f"worker-{kind}", cmd, cwd=BACKEND)
+            say("Workers started (interactive, batch)" + (", restarting on code changes" if args.reload else ""), "ok")
 
         ui = None
         if not args.no_ui and UI_DIR.exists() and npm() and (UI_DIR / "node_modules").exists():
@@ -317,7 +337,7 @@ def cmd_start(args) -> None:
         say(f"API on http://localhost:{API_PORT}  (docs /docs) · Ctrl+C stops everything", "head")
         api = [py, "-m", "uvicorn", "app.main:app", "--host", args.host, "--port", str(API_PORT)]
         if args.reload:
-            api += ["--reload"] + [a for d in ("app", "rag", "quant", "ingestion", "schemas") for a in ("--reload-dir", d)]
+            api += ["--reload"] + [a for d in BACKEND_CODE for a in ("--reload-dir", d)]
         proc = sup.spawn("api", api, cwd=BACKEND, console=True)
         while proc.poll() is None:
             time.sleep(1)
@@ -346,7 +366,7 @@ def cmd_mcp(args) -> None:
             if port_open(port):
                 say(f"MCP {name} already running on :{port}", "ok")
                 continue
-            sup.spawn(f"mcp-{name}", [py, script], cwd=BACKEND / "quant" / folder)
+            spawn_mcp(sup, py, name, folder, script, args.reload)
         for name, _, _, port in MCP_SERVERS:
             say(f"MCP {name} :{port}", "ok" if wait_port(port, 40) else "warn")
         say(f"Logs: {LOGS} · Ctrl+C stops the servers", "head")
@@ -369,7 +389,7 @@ def main() -> None:
     p.set_defaults(func=cmd_setup)
 
     p = sub.add_parser("start", help="run everything for development")
-    p.add_argument("--reload", action="store_true", help="restart the API when code changes")
+    p.add_argument("--reload", action="store_true", help="restart the API, workers and MCP servers when their code changes")
     p.add_argument("--no-services", action="store_true", help="do not start Postgres/Redis/Qdrant in Docker")
     p.add_argument("--no-mcp", action="store_true", help="do not start the MCP servers")
     p.add_argument("--no-workers", action="store_true", help="do not start the background workers")
@@ -378,7 +398,9 @@ def main() -> None:
     p.set_defaults(func=cmd_start)
 
     sub.add_parser("status", help="what is running, and the configuration check").set_defaults(func=cmd_status)
-    sub.add_parser("mcp", help="run only the five MCP servers (Ctrl+C stops them)").set_defaults(func=cmd_mcp)
+    p = sub.add_parser("mcp", help="run only the five MCP servers (Ctrl+C stops them)")
+    p.add_argument("--reload", action="store_true", help="restart a server when its code changes")
+    p.set_defaults(func=cmd_mcp)
 
     p = sub.add_parser("services", help="Postgres, Redis and Qdrant in Docker")
     p.add_argument("action", choices=["up", "down"])
