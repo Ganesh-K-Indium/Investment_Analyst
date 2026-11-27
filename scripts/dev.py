@@ -333,7 +333,9 @@ def cmd_start(args) -> None:
             say("Workers started (interactive, batch)" + (", restarting on code changes" if args.reload else ""), "ok")
 
         ui = None
-        if not args.no_ui and UI_DIR.exists() and npm() and (UI_DIR / "node_modules").exists():
+        if not args.no_ui and port_open(5173):
+            say("Web UI already running on http://localhost:5173 (left as is)", "ok")
+        elif not args.no_ui and UI_DIR.exists() and npm() and (UI_DIR / "node_modules").exists():
             ui = sup.spawn("ui", [npm(), "run", "dev"], cwd=UI_DIR, env=dict(os.environ))
             say("Web UI starting on http://localhost:5173", "ok")
         elif not args.no_ui:
