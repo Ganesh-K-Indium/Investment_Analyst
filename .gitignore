@@ -125,3 +125,18 @@ node_modules/
 
 # Tool caches (uv, used by scripts/dev.py lock)
 /.cache/
+
+# ── Web UI (frontend/) ──────────────────────────────────────────────────────
+# Its build output and local settings stay out of git...
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+# ...but its config, lock file, images and src/lib must be committed despite the broad *.json / *.png / lib/ rules above.
+!frontend/*.json
+!frontend/src/**/*.json
+!frontend/src/assets/**
+!frontend/public/**
+!frontend/src/lib/

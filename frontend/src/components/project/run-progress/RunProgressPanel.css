@@ -1,0 +1,306 @@
+/* ==========================================================================
+   Run progress — the live view of a long ALPHA / Compare run.
+   Quiet by default; motion only on what is happening *now* (the active step,
+   the live bar) and when something completes (the check draws in).
+   ========================================================================== */
+
+.rp {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    width: 100%;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+.rp__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-5);
+}
+
+.rp__title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    min-width: 0;
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+
+.rp__ticker {
+    padding: 1px 8px;
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.03em;
+    background: var(--color-bg-tertiary);
+    border-radius: var(--radius-sm);
+}
+
+.rp__live {
+    position: relative;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-primary);
+}
+.rp__live::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 1.5px solid var(--color-primary);
+    opacity: 0;
+    animation: rp-ping 1.8s ease-out infinite;
+}
+.rp__live--off { background: var(--color-text-placeholder); }
+.rp__live--off::after { display: none; }
+
+.rp__chips { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); }
+.rp__chip {
+    padding: 1px 9px;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    background: var(--color-bg-tertiary);
+    border-radius: var(--radius-full);
+}
+
+.rp__clock {
+    flex-shrink: 0;
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-tertiary);
+}
+
+/* ── Ticker tabs (several tickers) ─────────────────────────────────────── */
+.rp__lanes { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+
+.rp__lane {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    height: 30px;
+    padding: 0 var(--space-4);
+    font: inherit;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background-color var(--transition-fast);
+}
+.rp__lane:hover { border-color: var(--color-text-placeholder); }
+.rp__lane--on { border-color: var(--color-primary); background: var(--color-primary-light); color: var(--color-text-primary); }
+.rp__lane--done { color: var(--color-success-dark); }
+[data-theme="dark"] .rp__lane--done { color: var(--color-success); }
+.rp__lane-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-placeholder); }
+.rp__lane--running .rp__lane-dot { background: var(--color-primary); animation: rp-blink 1.2s ease-in-out infinite; }
+.rp__lane-pct { font-weight: var(--font-weight-medium); color: var(--color-text-tertiary); }
+
+/* ── Overall bar ───────────────────────────────────────────────────────── */
+.rp__bar {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--color-bg-tertiary);
+    overflow: hidden;
+}
+.rp__bar-fill {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--color-primary);
+    transition: width 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.rp__bar-fill--indeterminate {
+    position: relative;
+    width: 32%;
+    background-image: linear-gradient(90deg, transparent, var(--color-primary), transparent);
+    animation: rp-slide 1.5s ease-in-out infinite;
+}
+.rp__bar-fill--live {
+    background-image: linear-gradient(90deg, var(--color-primary) 0%, #FFB08A 50%, var(--color-primary) 100%);
+    background-size: 200% 100%;
+    animation: rp-shimmer 1.8s linear infinite;
+}
+
+/* ── ALPHA: radar + dimensions ─────────────────────────────────────────── */
+.rp__alpha {
+    display: grid;
+    grid-template-columns: clamp(170px, 24%, 230px) minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-8);
+}
+
+.rp__radar { display: block; width: 100%; height: auto; overflow: visible; }
+.rp__ring { fill: none; stroke: var(--color-border); stroke-width: 1; }
+.rp__spoke { stroke: var(--color-border); stroke-width: 1; transition: stroke 0.3s ease; }
+.rp__spoke--on { stroke: var(--color-primary); }
+.rp__shape { stroke: var(--color-primary); stroke-width: 1.5; stroke-linejoin: round; }
+.rp__dot--queued { fill: var(--color-bg-primary); stroke: var(--color-text-placeholder); stroke-width: 1.5; }
+.rp__dot--reading, .rp__dot--analysing, .rp__dot--gathered { fill: var(--color-primary); stroke: var(--color-bg-primary); stroke-width: 2; }
+.rp__dot--done { fill: var(--color-success); stroke: var(--color-bg-primary); stroke-width: 2; }
+.rp__dot--failed { fill: var(--color-error); stroke: var(--color-bg-primary); stroke-width: 2; }
+.rp__pulse { fill: var(--color-primary-glow); transform-box: fill-box; transform-origin: center; animation: rp-pulse 1.3s ease-in-out infinite; }
+.rp__letter { font-size: 12px; font-weight: 700; fill: var(--color-text-placeholder); }
+.rp__letter--on { fill: var(--color-text-primary); }
+
+.rp__dims { margin: 0; padding: 0; list-style: none; }
+
+.rp__dim {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-4);
+    padding: 7px 0;
+    border-bottom: 1px solid var(--color-border-light);
+    transition: opacity 0.3s ease;
+}
+.rp__dim:last-child { border-bottom: none; }
+.rp__dim--queued, .rp__dim--pending { opacity: 0.55; }
+.rp__dim--compile { margin-top: var(--space-2); }
+
+.rp__letterchip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-md);
+    background: var(--color-bg-tertiary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-text-tertiary);
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+.rp__dim--reading .rp__letterchip,
+.rp__dim--analysing .rp__letterchip,
+.rp__dim--running .rp__letterchip { background: var(--color-primary); color: #fff; }
+.rp__dim--gathered .rp__letterchip { background: var(--color-primary-light); color: var(--color-primary); }
+.rp__dim--done .rp__letterchip { background: var(--color-success); color: #fff; }
+.rp__dim--failed .rp__letterchip { background: var(--color-error); color: #fff; }
+
+.rp__dim-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.rp__dim-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+.rp__dim-state { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.rp__dim--active .rp__dim-state { color: var(--color-primary); }
+
+/* two small segments per dimension: read, then analyse */
+.rp__stages { display: inline-flex; gap: 4px; }
+.rp__stage { width: 22px; height: 4px; border-radius: 2px; background: var(--color-bg-tertiary); overflow: hidden; position: relative; }
+.rp__stage--done { background: var(--color-primary); }
+.rp__dim--done .rp__stage--done { background: var(--color-success); }
+.rp__stage--live { background: var(--color-primary-light); }
+.rp__stage--live::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--color-primary);
+    transform: translateX(-100%);
+    animation: rp-sweep 1.4s ease-in-out infinite;
+}
+
+/* ── Compare / Ask: timeline ───────────────────────────────────────────── */
+.rp__timeline { margin: 0; padding: 0; list-style: none; }
+
+.rp__step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-4);
+    padding: 7px 0;
+    animation: rp-enter 0.35s ease both;
+}
+/* the rail joining one step's marker to the next */
+.rp__step:not(:last-child)::before {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 29px;
+    bottom: -7px;
+    width: 2px;
+    background: var(--color-border);
+}
+.rp__step--done:not(:last-child)::before { background: var(--color-success); opacity: 0.5; }
+
+.rp__step-body { display: flex; flex-direction: column; min-width: 0; }
+.rp__step-label { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-text-secondary); }
+.rp__step--running .rp__step-label { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
+.rp__step--pending .rp__step-label { color: var(--color-text-tertiary); }
+.rp__step--failed .rp__step-label { color: var(--color-error-dark); }
+.rp__step-detail { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.rp__step-time { font-family: var(--font-family-mono); font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.rp__step--running .rp__step-time { color: var(--color-primary); }
+
+/* ── Markers & spinner ─────────────────────────────────────────────────── */
+.rp__marker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.rp__marker--pending { border: 1.5px solid var(--color-border); background: var(--color-bg-primary); }
+.rp__marker--running { background: var(--color-primary-light); color: var(--color-primary); }
+.rp__marker--done { background: var(--color-success); color: #fff; }
+.rp__marker--failed { background: var(--color-error); color: #fff; }
+
+.rp__spinner {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    animation: rp-spin 0.75s linear infinite;
+}
+
+/* a check draws itself in when something completes */
+.rp__check polyline { stroke-dasharray: 24; stroke-dashoffset: 24; animation: rp-draw 0.35s ease-out 0.05s forwards; }
+
+/* ── What is happening now ─────────────────────────────────────────────── */
+.rp__now {
+    margin: 0;
+    min-height: 2.9em;
+    padding: var(--space-4) var(--space-5);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border-light);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+    color: var(--color-text-secondary);
+}
+.rp__now-text { display: block; animation: rp-enter 0.4s ease both; }
+
+.rp__note { margin: 0; font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+
+/* ── Motion ────────────────────────────────────────────────────────────── */
+@keyframes rp-spin    { to { transform: rotate(360deg); } }
+@keyframes rp-ping    { 0% { transform: scale(0.6); opacity: 0.7; } 80%, 100% { transform: scale(1.5); opacity: 0; } }
+@keyframes rp-pulse   { 0%, 100% { transform: scale(0.8); opacity: 0.9; } 50% { transform: scale(1.5); opacity: 0.15; } }
+@keyframes rp-blink   { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes rp-shimmer { to { background-position: -200% 0; } }
+@keyframes rp-slide   { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
+@keyframes rp-sweep   { 0% { transform: translateX(-100%); } 60%, 100% { transform: translateX(100%); } }
+@keyframes rp-draw    { to { stroke-dashoffset: 0; } }
+@keyframes rp-enter   { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 720px) {
+    .rp__alpha { grid-template-columns: 1fr; }
+    .rp__radar { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .rp__live::after, .rp__pulse, .rp__bar-fill--live, .rp__bar-fill--indeterminate, .rp__stage--live::after,
+    .rp__lane--running .rp__lane-dot, .rp__step, .rp__now-text { animation: none; }
+    .rp__spinner { animation-duration: 2s; }
+    .rp__check polyline { animation: none; stroke-dashoffset: 0; }
+    .rp__bar-fill, .rp__dim, .rp__letterchip, .rp__spoke { transition: none; }
+}

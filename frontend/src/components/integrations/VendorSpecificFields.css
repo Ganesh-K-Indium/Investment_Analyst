@@ -1,0 +1,114 @@
+/* Vendor-Specific Fields Styles */
+
+/* ─── Auth Mode Radio Selector ─────────────────────────────────────── */
+
+.auth-mode-selector {
+    display: flex;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    background-color: var(--color-bg-secondary);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--space-4);
+}
+
+.auth-mode-selector__option {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-size-sm);
+    font-family: var(--font-family);
+    color: var(--color-text-tertiary);
+    background: none;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    user-select: none;
+}
+
+.auth-mode-selector__option:hover {
+    color: var(--color-text-secondary);
+}
+
+.auth-mode-selector__option--active {
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-medium);
+    box-shadow: var(--shadow-sm);
+}
+
+.auth-mode-selector__radio {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--color-primary);
+    pointer-events: none;
+}
+
+/* ─── Section Header ───────────────────────────────────────────────── */
+
+.vendor-fields__section-label {
+    display: block;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--space-3);
+    margin-top: var(--space-2);
+}
+
+/* ─── Helper Text ──────────────────────────────────────────────────── */
+
+.field-helper {
+    display: block;
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+    margin-top: var(--space-2);
+    line-height: 1.4;
+}
+
+/* ─── Inline Error ─────────────────────────────────────────────────── */
+
+.field-error {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    font-size: 11px;
+    color: var(--color-error);
+    line-height: 1.4;
+}
+
+.field-error__icon {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.field-error-input {
+    border-color: var(--color-error) !important;
+}
+
+.field-error-input:focus {
+    box-shadow: 0 0 0 2px var(--color-error-glow-medium) !important;
+    border-color: var(--color-error) !important;
+}
+
+/* ─── Service Account Textarea ─────────────────────────────────────── */
+
+.vendor-fields__json-textarea {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 11px;
+    resize: vertical;
+    min-height: 100px;
+    line-height: 1.5;
+}
+
+/* ─── Required Marker ──────────────────────────────────────────────── */
+
+.field-required {
+    color: var(--color-error);
+    margin-left: var(--space-1);
+}

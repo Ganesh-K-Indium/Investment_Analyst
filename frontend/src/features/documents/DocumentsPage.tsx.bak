@@ -1,0 +1,355 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Sidebar } from '../../components/layout/Sidebar';
+import { Header } from '../../components/layout/Header';
+import {
+    documentsApi, type DocumentSummary, type Facets, type PdfStatus, type SortKey,
+} from './documentsApi';
+import {
+    DEFAULT_FILTERS, filtersToParams, filtersToQuery, hasActiveFilters, parseFilters, type DocFilters,
+} from './filters';
+import { loadLastFilters, saveLastFilters, useDocumentsStore } from './documentsStore';
+import { Button } from '../../components/ui/Button';
+import { LibraryTabs } from '../library/LibraryTabs';
+import './DocumentsPage.css';
+
+const PAGE_SIZE = 50;
+const QUARTERS = [1, 2, 3, 4];
+const EMPTY_FACETS: Facets = { tickers: [], forms: [], years: [] };
+
+const PDF_LABEL: Record<PdfStatus, string> = {
+    local: 'Local', missing: 'Missing', downloading: 'Downloading…', failed: 'Failed', unsupported: 'N/A',
+};
+
+const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—');
+const period = (d: DocumentSummary) =>
+    d.fiscal_year ? `${d.fiscal_year}${d.fiscal_quarter ? ` Q${d.fiscal_quarter}` : ''}` : '—';
+
+export const DocumentsPage: React.FC = () => {
+    const [params, setParams] = useSearchParams();
+    const navigate = useNavigate();
+    const setList = useDocumentsStore(s => s.setList);
+
+    // Restore last-used filters once, when the page is opened with a bare URL.
+    useEffect(() => {
+        if (params.toString() === '') {
+            const last = loadLastFilters();
+            if (last) setParams(new URLSearchParams(last), { replace: true });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const search = params.toString();
+    const filters = useMemo(() => parseFilters(new URLSearchParams(search)), [search]);
+
+    const [items, setItems] = useState<DocumentSummary[]>([]);
+    const [total, setTotal] = useState(0);
+    const [cursor, setCursor] = useState<string | null>(null);
+    const [facets, setFacets] = useState<Facets>(EMPTY_FACETS);
+    const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [syncing, setSyncing] = useState(false);
+    const [reloadKey, setReloadKey] = useState(0);
+    const [qInput, setQInput] = useState(filters.q);
+    const [tickerOpen, setTickerOpen] = useState(false);
+    const [tickerFilter, setTickerFilter] = useState('');
+    const [focusIdx, setFocusIdx] = useState(0);
+    const tickerRef = useRef<HTMLDivElement>(null);
+
+    const update = useCallback((patch: Partial<DocFilters>) => {
+        const next = { ...parseFilters(new URLSearchParams(search)), ...patch };
+        setParams(filtersToParams(next), { replace: true });
+        saveLastFilters(filtersToParams(next).toString());
+    }, [search, setParams]);
+
+    // Debounced search box -> URL.
+    useEffect(() => {
+        if (qInput === filters.q) return;
+        const t = setTimeout(() => update({ q: qInput }), 300);
+        return () => clearTimeout(t);
+    }, [qInput, filters.q, update]);
+    useEffect(() => { setQInput(filters.q); }, [filters.q]);
+
+    // Fetch first page whenever the URL filters change.
+    useEffect(() => {
+        const ctl = new AbortController();
+        setLoading(true);
+        setError(null);
+        documentsApi.list({ ...filtersToQuery(filters), limit: PAGE_SIZE }, ctl.signal)
+            .then(r => {
+                setItems(r.items); setTotal(r.total); setCursor(r.next_cursor); setFacets(r.facets);
+                setList(r.items.map(i => i.doc_id), search);
+                setFocusIdx(0);
+            })
+            .catch(e => { if (e.name !== 'AbortError') setError(e.message); })
+            .finally(() => { if (!ctl.signal.aborted) setLoading(false); });
+        return () => ctl.abort();
+    }, [filters, search, setList, reloadKey]);
+
+    const loadMore = async () => {
+        if (!cursor) return;
+        setLoadingMore(true);
+        try {
+            const r = await documentsApi.list({ ...filtersToQuery(filters), limit: PAGE_SIZE, cursor });
+            setItems(prev => {
+                const all = [...prev, ...r.items];
+                setList(all.map(i => i.doc_id), search);
+                return all;
+            });
+            setCursor(r.next_cursor);
+        } catch (e) { setError((e as Error).message); } finally { setLoadingMore(false); }
+    };
+
+    const refresh = async () => {
+        setSyncing(true);
+        try { await documentsApi.sync(); setReloadKey(k => k + 1); }
+        catch (e) { setError((e as Error).message); } finally { setSyncing(false); }
+    };
+
+    // ── Download PDF (poll status until the job settles) ─────────────────────
+    const patchItem = (id: string, patch: Partial<DocumentSummary>) =>
+        setItems(prev => prev.map(i => (i.doc_id === id ? { ...i, ...patch } : i)));
+    const download = async (id: string) => {
+        patchItem(id, { pdf_status: 'downloading' });
+        try {
+            let st = await documentsApi.ensurePdf(id);
+            while (st.status === 'downloading') {
+                await new Promise(r => setTimeout(r, 2000));
+                st = await documentsApi.pdfStatus(id);
+            }
+            patchItem(id, { pdf_status: st.status, aligned: st.aligned });
+        } catch { patchItem(id, { pdf_status: 'failed' }); }
+    };
+
+    // Close ticker popover on outside click.
+    useEffect(() => {
+        if (!tickerOpen) return;
+        const h = (e: MouseEvent) => { if (!tickerRef.current?.contains(e.target as Node)) setTickerOpen(false); };
+        document.addEventListener('mousedown', h);
+        return () => document.removeEventListener('mousedown', h);
+    }, [tickerOpen]);
+
+    const toggle = (key: 'ticker' | 'form', v: string) => {
+        const cur = filters[key];
+        update({ [key]: cur.includes(v) ? cur.filter(x => x !== v) : [...cur, v] } as Partial<DocFilters>);
+    };
+    const sortBy = (k: SortKey) =>
+        update(filters.sort === k ? { order: filters.order === 'asc' ? 'desc' : 'asc' } : { sort: k, order: k === 'ticker' ? 'asc' : 'desc' });
+    const arrow = (k: SortKey) => (filters.sort === k ? (filters.order === 'asc' ? ' ▲' : ' ▼') : '');
+
+    const years = facets.years.map(y => Number(y.value)).sort((a, b) => b - a);
+    const tickerOptions = facets.tickers.filter(t => String(t.value).toLowerCase().includes(tickerFilter.toLowerCase()));
+    const lastSynced = items.reduce((m, i) => (i.synced_at > m ? i.synced_at : m), '');
+
+    // Group-by-company view: contiguous groups keyed by ticker.
+    const groups = useMemo(() => {
+        if (!filters.group) return [{ key: '', rows: items }];
+        const map = new Map<string, DocumentSummary[]>();
+        items.forEach(i => { const k = i.ticker || 'Unknown'; map.set(k, [...(map.get(k) || []), i]); });
+        return [...map.entries()].map(([key, rows]) => ({ key, rows }));
+    }, [items, filters.group]);
+
+    const open = (id: string, newTab = false) => {
+        const url = `/documents/${encodeURIComponent(id)}`;
+        if (newTab) window.open(url, '_blank'); else navigate(url);
+    };
+    const onRowKey = (e: React.KeyboardEvent, id: string) => {
+        if (e.key === 'Enter') open(id, e.metaKey || e.ctrlKey);
+        if (e.key === 'ArrowDown') { e.preventDefault(); setFocusIdx(i => Math.min(i + 1, items.length - 1)); }
+        if (e.key === 'ArrowUp') { e.preventDefault(); setFocusIdx(i => Math.max(i - 1, 0)); }
+    };
+    const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+    useEffect(() => {
+        const id = items[focusIdx]?.doc_id;
+        if (id && document.activeElement?.tagName === 'TR') rowRefs.current[id]?.focus();
+    }, [focusIdx, items]);
+
+    return (
+        <div className="docs-page">
+            <Sidebar />
+            <Header />
+            <main className="docs-page__main">
+                <div className="docs-head">
+                    <div>
+                        <h1 className="docs-title">Documents</h1>
+                        <p className="docs-subtitle">
+                            Every filing ingested into the knowledge base, with its PDF, extracted text and page JSON.
+                            {lastSynced && ` Synced ${new Date(lastSynced).toLocaleTimeString()}.`}
+                        </p>
+                    </div>
+                    <div className="docs-head__actions">
+                    <button className="docs-btn docs-btn--outline" onClick={refresh} disabled={syncing}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={syncing ? 'docs-spin' : ''}>
+                            <path d="M21 12a9 9 0 1 1-3-6.7L21 8" /><path d="M21 3v5h-5" />
+                        </svg>
+                        {syncing ? 'Syncing…' : 'Refresh'}
+                    </button>
+                    </div>
+                </div>
+
+                <LibraryTabs />
+
+                <div className="docs-stats">
+                    <div className="docs-stat"><span className="docs-stat__num">{loading ? '–' : total}</span><span className="docs-stat__label">{hasActiveFilters(filters) ? 'Matching' : 'Documents'}</span></div>
+                    <div className="docs-stat"><span className="docs-stat__num">{facets.tickers.length || '–'}</span><span className="docs-stat__label">Companies</span></div>
+                    <div className="docs-stat"><span className="docs-stat__num">{facets.forms.length || '–'}</span><span className="docs-stat__label">Form types</span></div>
+                    <div className="docs-stat"><span className="docs-stat__num">{years.length ? `${years[years.length - 1]}–${years[0]}` : '–'}</span><span className="docs-stat__label">Fiscal years</span></div>
+                </div>
+
+                <div className="docs-filters" role="search">
+                    <input
+                        className="docs-input docs-input--search" type="search" value={qInput} aria-label="Search documents"
+                        placeholder="Search company, ticker or file…" onChange={e => setQInput(e.target.value)}
+                    />
+
+                    <div className="docs-popover" ref={tickerRef}>
+                        <button className="docs-select" aria-haspopup="listbox" aria-expanded={tickerOpen} onClick={() => setTickerOpen(o => !o)}>
+                            Companies{filters.ticker.length ? ` (${filters.ticker.length})` : ''} ▾
+                        </button>
+                        {tickerOpen && (
+                            <div className="docs-popover__panel">
+                                <input
+                                    className="docs-input" autoFocus placeholder="Filter tickers…" value={tickerFilter}
+                                    onChange={e => setTickerFilter(e.target.value)}
+                                />
+                                <ul className="docs-popover__list" role="listbox" aria-multiselectable>
+                                    {tickerOptions.map(t => (
+                                        <li key={t.value}>
+                                            <label>
+                                                <input type="checkbox" checked={filters.ticker.includes(String(t.value))} onChange={() => toggle('ticker', String(t.value))} />
+                                                <span>{t.value}</span><em>{t.count}</em>
+                                            </label>
+                                        </li>
+                                    ))}
+                                    {tickerOptions.length === 0 && <li className="docs-popover__empty">No matches</li>}
+                                </ul>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="docs-chips" aria-label="Form type">
+                        {facets.forms.map(f => (
+                            <button
+                                key={f.value} className={`docs-chip${filters.form.includes(String(f.value)) ? ' is-active' : ''}`}
+                                aria-pressed={filters.form.includes(String(f.value))} onClick={() => toggle('form', String(f.value))}
+                            >
+                                {f.value} <em>{f.count}</em>
+                            </button>
+                        ))}
+                    </div>
+
+                    <select className="docs-select" aria-label="From year" value={filters.yearFrom ?? ''} onChange={e => update({ yearFrom: e.target.value ? +e.target.value : undefined })}>
+                        <option value="">From year</option>
+                        {years.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                    <select className="docs-select" aria-label="To year" value={filters.yearTo ?? ''} onChange={e => update({ yearTo: e.target.value ? +e.target.value : undefined })}>
+                        <option value="">To year</option>
+                        {years.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                    <select className="docs-select" aria-label="Quarter" value={filters.quarter ?? ''} onChange={e => update({ quarter: e.target.value ? +e.target.value : undefined })}>
+                        <option value="">Any quarter</option>
+                        {QUARTERS.map(q => <option key={q} value={q}>Q{q}</option>)}
+                    </select>
+                    <select className="docs-select" aria-label="PDF status" value={filters.pdf ?? ''} onChange={e => update({ pdf: (e.target.value || undefined) as PdfStatus | undefined })}>
+                        <option value="">Any PDF status</option>
+                        <option value="local">Local</option>
+                        <option value="missing">Missing</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                    <select
+                        className="docs-select" aria-label="Charts and images"
+                        value={filters.images === undefined ? '' : filters.images ? '1' : '0'}
+                        onChange={e => update({ images: e.target.value === '' ? undefined : e.target.value === '1' })}
+                    >
+                        <option value="">Charts: any</option>
+                        <option value="1">With charts/images</option>
+                        <option value="0">No charts/images</option>
+                    </select>
+                    <label className="docs-toggle">
+                        <input type="checkbox" checked={filters.group} onChange={e => update({ group: e.target.checked })} /> Group by company
+                    </label>
+                    {hasActiveFilters(filters) && (
+                        <button className="docs-link" onClick={() => { update({ ...DEFAULT_FILTERS, sort: filters.sort, order: filters.order, group: filters.group }); setQInput(''); }}>
+                            Clear all
+                        </button>
+                    )}
+                </div>
+
+                {error && <div className="docs-error" role="alert">{error}</div>}
+
+                <div className="docs-tablewrap">
+                    <table className="docs-table">
+                        <thead>
+                            <tr>
+                                <th><button onClick={() => sortBy('ticker')}>Company{arrow('ticker')}</button></th>
+                                <th>Form</th>
+                                <th>Period</th>
+                                <th><button onClick={() => sortBy('filing_date')}>Filed{arrow('filing_date')}</button></th>
+                                <th className="num"><button onClick={() => sortBy('pages')}>Pages{arrow('pages')}</button></th>
+                                <th className="num">Charts</th>
+                                <th>PDF</th>
+                                <th><button onClick={() => sortBy('ingested_at')}>Ingested{arrow('ingested_at')}</button></th>
+                            </tr>
+                        </thead>
+                        {groups.map(g => (
+                            <tbody key={g.key || 'all'}>
+                                {filters.group && (
+                                    <tr className="docs-group"><td colSpan={8}><span>{g.key}</span><em>{g.rows.length} filings</em></td></tr>
+                                )}
+                                {g.rows.map(d => (
+                                    <tr
+                                        key={d.doc_id} tabIndex={0} ref={el => { rowRefs.current[d.doc_id] = el; }}
+                                        className="docs-row" onKeyDown={e => onRowKey(e, d.doc_id)}
+                                        onClick={e => open(d.doc_id, e.metaKey || e.ctrlKey)}
+                                    >
+                                        <td>
+                                            <Link to={`/documents/${encodeURIComponent(d.doc_id)}`} onClick={e => e.stopPropagation()} className="docs-company">
+                                                <i className="docs-avatar">{(d.ticker || '?').slice(0, 2)}</i>
+                                                <span><strong>{d.ticker || '—'}</strong><small>{d.company || d.source_file}</small></span>
+                                            </Link>
+                                        </td>
+                                        <td><span className="docs-form">{d.form_type || '—'}</span></td>
+                                        <td>{period(d)}</td>
+                                        <td>{fmtDate(d.filing_date)}</td>
+                                        <td className="num">{d.page_count}</td>
+                                        <td className="num">{d.image_chunks || '—'}</td>
+                                        <td onClick={e => e.stopPropagation()}>
+                                            <span className={`docs-badge docs-badge--${d.pdf_status}`}>{PDF_LABEL[d.pdf_status]}</span>
+                                            {(d.pdf_status === 'missing' || d.pdf_status === 'failed') && (
+                                                <button className="docs-link" onClick={() => download(d.doc_id)}>
+                                                    {d.pdf_status === 'failed' ? 'Retry' : 'Download'}
+                                                </button>
+                                            )}
+                                            {d.pdf_status === 'local' && d.aligned === false && (
+                                                <span className="docs-badge docs-badge--warn" title="PDF pagination differs from the indexed copy">Pages differ</span>
+                                            )}
+                                        </td>
+                                        <td>{fmtDate(d.ingested_at)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        ))}
+                    </table>
+
+                    {loading && <div className="docs-state">Loading documents…</div>}
+                    {!loading && !error && items.length === 0 && (
+                        <div className="docs-state">
+                            {hasActiveFilters(filters) ? 'No documents match these filters.' : 'No documents have been ingested yet.'}
+                        </div>
+                    )}
+                </div>
+
+                {cursor && (
+                    <div className="docs-more">
+                        <button className="docs-btn docs-btn--outline" onClick={loadMore} disabled={loadingMore}>
+                            {loadingMore ? 'Loading…' : `Load more (${items.length} of ${total})`}
+                        </button>
+                    </div>
+                )}
+            </main>
+        </div>
+    );
+};
+
+export default DocumentsPage;

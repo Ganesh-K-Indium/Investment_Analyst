@@ -1,0 +1,1790 @@
+/* Secondary Research Chat Styles - ChatGPT-inspired */
+
+.secondary-research {
+    --chat-message-accent: var(--color-primary);
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+    position: relative;
+}
+
+.secondary-research .chat-message {
+    --chat-message-accent: var(--color-primary);
+}
+
+/* Sidebar shell (collapse/resize/toggle) now comes from components/ui/ResizableSidebar */
+
+/* Company context + feature buttons stay pinned; only history below scrolls,
+   so the feature row never gets pushed out of view as history grows. */
+.secondary-research__sidebar-fixed {
+    flex-shrink: 0;
+}
+
+.secondary-research__sidebar-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* Feature row: New Chat / ALPHA Analysis / Stock Compare — the three things
+   this panel can actually do. Same compact solid-button pattern as Quant's
+   "New Chat" button (single accent color, inline icon, no badge/box) for a
+   consistent, professional look instead of oversized tinted icon chips. */
+.secondary-research__feature-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px;
+}
+
+.secondary-research__feature-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: var(--space-3);
+    border: none;
+    border-radius: 8px;
+    color: var(--color-primary);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-family);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: var(--color-primary-light);
+    box-shadow: 0 2px 6px rgba(255, 107, 53, 0.12);
+}
+
+.secondary-research__feature-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.secondary-research__feature-btn svg {
+    flex-shrink: 0;
+}
+
+.secondary-research__feature-btn--chat {
+    background: var(--color-primary-light);
+}
+.secondary-research__feature-btn--chat:hover:not(:disabled) {
+    background: var(--color-primary);
+    color: var(--color-text-inverse);
+    box-shadow: 0 4px 12px rgba(255, 107, 53, 0.24);
+    transform: translateY(-2px);
+}
+
+.secondary-research__feature-btn--alpha {
+    background: var(--color-primary-light);
+}
+.secondary-research__feature-btn--alpha:hover:not(:disabled) {
+    background: var(--color-primary);
+    color: var(--color-text-inverse);
+    box-shadow: 0 4px 12px rgba(255, 107, 53, 0.24);
+    transform: translateY(-2px);
+}
+
+.secondary-research__feature-btn--compare {
+    background: var(--color-primary-light);
+}
+.secondary-research__feature-btn--compare:hover:not(:disabled) {
+    background: var(--color-primary);
+    color: var(--color-text-inverse);
+    box-shadow: 0 4px 12px rgba(255, 107, 53, 0.24);
+    transform: translateY(-2px);
+}
+
+/* Chat area takes up remaining space */
+.secondary-research__chat {
+    flex: 1;
+    background-color: var(--color-bg-primary);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+    min-width: 0;
+}
+
+.secondary-research__sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.secondary-research__sidebar-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    letter-spacing: 0.3px;
+}
+
+.secondary-research__file-count {
+    font-size: 12px;
+    color: var(--color-primary);
+    font-weight: 500;
+    background: var(--color-primary-light);
+    padding: var(--space-1) 6px;
+    border-radius: 10px;
+}
+
+/* Companies Context Section */
+.secondary-research__companies-section {
+    border-bottom: 1px solid var(--color-border);
+}
+
+.secondary-research__companies-list {
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.secondary-research__company-tag {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 6px 10px;
+    background-color: var(--color-primary-light);
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.secondary-research__company-tag .company-ticker {
+    font-weight: 600;
+    color: var(--color-primary);
+    min-width: 40px;
+}
+
+.secondary-research__company-tag .company-name {
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Pointer to My documents, where files are added */
+.secondary-research__add-files-hint {
+    margin: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+}
+
+.secondary-research__add-files-hint a {
+    color: var(--color-primary);
+}
+
+.secondary-research__hint {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    text-align: center;
+    margin-top: 6px;
+}
+
+/* Chat History */
+.secondary-research__history {
+    padding: var(--space-3);
+    border-top: 1px solid var(--color-border);
+}
+
+.secondary-research__history h4 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-tertiary);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    padding: 0 6px;
+}
+
+.secondary-research__history-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 7px var(--space-3) 7px 10px;
+    padding-right: 52px;
+    margin-bottom: 1px;
+    background: none;
+    border: none;
+    border-left: 2px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    font-family: var(--font-family);
+    text-align: left;
+    min-width: 0;
+}
+
+.secondary-research__history-item:hover {
+    background-color: var(--color-bg-tertiary);
+}
+
+.secondary-research__history-item--active {
+    background-color: var(--color-primary-light);
+    border-left-color: var(--color-primary);
+}
+
+.secondary-research__history-item--active .history-item__title {
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-semibold);
+}
+
+.history-item__title {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.history-item__companies {
+    display: block;
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: var(--space-1);
+}
+
+.history-item__files {
+    font-size: 9px;
+    color: var(--color-text-tertiary);
+}
+
+.history-item__wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.history-item__wrapper .secondary-research__history-item {
+    flex: 1;
+}
+
+.history-item__actions {
+    position: absolute;
+    right: 8px;
+    display: flex;
+    gap: var(--space-2);
+}
+
+.history-item__action-btn {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    color: var(--color-text-tertiary);
+}
+
+.history-item__action-btn:hover {
+    background-color: var(--color-bg-tertiary);
+    border-color: var(--color-border);
+    color: var(--color-text-primary);
+}
+
+.history-item__action-btn--danger:hover {
+    background-color: var(--color-error-light);
+    border-color: var(--color-error);
+    color: var(--color-error-dark);
+}
+
+/* Rename Modal */
+/* Rename dialog now uses the shared components/ui/RenameModal */
+
+.secondary-research__new-chat-btn {
+    width: 100%;
+    padding: var(--space-3);
+    margin-top: 6px;
+    background: none;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+    font-family: var(--font-family);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.secondary-research__new-chat-btn:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+    background-color: var(--color-primary-glow);
+}
+
+/* Stock Compare Inline Bar */
+.stock-compare-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 10px var(--space-4);
+    background-color: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border);
+    flex-wrap: nowrap;
+    overflow: visible;
+    position: relative;
+    z-index: 10;
+}
+
+.stock-compare-bar__sic {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+}
+
+.stock-compare-bar__year-group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+}
+
+.stock-compare-bar__year-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+}
+
+.stock-compare-bar__year-select {
+    padding: 5px 6px;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: var(--font-family);
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: border-color 0.2s ease;
+    appearance: auto;
+}
+
+.stock-compare-bar__year-select:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.stock-compare-bar__dropdown {
+    position: relative;
+}
+
+.stock-compare-bar__dropdown-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 220px;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px var(--color-overlay-15);
+    z-index: 1000;
+    margin-top: var(--space-2);
+}
+
+.stock-compare-bar__dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.stock-compare-bar__dropdown-item:hover {
+    background-color: var(--color-bg-secondary);
+}
+
+.stock-compare-bar__dropdown-item.selected {
+    background-color: var(--color-success-light);
+}
+
+.stock-compare-bar__dropdown-item .dropdown-item__ticker {
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--color-primary);
+    min-width: 50px;
+}
+
+.stock-compare-bar__dropdown-item .dropdown-item__name {
+    font-size: 11px;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.stock-compare-bar__dropdown-empty {
+    padding: var(--space-4);
+    text-align: center;
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+}
+
+.stock-compare-bar__input {
+    width: 130px;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: var(--font-family);
+    text-align: center;
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.stock-compare-bar__input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-light);
+}
+
+.stock-compare-bar__input::placeholder {
+    color: var(--color-text-tertiary);
+    font-weight: 400;
+}
+
+/* Optional 3rd dropdown - smaller */
+.stock-compare-bar__dropdown--optional {
+    position: relative;
+}
+
+.stock-compare-bar__input--optional {
+    width: 120px;
+    font-size: 10px;
+    padding: 6px var(--space-8) 6px var(--space-3);
+    text-align: left;
+}
+
+.stock-compare-bar__input--optional::placeholder {
+    font-size: 10px;
+    color: var(--color-text-tertiary);
+}
+
+/* Clear button for 3rd stock */
+.stock-compare-bar__clear {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg-tertiary);
+    border: none;
+    border-radius: 50%;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.stock-compare-bar__clear:hover {
+    background: var(--color-error-dark);
+    color: var(--color-text-inverse);
+}
+
+.stock-compare-bar__vs {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+}
+
+.stock-compare-bar__submit {
+    padding: 6px var(--space-4);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-family);
+    color: var(--color-text-inverse);
+    background: var(--color-primary);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.stock-compare-bar__submit:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+}
+
+.stock-compare-bar__submit:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.stock-compare-bar__export {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 6px 10px;
+    font-size: 10px;
+    font-weight: 500;
+    font-family: var(--font-family);
+    color: var(--color-text-tertiary);
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.stock-compare-bar__export:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+}
+
+/* Chat Area */
+/* (defined above in flex layout) */
+
+/* Old Chat Area placeholder - keeping class for compatibility */
+
+/* Empty state (no active session) now renders via the shared
+   components/ui/EmptyState — see .secondary-research__welcome-icon above
+   for its icon tint. */
+
+/* Context Bar */
+.secondary-research__context-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-6);
+    border-bottom: 1px solid var(--color-border);
+    background-color: var(--color-bg-secondary);
+}
+
+.context-bar__label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+}
+
+.context-bar__items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.context-bar__files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* Company context chip - Indigo/Purple color */
+.context-bar__company-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 10px;
+    background-color: var(--color-primary-light);
+    color: var(--color-primary-hover);
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* File context chip - Gray color */
+.context-bar__file-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--space-2) 10px;
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.context-bar__remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    background: none;
+    border: none;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    border-radius: 50%;
+    transition: all 0.15s ease;
+}
+
+.context-bar__remove:hover {
+    background-color: var(--color-overlay-10);
+    color: var(--color-text-primary);
+}
+
+.context-bar__actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.context-bar__action-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.context-bar__action-btn:hover {
+    background-color: var(--color-bg-secondary);
+    border-color: var(--color-border);
+    color: var(--color-text-primary);
+}
+
+/* Messages */
+.secondary-research__messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+    min-height: 0;
+}
+
+.secondary-research__messages::-webkit-scrollbar {
+    width: 8px;
+}
+
+.secondary-research__messages::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 4px;
+}
+
+/* Empty state layout/typography now comes from the shared components/ui/EmptyState —
+   this just tints its icon circle to match the page's ai-accent (green) theme.
+   Compound selector (.empty-state__icon.secondary-research__welcome-icon) so this
+   reliably beats EmptyState.css's default orange tint regardless of CSS import order. */
+.empty-state__icon.secondary-research__welcome-icon {
+    background-color: var(--color-primary-light);
+    color: var(--color-primary);
+}
+
+.empty-state__icon.secondary-research__compare-empty-icon {
+    background-color: var(--color-primary-light);
+    color: var(--color-primary);
+}
+
+.secondary-research__alpha-empty-logo {
+    width: 200px;
+    height: auto;
+    margin-bottom: var(--space-8);
+}
+
+/* Dark-mode variant has an opaque white background (source mark has black
+   text, invisible on a dark page) — round it into a small chip. */
+[data-theme="dark"] .secondary-research__alpha-empty-logo {
+    border-radius: var(--radius-md);
+}
+
+/* .chat-message--user/--assistant zebra backgrounds now live in components/ui/ChatMessage.css */
+
+/* Base .chat-message, __avatar, __content and markdown typography now live in
+   components/ui/ChatMessage.css (shared with QuantitativeResearch). */
+
+/* Stock Compare result label — replaces the synthesized "user" chat turn.
+   Compare/ALPHA aren't a back-and-forth conversation, just one request → one
+   result, so the request context rides as a small label on the result card
+   instead of a fake chat bubble. */
+.chat-message__compare-label {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-1) var(--space-3);
+    margin-bottom: var(--space-3);
+    font-size: 11px;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    color: var(--color-primary);
+    background-color: var(--color-primary-light);
+    border-radius: var(--radius-full);
+}
+
+/* Comparison Chart Styles */
+/* Chart sits directly in the message card — no nested box, no separate clip
+   button. Clicking the chart itself clips just that image; the message-level
+   "Add to Clipboard" (card hover) clips everything, text included. */
+.chat-message__chart {
+    margin-top: var(--space-5);
+}
+
+.chat-message__chart-img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
+    transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.chat-message__chart-img:hover {
+    transform: scale(1.01);
+    box-shadow: var(--shadow-md);
+}
+
+/* Citation and Source Styles (base .chat-message__sources lives in ChatMessage.css) */
+.chat-message__source-section {
+    display: block;
+    margin-bottom: var(--space-3);
+}
+
+.source-label,
+.citation-label {
+    display: block;
+    font-weight: 600;
+    color: var(--color-text-tertiary);
+    margin-bottom: var(--space-2);
+}
+
+.source-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.source-chip {
+    display: inline-block;
+    padding: 3px 10px;
+    background-color: var(--color-success-light);
+    color: var(--color-success-dark);
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.chat-message__web-searched {
+    margin-bottom: var(--space-3);
+}
+
+.web-label {
+    display: block;
+    color: var(--color-primary);
+    font-weight: 600;
+    margin-bottom: var(--space-2);
+}
+
+.chat-message__web-sources {
+    display: block;
+    margin-top: var(--space-2);
+}
+
+.web-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.web-link {
+    display: inline-block;
+    padding: 3px 10px;
+    background-color: var(--color-primary-light);
+    color: var(--color-primary-hover);
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: all 0.15s ease;
+}
+
+.web-link:hover {
+    background-color: var(--color-primary-light);
+    color: var(--color-primary-hover);
+    text-decoration: underline;
+}
+
+.chat-message__citations {
+    margin-top: var(--space-3);
+}
+
+.citation-list {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.citation-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 6px 10px;
+    background-color: var(--color-bg-secondary);
+    border-radius: 6px;
+    border-left: 3px solid var(--color-primary);
+}
+
+.citation-doc {
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.citation-info {
+    color: var(--color-text-tertiary);
+    flex: 1;
+    min-width: 150px;
+}
+
+.citation-score {
+    font-size: 9px;
+    padding: var(--space-1) 6px;
+    background-color: var(--color-primary);
+    color: var(--color-text-inverse);
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+/* Verified SEC Citations Container & Rich Cards */
+.sec-citations-container {
+    margin-top: var(--space-4);
+    padding: 12px 14px;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    transition: all 0.2s ease;
+}
+
+.sec-citations-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--color-text-tertiary);
+    margin-bottom: 10px;
+}
+
+.sec-citations-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sec-citation-card {
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-left: 3.5px solid var(--color-primary);
+    border-radius: 8px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    overflow: hidden;
+}
+
+.sec-citation-card--compact {
+    padding: 6px 12px;
+}
+
+.sec-citation-card--expanded {
+    padding: 10px 14px;
+}
+
+.sec-citation-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px var(--color-overlay-8);
+    border-color: var(--color-primary);
+}
+
+.sec-citation-card__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.sec-citation-card__bar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+}
+
+.sec-citation-card__bar-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.sec-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    color: #ffffff;
+    background: var(--color-primary);
+    flex-shrink: 0;
+}
+
+.sec-badge--10k {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
+}
+
+.sec-badge--10q {
+    background: linear-gradient(135deg, var(--color-primary-hover) 0%, #E85A1F 100%);
+}
+
+.sec-badge--8k {
+    background: linear-gradient(135deg, #F07D3D 0%, var(--color-primary) 100%);
+}
+
+/* Foreign private issuer forms share their domestic counterpart's look */
+.sec-badge--20f {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
+}
+
+.sec-badge--6k {
+    background: linear-gradient(135deg, #F07D3D 0%, var(--color-primary) 100%);
+}
+
+.sec-badge--form4 {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
+}
+
+.sec-citation-card__company {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    background: var(--color-bg-tertiary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.sec-citation-card__title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sec-citation-card__meta-item {
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.sec-citation-card__meta-item--pages {
+    color: var(--color-primary);
+    font-weight: 600;
+}
+
+.sec-citation-card__icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    padding: 0;
+}
+
+.sec-citation-card__icon-btn:hover {
+    background: var(--color-primary-light);
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+    transform: scale(1.08);
+}
+
+.sec-citation-card__file-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    color: var(--color-text-tertiary);
+}
+
+.sec-citation-card__filename {
+    font-size: 10.5px;
+    font-family: var(--font-family-mono, monospace);
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sec-citation-card__pages-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding-top: 6px;
+    border-top: 1px dashed var(--color-border);
+}
+
+.sec-citation-card__pages-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--color-text-tertiary);
+}
+
+.sec-citation-card__pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.sec-page-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    background-color: var(--color-bg-primary) !important;
+    background: var(--color-bg-primary) !important;
+    color: var(--color-text-primary) !important;
+    border: none !important;
+    border-radius: 6px;
+    font-size: 8px;
+    font-weight: 600;
+    transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    box-shadow: 0 1px 4px rgba(255, 107, 53, 0.1);
+    line-height: 1.2;
+    border-left: 2px solid var(--color-primary) !important;
+}
+
+.sec-page-pill:hover {
+    background-color: rgba(255, 107, 53, 0.12) !important;
+    color: var(--color-primary) !important;
+    box-shadow: 0 2px 6px rgba(255, 107, 53, 0.2);
+}
+
+.sec-citation-card__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+    cursor: pointer;
+    user-select: none;
+}
+
+.sec-citation-card__expand-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    padding: 0;
+}
+
+.sec-citation-card__expand-btn:hover {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+    border-color: var(--color-border-dark);
+}
+
+.sec-citation-card__pages-badge {
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 1px 6px;
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-tertiary);
+    border-radius: 10px;
+    margin-left: auto;
+}
+
+.sec-page-pill--more {
+    background: #F9FAFB !important;
+    color: #6B7280;
+    border: 1px dashed #D1D5DB !important;
+    border-radius: 6px;
+}
+
+.sec-page-pill--more:hover {
+    background: #FF6B35 !important;
+    color: #FFFFFF !important;
+    border-color: #FF6B35 !important;
+    box-shadow: 0 2px 4px rgba(255, 107, 53, 0.25);
+}
+
+/* Page pill button in expanded view */
+.sec-page-pill--expanded {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 10px;
+    background-color: var(--color-bg-primary) !important;
+    background: var(--color-bg-primary) !important;
+    color: var(--color-text-primary) !important;
+    border: none !important;
+    border-radius: 7px;
+    font-size: 9px;
+    font-weight: 600;
+    transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    cursor: pointer;
+    margin: 3px;
+    user-select: none;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    box-shadow: 0 2px 8px rgba(255, 107, 53, 0.12);
+    line-height: 1.2;
+    border-left: 3px solid var(--color-primary) !important;
+}
+
+.sec-page-pill--expanded:hover {
+    background-color: rgba(255, 107, 53, 0.15) !important;
+    color: var(--color-primary) !important;
+    box-shadow: 0 3px 8px rgba(255, 107, 53, 0.22);
+}
+
+.sec-page-pill--expanded:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 6px rgba(255, 107, 53, 0.15);
+}
+
+.sec-citation-details__label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: block;
+    margin-bottom: 8px;
+}
+
+/* PDF Viewer Modal Styling */
+.pdf-viewer-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(2px);
+}
+
+.pdf-viewer-content {
+    background: var(--color-bg-primary);
+    border-radius: 12px;
+    width: 95%;
+    max-width: calc(100vw - 40px);
+    height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--color-border);
+}
+
+.pdf-viewer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--color-border);
+    background: linear-gradient(135deg, var(--color-bg-secondary) 0%, var(--color-bg-primary) 100%);
+    border-radius: 12px 12px 0 0;
+    flex-shrink: 0;
+}
+
+.pdf-viewer-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pdf-viewer-close {
+    background: none;
+    border: none;
+    font-size: 28px;
+    cursor: pointer;
+    color: var(--color-text-tertiary);
+    padding: 0 8px;
+    transition: color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pdf-viewer-close:hover {
+    color: var(--color-text-primary);
+}
+
+.pdf-viewer-body {
+    flex: 1;
+    overflow: auto;
+    background: var(--color-bg-secondary);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+.pdf-viewer-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 6px;
+    background: white;
+}
+
+.pdf-viewer-error {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #d32f2f;
+    font-size: 14px;
+    padding: 20px;
+    text-align: center;
+    flex: 1;
+}
+
+.pdf-viewer-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--color-text-secondary);
+    font-size: 14px;
+    flex: 1;
+}
+
+/* PDF footer removed - using browser PDF navigation instead */
+
+/* Expanded Card Panel */
+.sec-citation-card__details {
+    margin-top: 10px;
+    padding: 12px;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    animation: citationExpand 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes citationExpand {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.sec-citation-details__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.sec-citation-details__item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sec-citation-details__label {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--color-text-tertiary);
+}
+
+.sec-citation-details__value {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    word-break: break-word;
+}
+
+.sec-citation-details__value--mono {
+    font-family: var(--font-family-mono, monospace);
+    font-size: 10.5px;
+    color: var(--color-text-secondary);
+}
+
+.sec-citation-details__pages-section {
+    margin-top: 16px;
+    padding: 12px 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.sec-citation-details__actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--color-border);
+}
+
+.sec-citation-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    font-size: 10.5px;
+    font-weight: 600;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 5px;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.sec-citation-action-btn:hover {
+    background: var(--color-primary-light);
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+/* Typing animation now lives in components/ui/ChatMessage.css (ChatMessageStatus) */
+
+/* Input Area */
+.secondary-research__input-area {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-3);
+    padding: var(--space-4) 28px var(--space-6);
+    background: linear-gradient(180deg, transparent 0%, var(--color-bg-primary) 20%);
+}
+
+.secondary-research__input {
+    flex: 1;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-family: var(--font-family);
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    transition: all 0.2s ease;
+    box-shadow: 0 1px 4px var(--color-overlay-4);
+}
+
+.secondary-research__input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-glow), 0 1px 4px var(--color-overlay-4);
+}
+
+.secondary-research__input::placeholder {
+    color: var(--color-text-tertiary);
+}
+
+.secondary-research__input-area button {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-primary);
+    border: none;
+    border-radius: 8px;
+    color: var(--color-text-inverse);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    padding: 0;
+}
+
+.secondary-research__input-area button:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+    transform: scale(1.02);
+}
+
+.secondary-research__input-area button:disabled {
+    background: var(--color-border);
+    cursor: not-allowed;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+    .secondary-research {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+
+    .secondary-research__sidebar {
+        max-height: 180px;
+    }
+
+    .chat-message {
+        padding: var(--space-5) var(--space-6);
+    }
+
+    .secondary-research__input-area {
+        padding: var(--space-5) var(--space-6) var(--space-8);
+    }
+}
+
+/* Clipboard Selection Popup */
+.clipboard-popup {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--space-3) 14px;
+    background: var(--color-primary);
+    color: var(--color-text-inverse);
+    border: none;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 12px var(--color-primary-glow);
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.clipboard-popup:hover {
+    background: var(--color-primary-hover);
+    transform: translate(-50%, -100%) scale(1.05);
+}
+
+.clipboard-popup::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 6px solid var(--color-primary);
+}
+
+/* Stock Compare Dropdown Styles */
+.stock-compare-bar__dropdown {
+    position: relative;
+    width: 200px;
+}
+
+.stock-compare-bar__dropdown .stock-compare-bar__input {
+    width: 100%;
+    text-align: left;
+    padding-right: 28px;
+    cursor: pointer;
+}
+
+.stock-compare-bar__dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    max-height: 240px;
+    overflow-y: auto;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px var(--color-overlay-12);
+    z-index: 100;
+}
+
+.stock-compare-bar__dropdown-menu::-webkit-scrollbar {
+    width: 6px;
+}
+
+.stock-compare-bar__dropdown-menu::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+}
+
+.stock-compare-bar__dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px var(--space-4);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.stock-compare-bar__dropdown-item:hover {
+    background-color: var(--color-bg-secondary);
+}
+
+.stock-compare-bar__dropdown-item.selected {
+    background-color: var(--color-success-light);
+}
+
+.dropdown-item__ticker {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--color-primary);
+    min-width: 50px;
+}
+
+.dropdown-item__name {
+    font-size: 12px;
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stock-compare-bar__dropdown-empty {
+    padding: var(--space-5);
+    text-align: center;
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+}
+
+/* Import File Modal styles now live in ImportFileModal.css, colocated with the component */
+
+/* Generic .spinner/.spinner--small now live in src/index.css */
+
+.sidebar-loader,
+.messages-loader {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: var(--space-6);
+    color: var(--color-text-secondary);
+    font-size: 14px;
+}
+
+.sidebar-loader {
+    justify-content: flex-start;
+    padding: var(--space-4);
+}
+
+.messages-loader {
+    height: 100%;
+    flex-direction: column;
+}
+
+/* Toast Notification */
+.secondary-research__toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: var(--space-4) var(--space-8);
+    background: var(--color-primary);
+    color: var(--color-text-inverse);
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px var(--color-primary-glow);
+    z-index: 10000;
+    animation: toastSlideUp 0.3s ease-out;
+}
+
+@keyframes toastSlideUp {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}
+
+/* ============================================
+   PINNED SUMMARY BANNER
+   ============================================ */
+.pinned-summary {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    margin: 0;
+    padding: 0;
+    background: linear-gradient(135deg, var(--color-success-light) 0%, var(--color-success-light) 100%);
+    border: none;
+    border-bottom: 1px solid var(--color-success-border);
+    border-left: 4px solid var(--color-primary);
+    overflow: hidden;
+    animation: summarySlideIn 0.3s ease-out;
+    box-shadow: 0 2px 8px var(--color-overlay-6);
+}
+
+@keyframes summarySlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.pinned-summary__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.15s ease;
+}
+
+.pinned-summary__header:hover {
+    background-color: var(--color-primary-glow);
+}
+
+.pinned-summary__title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-success-dark);
+}
+
+.pinned-summary__icon {
+    font-size: 14px;
+}
+
+.pinned-summary__time {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--color-text-secondary);
+    margin-left: var(--space-2);
+}
+
+.pinned-summary__toggle {
+    background: none;
+    border: none;
+    padding: var(--space-2);
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+}
+
+.pinned-summary__toggle:hover {
+    background-color: var(--color-primary-glow);
+    color: var(--color-primary);
+}
+
+.pinned-summary__content {
+    padding: 0 14px var(--space-4);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--color-text-primary);
+    border-top: 1px solid var(--color-success-light);
+}
+
+.pinned-summary__content p {
+    margin: 6px 0;
+}
+
+.pinned-summary__content ul,
+.pinned-summary__content ol {
+    margin: 6px 0;
+    padding-left: 18px;
+}
+
+.pinned-summary__content li {
+    margin: 3px 0;
+}
+
+.pinned-summary__content strong {
+    color: var(--color-success-dark);
+}
+
+/* ─── Form4 Import Dialog ─── */
+/* Box chrome now comes from the shared components/ui/Modal (default size="md") */
+
+/* Form4 modal styles now live in Form4ImportModal.css, colocated with the component */
+/* Value color-coding — whole sentences the LLM tagged as carrying a
+   concrete financial fact (trade, share count, dollar figure, % move),
+   colored by sentiment. No background pill/box here on purpose: a tinted
+   box wrapping a full multi-line sentence looks broken at each line wrap
+   (padding pokes out mid-word) — plain colored text reads cleanly instead. */
+.value-positive,
+.value-negative,
+.value-neutral {
+    font-weight: var(--font-weight-medium);
+}
+
+.value-positive {
+    color: var(--color-value-positive);
+}
+
+.value-negative {
+    color: var(--color-value-negative);
+}
+
+.value-neutral {
+    color: var(--color-value-neutral);
+}

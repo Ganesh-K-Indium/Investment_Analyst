@@ -1,0 +1,6 @@
+/* Same look as the Repository page title: a quiet parent link, a soft slash, the current page in full strength. */
+.docs-title a.lib-crumb, .docs-title a.lib-crumb:visited { color: var(--color-text-secondary); text-decoration: none; cursor: pointer; }
+.docs-title a.lib-crumb:hover { color: var(--color-text-primary); }
+.lib-crumb:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 4px; }
+.lib-crumb-sep { margin: 0 8px; color: var(--color-text-tertiary); }
+.lib-crumb-current { display: inline-block; max-width: 48ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }

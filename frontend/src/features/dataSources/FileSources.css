@@ -1,0 +1,229 @@
+/* File sources: cards for connected SharePoint, Drive, S3 and similar sources */
+
+/* Integrations Grid */
+.integrations-page__grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-4);
+}
+
+/* Integration Card */
+.integration-card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: 1fr auto;
+    column-gap: var(--space-3);
+    row-gap: var(--space-3);
+    align-items: start;
+    height: 100%;
+}
+
+.integration-card__icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    background-color: var(--color-bg-tertiary);
+    border-radius: var(--radius-lg);
+}
+
+.integration-card__content {
+    min-width: 0;
+}
+
+.integration-card__title {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    margin-bottom: var(--space-1);
+}
+
+.integration-card__vendor {
+    font-size: var(--font-size-xs);
+    color: var(--color-primary);
+    font-weight: var(--font-weight-medium);
+    margin: 0 0 var(--space-1);
+}
+
+.integration-card__url {
+    margin: 0;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.integration-card__footer {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--color-border-light);
+}
+
+.integration-card__status {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+}
+
+.integration-card__status--connected {
+    color: var(--color-success);
+    background-color: var(--color-success-glow-subtle);
+}
+
+.integration-card__status--disconnected {
+    color: var(--color-text-tertiary);
+    background-color: var(--color-bg-tertiary);
+}
+
+.integration-card__status--error {
+    color: var(--color-warning-dark);
+    background-color: var(--color-warning-light);
+}
+
+.integration-card__menu-wrapper {
+    position: relative;
+}
+
+.integration-card__menu {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    background: none;
+    border: none;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.integration-card__menu:hover {
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+}
+
+.integration-card__dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    min-width: 180px;
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: var(--space-2);
+    z-index: 100;
+    animation: dropdownFadeIn 0.15s ease;
+}
+
+@keyframes dropdownFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.integration-card__dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-size-sm);
+    font-family: var(--font-family);
+    color: var(--color-text-primary);
+    background: none;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    text-align: left;
+}
+
+.integration-card__dropdown-item:hover {
+    background-color: var(--color-bg-tertiary);
+}
+
+.integration-card__dropdown-item svg {
+    flex-shrink: 0;
+    color: var(--color-text-tertiary);
+}
+
+.integration-card__dropdown-item--danger {
+    color: var(--color-error);
+}
+
+.integration-card__dropdown-item--danger:hover {
+    background-color: var(--color-error-glow-subtle);
+}
+
+.integration-card__dropdown-item--danger svg {
+    color: var(--color-error);
+}
+
+/* Select Dropdown Styling */
+.modal-form__select {
+    width: 100%;
+    height: 36px;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-size-sm);
+    font-family: var(--font-family);
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239CA3AF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6,9 12,15 18,9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    transition: all var(--transition-fast);
+}
+
+.modal-form__select:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-light);
+}
+
+.modal-form__select option {
+    padding: var(--space-2);
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+    .integrations-page__grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    .integrations-page__grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.file-sources__empty {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: var(--space-4) var(--space-5);
+    background-color: var(--color-bg-primary);
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-xl);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-tertiary);
+}

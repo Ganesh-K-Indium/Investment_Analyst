@@ -1,0 +1,605 @@
+/* ==========================================
+   INDIUM Investment Analyst Platform
+   Global Styles & Design Tokens
+   ========================================== */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* System Fonts (SF Pro) */
+
+/* CSS Custom Properties (Design Tokens) */
+:root {
+  color-scheme: light;
+
+  /* Primary Colors */
+  --color-primary: #FF6B35;
+  --color-primary-hover: #E55A25;
+  --color-primary-light: rgba(255, 107, 53, 0.1);
+
+  /* Neutral Colors - Light Theme */
+  --color-bg-primary: #FFFFFF;
+  --color-bg-secondary: #F9FAFB;
+  --color-bg-tertiary: #EDEFF1;
+  --color-bg-sidebar: #F5F6F8;
+
+  /* Text Colors */
+  --color-text-primary: #1A1D21;
+  --color-text-secondary: #4B5563;
+  --color-text-tertiary: #6B7280;
+  --color-text-placeholder: #9CA3AF;
+  --color-text-inverse: #FFFFFF;
+
+  /* Border Colors */
+  --color-border: #E5E7EB;
+  --color-border-light: #F3F4F6;
+
+  /* Status Colors */
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-error: #EF4444;
+  --color-info: #3B82F6;
+  --color-success-light: rgba(16, 185, 129, 0.1);
+  --color-warning-light: rgba(245, 158, 11, 0.1);
+  --color-error-light: rgba(239, 68, 68, 0.1);
+  --color-info-light: rgba(59, 130, 246, 0.1);
+
+  /* Extended Palette */
+  --color-ai-accent: #10A37F;
+  --color-ai-accent-hover: #0D8F6F;
+  --color-ai-accent-light: rgba(16, 163, 127, 0.1);
+  --color-indigo: #6366F1;
+  --color-indigo-hover: #4F46E5;
+  --color-indigo-light: rgba(99, 102, 241, 0.1);
+  --color-indigo-dark: #4338CA;
+  --color-error-dark: #DC2626;
+  --color-success-dark: #065F46;
+  --color-warning-dark: #92400E;
+  --color-info-medium: #1976D2;
+  --color-info-dark: #1565C0;
+  --color-info-deeper: #0D47A1;
+  --color-code-muted: #D4D4D4;
+  --color-brand-secondary: #FF9500;
+
+  /* Status Badge Colors */
+  --color-badge-created: #10B981;
+  --color-badge-draft: #6B7280; /* badge bg only — not text */
+  --color-badge-data-selection: #3B82F6;
+  --color-badge-secondary-research: #8B5CF6;
+  --color-badge-quantitative: #F59E0B;
+  --color-badge-optimization: #EC4899;
+  --color-badge-creation: #14B8A6;
+
+  /* Financial value coloring (ALPHA sentiment tagging, gain/loss figures) —
+     kept distinct from --color-success/error/warning because these mark a
+     directional fact in report copy, not an app status. */
+  --color-value-positive: #15803D;
+  --color-value-negative: #B91C1C;
+  --color-value-neutral: #A16207;
+
+  /* Solid (non-alpha) status surfaces, for banners/badges on a plain background
+     where the translucent --color-*-light rgba tokens would pick up whatever
+     is behind them instead of a flat fill. */
+  --color-error-surface: #FEE2E2;
+  --color-success-surface: #D1FAE5;
+  --color-success-border: #BBF7D0;
+  --color-indigo-surface: #E8EAFF;
+
+  /* Accent glow tints — translucent overlays for active-nav highlights, hover
+     glows, and focus rings, at the opacity tiers actually used across the app. */
+  --color-ai-accent-glow-subtle: rgba(16, 163, 127, 0.05);
+  --color-ai-accent-glow-medium: rgba(16, 163, 127, 0.15);
+  --color-ai-accent-glow-strong: rgba(16, 163, 127, 0.3);
+  --color-ai-accent-glow-intense: rgba(16, 163, 127, 0.4);
+  --color-indigo-glow-subtle: rgba(99, 102, 241, 0.06);
+  --color-indigo-glow-medium: rgba(99, 102, 241, 0.15);
+  --color-indigo-glow-strong: rgba(99, 102, 241, 0.3);
+  --color-info-glow-medium: rgba(59, 130, 246, 0.15);
+  --color-primary-glow: rgba(255, 107, 53, 0.2);
+
+  /* Subtle card/surface tint — unlike the black-alpha --color-overlay-* tiers
+     below (fixed regardless of theme), this deliberately flips direction per
+     theme: darkens a light surface, lightens a dark one, so a "faint card
+     highlight" reads as a highlight in both themes instead of doing nothing
+     (or worse) when piled onto an already-dark background. */
+  --color-surface-tint: rgba(0, 0, 0, 0.03);
+  --color-surface-tint-hover: rgba(0, 0, 0, 0.06);
+
+  /* Generic black-alpha overlays — modal scrims and shadow tiers not already
+     covered by --shadow-*. Named by opacity percentage since "light/medium/
+     strong" would be ambiguous across this many tiers. */
+  --color-overlay-3: rgba(0, 0, 0, 0.03);
+  --color-overlay-4: rgba(0, 0, 0, 0.04);
+  --color-overlay-5: rgba(0, 0, 0, 0.05);
+  --color-overlay-6: rgba(0, 0, 0, 0.06);
+  --color-overlay-8: rgba(0, 0, 0, 0.08);
+  --color-overlay-10: rgba(0, 0, 0, 0.1);
+  --color-overlay-12: rgba(0, 0, 0, 0.12);
+  --color-overlay-15: rgba(0, 0, 0, 0.15);
+  --color-overlay-20: rgba(0, 0, 0, 0.2);
+  --color-overlay-45: rgba(0, 0, 0, 0.45);
+  --color-overlay-50: rgba(0, 0, 0, 0.5);
+  --color-overlay-55: rgba(0, 0, 0, 0.55);
+  --color-overlay-60: rgba(0, 0, 0, 0.6);
+
+  /* A few more status-glow tiers, same pattern as the ai-accent/indigo ones above. */
+  --color-error-glow-subtle: rgba(239, 68, 68, 0.08);
+  --color-error-glow-medium: rgba(220, 38, 38, 0.15);
+  --color-success-glow-subtle: rgba(16, 185, 129, 0.08);
+  --color-info-glow-subtle: rgba(59, 130, 246, 0.12);
+
+  /* Always-dark surface for floating snackbar/toast chips — these deliberately
+     don't invert with the theme (same convention as most OS/Material toasts). */
+  --color-toast-bg: #111827;
+  --color-spinner-ring: rgba(255, 255, 255, 0.3);
+
+  /* Code blocks stay dark in both themes (standard editor/syntax-highlight
+     convention), so this is intentionally not redefined under [data-theme="dark"]. */
+  --color-code-bg: #1E1E1E;
+
+  /* CTA gradient (Generate/Proceed buttons): ai-accent fading to a confirming
+     green, a deliberate two-hue blend rather than a single flat color. */
+  --color-cta-gradient-end: #059669;
+  --color-cta-gradient-end-hover: #047857;
+
+  /* Ticker-selection highlight panel (ImportFileModal) */
+  --color-pink-surface: #FDF2F8;
+
+  /* Brand gradient — matches the orange-to-red diagonal used in the Indium/ALPHA
+     wordmarks (src/assets/alpha.png, indium-logo.png). Used deliberately on primary
+     CTAs so the product visually rhymes with its own brand mark. */
+  --gradient-primary: linear-gradient(135deg, #FF8A3D 0%, #FF6B35 50%, #E8452C 100%);
+  --gradient-primary-hover: linear-gradient(135deg, #FF7A24 0%, #E8452C 50%, #D63A1F 100%);
+
+  /* Shadows - More subtle */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 2px 6px rgba(16, 24, 40, 0.06);
+  --shadow-lg: 0 8px 24px -6px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.04);
+  --shadow-xl: 0 16px 40px -8px rgba(16, 24, 40, 0.18), 0 4px 10px rgba(16, 24, 40, 0.05);
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-card-hover: 0 10px 28px -8px rgba(16, 24, 40, 0.14);
+  --shadow-primary-glow: 0 1px 2px rgba(200, 60, 20, 0.25), 0 4px 12px rgba(255, 107, 53, 0.16);
+
+  /* Border Radius - Smaller */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Spacing - Tighter */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --space-8: 24px;
+  --space-10: 32px;
+  --space-12: 40px;
+  --space-16: 48px;
+
+  /* Typography - Balanced sizes */
+  --font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+  --font-family-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --font-size-xs: 0.78125rem; /* 12.5px */
+  --font-size-sm: 0.84375rem; /* 13.5px */
+  --font-size-base: 0.90625rem; /* 14.5px */
+  --font-size-lg: 1rem;        /* 16px */
+  --font-size-xl: 1.125rem;    /* 18px */
+  --font-size-2xl: 1.3125rem;  /* 21px */
+  --font-size-3xl: 1.625rem;   /* 26px */
+  --font-size-4xl: 2rem;       /* 32px */
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --font-weight-extrabold: 800;
+
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.4;
+  --line-height-relaxed: 1.6;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+
+  /* Layout - Compact with collapsible sidebar */
+  --sidebar-width: 232px;
+  --sidebar-width-collapsed: 64px;
+  --header-height: 60px;
+
+  /* Chevron for every <select> (colour is neutral so it reads in both themes). */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238A92A8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+
+  /* Page rhythm — every top-level page uses the same gutters. */
+  --page-pad-x: 32px;
+  --page-pad-y: 28px;
+  --page-max: 1480px;
+
+  /* shadcn/ui bridge — aliases the tokens above to the variable names shadcn
+     components expect (bg-background, text-foreground, border-input, ...),
+     so `npx shadcn add <component>` works without a second parallel palette. */
+  --background: var(--color-bg-primary);
+  --foreground: var(--color-text-primary);
+  --card: var(--color-bg-primary);
+  --card-foreground: var(--color-text-primary);
+  --popover: var(--color-bg-primary);
+  --popover-foreground: var(--color-text-primary);
+  --primary-foreground: var(--color-text-inverse);
+  --secondary: var(--color-bg-secondary);
+  --secondary-foreground: var(--color-text-primary);
+  --muted: var(--color-bg-tertiary);
+  --muted-foreground: var(--color-text-tertiary);
+  --accent: var(--color-bg-tertiary);
+  --accent-foreground: var(--color-text-primary);
+  --destructive: var(--color-error);
+  --destructive-foreground: var(--color-text-inverse);
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-primary);
+}
+
+/* Dark Theme — "Cool Indigo Dashboard": blue-gray surfaces instead of a flat
+   inversion of light mode, indigo promoted to a bigger role, orange dialed
+   back to an accent-only color. See /private/tmp design review for the other
+   two directions this was chosen over (Slate Studio, Warm Charcoal). */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Saturation bumped up from the first pass (was ~20-25%) — at this low a
+     lightness, 20-25% saturation still reads as plain dark grey to the eye;
+     needed to push closer to 30-38% for the indigo tint to actually show. */
+  --color-bg-primary: #131727;
+  --color-bg-secondary: #0C0F1A;
+  --color-bg-tertiary: #1B2034;
+  --color-bg-sidebar: #090C15;
+
+  --color-text-primary: #E8EAF0;
+  --color-text-secondary: #9DA3C4;
+  --color-text-tertiary: #7981AC;
+  --color-text-placeholder: #4B5178;
+
+  --color-border: #252A3F;
+  --color-border-light: #1B1F2F;
+
+  /* Flips direction vs. the light-mode default above — lightens instead of
+     darkens, so faint card highlights still read as highlights on a dark bg. */
+  --color-surface-tint: rgba(255, 255, 255, 0.05);
+  --color-surface-tint-hover: rgba(255, 255, 255, 0.08);
+
+  /* Primary accent — dialed back and lightened so it reads as a highlight
+     against the cool ground instead of buzzing like the raw brand hex would. */
+  --color-primary: #FF8552;
+  --color-primary-hover: #FF9E72;
+  --color-primary-light: rgba(255, 133, 82, 0.16);
+  --color-primary-glow: rgba(255, 133, 82, 0.2);
+
+  --color-ai-accent: #22D3B8;
+  --color-ai-accent-hover: #3EE2C9;
+  --color-ai-accent-light: rgba(34, 211, 184, 0.16);
+  --color-ai-accent-glow-subtle: rgba(34, 211, 184, 0.08);
+  --color-ai-accent-glow-medium: rgba(34, 211, 184, 0.18);
+  --color-ai-accent-glow-strong: rgba(34, 211, 184, 0.32);
+  --color-ai-accent-glow-intense: rgba(34, 211, 184, 0.42);
+
+  /* Indigo — a bigger part of the identity here than in light mode. */
+  --color-indigo: #7C86F5;
+  --color-indigo-hover: #949CF7;
+  --color-indigo-light: rgba(124, 134, 245, 0.18);
+  --color-indigo-dark: #C7CBFC;
+  --color-indigo-glow-subtle: rgba(124, 134, 245, 0.08);
+  --color-indigo-glow-medium: rgba(124, 134, 245, 0.18);
+  --color-indigo-glow-strong: rgba(124, 134, 245, 0.32);
+  --color-indigo-surface: #232746;
+
+  --color-success: #4ADE80;
+  --color-warning: #FACC57;
+  --color-error: #FB7373;
+  --color-info: #67AAFA;
+  --color-success-light: rgba(74, 222, 128, 0.16);
+  --color-warning-light: rgba(250, 204, 87, 0.16);
+  --color-error-light: rgba(251, 115, 115, 0.16);
+  --color-info-light: rgba(103, 170, 250, 0.16);
+  --color-success-glow-subtle: rgba(74, 222, 128, 0.1);
+  --color-error-glow-subtle: rgba(251, 115, 115, 0.1);
+  --color-error-glow-medium: rgba(251, 115, 115, 0.18);
+  --color-info-glow-subtle: rgba(103, 170, 250, 0.14);
+  --color-info-glow-medium: rgba(103, 170, 250, 0.18);
+
+  /* Deep-shade "text on a tinted surface" tokens brighten instead of darken
+     in dark mode — the surface they sit on is already dark, so a further-
+     darkened text color would disappear into it. */
+  --color-success-dark: #6EE7B7;
+  --color-warning-dark: #FCD34D;
+  --color-error-dark: #F87171;
+  --color-info-medium: #8AC0FB;
+  --color-info-dark: #ABD3FC;
+  --color-info-deeper: #CFE4FD;
+
+  --color-value-positive: #4ADE80;
+  --color-value-negative: #FB7373;
+  --color-value-neutral: #FACC57;
+
+  --color-error-surface: #3A2020;
+  --color-success-surface: #16302A;
+  --color-pink-surface: #2A1F26;
+
+  --gradient-primary: linear-gradient(135deg, #FF9E72 0%, #FF8552 50%, #E8622F 100%);
+  --gradient-primary-hover: linear-gradient(135deg, #FFB48F 0%, #E8622F 50%, #D14E1D 100%);
+
+  /* Elevation reads as a black shadow on a light card in light mode; on a
+     dark card that same shadow all but disappears, so dark mode needs
+     noticeably higher opacity to keep the same sense of depth. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.45);
+  --shadow-xl: 0 8px 16px rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-card-hover: 0 8px 20px rgba(0, 0, 0, 0.5);
+  --shadow-primary-glow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(255, 133, 82, 0.2);
+}
+
+/* Reset & Base Styles */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-secondary);
+  height: 100%;
+  overflow: hidden;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Typography */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.012em;
+  color: var(--color-text-primary);
+}
+
+h1 {
+  font-size: var(--font-size-2xl);
+}
+
+h2 {
+  font-size: var(--font-size-xl);
+}
+
+h3 {
+  font-size: var(--font-size-lg);
+}
+
+h4 {
+  font-size: var(--font-size-base);
+}
+
+p {
+  color: var(--color-text-secondary);
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--color-primary-hover);
+}
+
+/* Form Elements */
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+/* Native controls — styled once, globally, at zero specificity (:where) so any
+   component that styles its own control still wins. This is what stops raw
+   browser selects / checkboxes / date pickers looking out of place next to
+   the app's own inputs. */
+:where(select) {
+  height: 36px;
+  padding: 0 12px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  background-color: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+/* The arrow must survive components that restyle their select with a `background:`
+   shorthand, so this one is a real selector (not :where) and only touches the
+   arrow + the room reserved for it. */
+select:not([multiple]):not([size]) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px;
+}
+
+:where(select:hover) {
+  border-color: var(--color-text-tertiary);
+}
+
+:where(select:focus, textarea:focus, input[type="date"]:focus) {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+
+:where(textarea) {
+  padding: 10px 12px;
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  line-height: var(--line-height-normal);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+:where(input[type="date"]) {
+  height: 36px;
+  padding: 0 10px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  background-color: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+:where(input[type="checkbox"], input[type="radio"]) {
+  accent-color: var(--color-primary);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Note: unused hand-rolled .text-primary/.bg-primary-style utility classes were removed
+   here — they collided in name (with different meaning) with Tailwind's generated
+   text-primary/bg-primary/etc. color utilities from tailwind.config.js. */
+
+/* Generic loading spinner — shared across pages so it isn't redefined (or silently
+   relied upon via bundling order) per-feature. */
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+
+.spinner--small {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Scrollbars — slim, quiet, theme-aware */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-placeholder);
+  background-clip: padding-box;
+}
+
+/* Focus States */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background-color: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+/* KaTeX formula normalization inside chat messages.
+   Scoped to .chat-message__content so it only affects the response area.
+   KaTeX sets font-family on individual span classes via katex.min.css —
+   we override the ones used for plain text, numbers and operators to match
+   the UI sans-serif, while leaving special symbol spans (accents, delimiters,
+   large operators) untouched so they still render correctly. */
+.chat-message__content .katex {
+  font-size: 11px;
+  color: var(--color-text-primary);
+}
+
+/* \text{} content — labels like "Net CapEx", "million" */
+.chat-message__content .katex .mtext {
+  font-family: var(--font-family) !important;
+  font-style: normal !important;
+}
+
+/* ordinary atoms: digits, plain letters, parentheses, operators */
+.chat-message__content .katex .mord,
+.chat-message__content .katex .mbin,
+.chat-message__content .katex .mrel,
+.chat-message__content .katex .mopen,
+.chat-message__content .katex .mclose,
+.chat-message__content .katex .mpunct {
+  font-family: var(--font-family) !important;
+  font-style: normal !important;
+}
+
+.chat-message__content .katex-display {
+  margin: 0.5em 0;
+  overflow-x: auto;
+}

@@ -1,0 +1,179 @@
+/* ==========================================================================
+   Project workspace — shared look for the portfolio detail view and its three
+   research workspaces (Secondary, Quantitative, Creation).
+
+   Loaded after the feature stylesheets so it harmonises them in one place:
+   neutral surfaces, hairline borders, and orange used only where it means
+   "primary action" or "you are here". Previously each workspace tinted its
+   own chips and buttons orange, so nothing stood out.
+   ========================================================================== */
+
+/* ── Header: back link + title on one line ────────────────────────────── */
+.project-detail__header {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+    flex-shrink: 0;
+}
+.breadcrumbs { margin: 0; gap: 0; flex-shrink: 0; }
+.breadcrumbs__link { color: var(--color-text-tertiary); font-size: var(--font-size-base); }
+.breadcrumbs__link:hover { color: var(--color-text-primary); text-decoration: none; }
+.breadcrumbs__separator { color: var(--color-text-placeholder); }
+.project-detail__title-row { display: contents; }
+.project-detail__title {
+    min-width: 0;
+    font-size: var(--font-size-3xl);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: -0.025em;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── Tabs: underline, like the Documents area ─────────────────────────── */
+.project-detail__tabs {
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.project-detail__tab,
+.project-detail__tab:hover,
+.project-detail__tab--active,
+.project-detail__tab--active:hover {
+    background: none;
+    box-shadow: none;
+    border-radius: 0;
+}
+
+.project-detail__tab {
+    margin-bottom: -1px;
+    padding: 10px var(--space-5);
+    border-bottom: 2px solid transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    white-space: nowrap;
+}
+.project-detail__tab:hover { color: var(--color-text-primary); }
+
+.project-detail__tab--active,
+.project-detail__tab--active:hover {
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-semibold);
+    border-bottom-color: var(--color-primary);
+}
+
+.project-detail__tab--active .project-detail__tab-badge { background: var(--color-error); }
+
+/* ── Overview details card ─────────────────────────────────────────────── */
+.project-detail__details-card { padding: var(--space-8); border-color: var(--color-border); border-radius: var(--radius-lg); }
+.project-detail__section-title { font-size: var(--font-size-lg); letter-spacing: -0.01em; }
+.project-detail__meta-label { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); }
+.project-detail__meta-value { font-size: var(--font-size-base); }
+
+.project-detail__companies { background: var(--color-bg-secondary); border-radius: var(--radius-md); }
+.project-detail__company-tag {
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-xs);
+}
+.project-detail__company-ticker { color: var(--color-text-primary); font-weight: var(--font-weight-bold); letter-spacing: 0.02em; }
+.project-detail__company-name { color: var(--color-text-secondary); }
+
+/* ── Workspace panes (the chat / creation containers) ─────────────────── */
+.secondary-research,
+.quantitative-research,
+.creation { border-radius: var(--radius-lg); }
+
+/* Company context chips: neutral */
+.secondary-research__company-tag {
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-sm);
+}
+.secondary-research__company-tag .company-ticker { color: var(--color-text-primary); font-weight: var(--font-weight-bold); }
+.secondary-research__company-tag .company-name { color: var(--color-text-secondary); }
+
+.secondary-research__file-count {
+    color: var(--color-text-secondary);
+    background: var(--color-bg-tertiary);
+}
+
+.secondary-research__sidebar-header h3,
+.quantitative-research__sidebar-header h3 { font-size: var(--font-size-base); letter-spacing: -0.005em; }
+
+/* Feature buttons: one primary (New Chat), the others outline */
+.secondary-research__feature-btn {
+    height: 36px;
+    padding: 0 var(--space-4);
+    border-radius: var(--radius-md);
+    box-shadow: none;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+.secondary-research__feature-btn:hover:not(:disabled) { transform: none; box-shadow: none; }
+
+.secondary-research__feature-btn--alpha,
+.secondary-research__feature-btn--compare {
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+    box-shadow: var(--shadow-sm);
+}
+.secondary-research__feature-btn--alpha svg,
+.secondary-research__feature-btn--compare svg { color: var(--color-primary); }
+.secondary-research__feature-btn--alpha:hover:not(:disabled),
+.secondary-research__feature-btn--compare:hover:not(:disabled) {
+    background: var(--color-bg-secondary);
+    border-color: var(--color-text-placeholder);
+    color: var(--color-text-primary);
+}
+
+.secondary-research__feature-btn--chat {
+    background: var(--gradient-primary);
+    color: var(--color-text-inverse);
+    box-shadow: var(--shadow-primary-glow);
+}
+.secondary-research__feature-btn--chat:hover:not(:disabled) {
+    background: var(--gradient-primary-hover);
+    color: var(--color-text-inverse);
+}
+
+/* Quant: its New Chat is already the one primary; just match radius/height */
+.quantitative-research__new-btn { height: 36px; border-radius: var(--radius-md); font-weight: var(--font-weight-semibold); }
+.quantitative-research__data-source-badge {
+    color: var(--color-text-secondary);
+    background: var(--color-bg-tertiary);
+}
+
+/* Chat history: active = quiet neutral wash + accent rule, not an orange tint */
+.secondary-research__history-item--active { background-color: var(--color-bg-tertiary); }
+
+/* Empty states inside workspaces: neutral disc, accent icon */
+.secondary-research .empty-state__icon,
+.quantitative-research .empty-state__icon,
+.creation .empty-state__icon {
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-primary);
+}
+
+/* The project view lays out its own vertical rhythm (breadcrumb → title → tabs → pane),
+   so the shell's section gap must not stack on top of it. */
+.home-page .app-main--fill .app-main__inner { gap: 0; }
+
+.secondary-research__file-count { white-space: nowrap; }
+.secondary-research__sidebar-header { gap: var(--space-3); }
+
+/* The project view is a working surface, not a document: it needs the height more than the breathing room. */
+.home-page .app-main { padding-top: var(--space-6); padding-bottom: var(--space-6); }
+@media (max-height: 820px) {
+    .home-page .app-main { padding-top: var(--space-5); padding-bottom: var(--space-5); }
+    .project-detail__title { font-size: var(--font-size-2xl); }
+}

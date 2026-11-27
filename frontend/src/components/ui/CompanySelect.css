@@ -1,0 +1,220 @@
+/* Company Select Component */
+.company-select {
+    position: relative;
+    width: 100%;
+}
+
+.company-select__input-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: var(--space-3) var(--space-4);
+    min-height: 42px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background-color: var(--color-bg-primary);
+    cursor: text;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.company-select__input-container:focus-within {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px var(--color-indigo-light);
+}
+
+.company-select__search {
+    flex: 1;
+    min-width: 120px;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+}
+
+.company-select__search::placeholder {
+    color: var(--color-text-tertiary);
+}
+
+/* Selected Tags */
+.company-select__tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--color-primary-light);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+}
+
+.company-select__tag-ticker {
+    font-weight: 600;
+    color: var(--color-primary);
+}
+
+.company-select__tag-name {
+    color: var(--color-text-secondary);
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.company-select__tag-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-1);
+    border: none;
+    background: none;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all var(--transition-fast);
+}
+
+.company-select__tag-remove:hover {
+    background-color: var(--color-overlay-10);
+    color: var(--color-error);
+}
+
+/* Dropdown */
+.company-select__dropdown {
+    /* position/top/left/width are set inline from the input's bounding box */
+    position: fixed;
+    max-height: 280px;
+    overflow-y: auto;
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 1100; /* above .modal-overlay (1000) */
+}
+
+.company-select__empty {
+    padding: var(--space-5);
+    text-align: center;
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-sm);
+}
+
+.company-select__option {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    padding: 10px var(--space-4);
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+}
+
+.company-select__option:hover {
+    background-color: var(--color-bg-tertiary);
+}
+
+.company-select__option--selected {
+    background-color: var(--color-primary-light);
+}
+
+.company-select__option-info {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    flex: 1 1 260px;
+    min-width: 0;
+}
+
+.company-select__option-ticker {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--color-primary);
+    min-width: 50px;
+    flex-shrink: 0;
+}
+
+.company-select__option-name {
+    font-size: 13px;
+    color: var(--color-text-primary);
+    flex: 1 1 180px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+}
+
+.company-select__option-sector {
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+    padding: var(--space-1) 6px;
+    background-color: var(--color-bg-secondary);
+    border-radius: var(--radius-sm);
+}
+
+.company-select__check {
+    color: var(--color-primary);
+    flex-shrink: 0;
+}
+
+/* Read-only mode for Overview */
+.company-select--readonly .company-select__input-container {
+    background-color: var(--color-bg-secondary);
+    cursor: default;
+}
+
+.company-select--readonly .company-select__tag-remove {
+    display: none;
+}
+
+.company-select--readonly .company-select__search {
+    display: none;
+}
+/* Segment filter (US / Foreign) */
+.company-select__segments {
+    position: sticky;
+    top: 0;
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--color-bg-primary);
+    border-bottom: 1px solid var(--color-border);
+    z-index: 1;
+}
+
+.company-select__segment {
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: none;
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.company-select__segment:hover {
+    background-color: var(--color-bg-tertiary);
+}
+
+.company-select__segment--active {
+    border-color: var(--color-primary);
+    background-color: var(--color-primary-light);
+    color: var(--color-primary);
+    font-weight: 600;
+}
+
+/* Foreign-issuer metadata on an option */
+.company-select__option-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background-color: var(--color-indigo-light);
+    color: var(--color-indigo);
+}
+
+.company-select__option-country,
+.company-select__option-sic {
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+}

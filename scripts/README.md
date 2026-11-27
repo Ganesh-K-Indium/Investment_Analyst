@@ -6,7 +6,7 @@ Needs only Python (3.11–3.13 to create the virtualenv). On Windows write `py s
 
 | Command | Does |
 |---|---|
-| `python3 scripts/dev.py setup` | First-time setup: `venv/`, pinned dependencies, Chromium for SEC filings, `.env` from `.env.example`, the web UI's packages (if `investment-analyst-ui` is next to this repo). Checks for Docker and Tesseract. |
+| `python3 scripts/dev.py setup` | First-time setup: `venv/`, pinned dependencies, Chromium for SEC filings, `.env` from `.env.example`, the web UI's packages (`frontend/`, `npm ci`). Checks for Docker and Tesseract. |
 | `python3 scripts/dev.py start` | Postgres, Redis and Qdrant in Docker (if not already running), the five MCP servers, both workers, the API and the web UI. The API logs to the terminal, the rest to `data/logs/dev/`. **Ctrl+C stops everything**, including child processes, within a few seconds; press it again to stop immediately. |
 | `python3 scripts/dev.py status` | Which ports are serving, and the configuration check (`python -m app.core.config`). |
 | `python3 scripts/dev.py stop` | Stop anything an earlier `start` left running (its terminal was closed, or it crashed). `start` also does this first. |
@@ -15,8 +15,9 @@ Needs only Python (3.11–3.13 to create the virtualenv). On Windows write `py s
 | `python3 scripts/dev.py install` | Install `backend/requirements.txt` (exact versions) into `venv/`. |
 | `python3 scripts/dev.py lock [--upgrade] [--upgrade-package NAME]` | Re-pin dependencies after editing `backend/pyproject.toml`. |
 | `python3 scripts/dev.py test [pytest args]` | Run the backend tests. |
+| `python3 scripts/dev.py check` | Everything a change must pass: backend tests, then the web UI's lint, type check and production build (what CI runs). |
 
-`start` options: `--reload` (restart the API, the workers and the MCP servers when their Python code changes; the web UI always hot-reloads), `--no-services`, `--no-mcp`, `--no-workers`, `--no-ui`, `--host 0.0.0.0` (reach the API from other machines). Set `UI_DIR` if the UI repository lives elsewhere.
+`start` options: `--reload` (restart the API, the workers and the MCP servers when their Python code changes; the web UI always hot-reloads), `--no-services`, `--no-mcp`, `--no-workers`, `--no-ui`, `--host 0.0.0.0` (reach the API from other machines).
 
 | MCP server | Port | Folder |
 |---|---|---|

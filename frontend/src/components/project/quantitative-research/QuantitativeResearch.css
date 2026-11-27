@@ -1,0 +1,620 @@
+/* Quantitative Research - Web Search Chat */
+
+.quantitative-research {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+    position: relative;
+}
+
+.quantitative-research .chat-message {
+    --chat-message-accent: var(--color-primary);
+}
+
+.quantitative-research .resizable-sidebar__resize-handle:hover,
+.quantitative-research .resizable-sidebar__resize-handle.dragging {
+    background: var(--color-primary-glow);
+}
+
+/* Sidebar shell (collapse/resize/toggle) now comes from components/ui/ResizableSidebar */
+
+.quantitative-research__sidebar-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: 10px var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.quantitative-research__sidebar-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.quantitative-research__new-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: var(--space-3);
+    background: var(--color-primary);
+    border: none;
+    border-radius: 6px;
+    color: var(--color-text-inverse);
+    font-size: 14px;
+    font-weight: 500;
+    font-family: var(--font-family);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.quantitative-research__new-btn:hover {
+    background: var(--color-primary-hover);
+}
+
+/* Chat History */
+.quantitative-research__history {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+}
+
+/* Data Sources Selector */
+.quantitative-research__data-sources {
+    padding: var(--space-3) 10px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.quantitative-research__data-sources-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+}
+
+.quantitative-research__data-sources-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.quantitative-research__data-source-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--space-2) 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    font-size: 14px;
+    color: var(--color-text-primary);
+}
+
+.quantitative-research__data-source-item:hover {
+    background-color: var(--color-bg-tertiary);
+}
+
+.quantitative-research__data-source-checkbox {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--color-primary);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.quantitative-research__data-source-name {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.quantitative-research__data-source-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0px var(--space-2);
+    border-radius: 3px;
+    background-color: var(--color-primary-light);
+    color: var(--color-primary);
+    text-transform: lowercase;
+    flex-shrink: 0;
+}
+
+.quantitative-research__empty-history {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    text-align: center;
+    padding: var(--space-5) var(--space-4);
+}
+
+.quantitative-research__history-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 7px var(--space-3) 7px 10px;
+    margin-bottom: 1px;
+    background: none;
+    border: none;
+    border-left: 2px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    font-family: var(--font-family);
+    text-align: left;
+    color: var(--color-text-tertiary);
+    font-size: 14px;
+    min-width: 0;
+}
+
+.quantitative-research__history-item:hover {
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+}
+
+.quantitative-research__history-item--active {
+    background-color: var(--color-primary-light);
+    border-left-color: var(--color-primary);
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-semibold);
+}
+
+.quantitative-research__history-item svg {
+    flex-shrink: 0;
+}
+
+/* Chat Area */
+.quantitative-research__chat {
+    flex: 1;
+    background-color: var(--color-bg-primary);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+    min-width: 0;
+}
+
+/* Empty state layout/typography now comes from the shared components/ui/EmptyState —
+   this just tints its icon circle to match the page's indigo accent. */
+/* Compound selector so this reliably beats EmptyState.css's default orange
+   tint regardless of CSS import order. */
+.empty-state__icon.quantitative-research__empty-icon {
+    background-color: var(--color-primary-light);
+    color: var(--color-primary);
+}
+
+.quantitative-research__suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    justify-content: center;
+}
+
+.quantitative-research__suggestions button {
+    padding: var(--space-3) 14px;
+    background-color: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: 20px;
+    color: var(--color-text-primary);
+    font-size: 13px;
+    font-family: var(--font-family);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.quantitative-research__suggestions button:hover {
+    background-color: var(--color-bg-tertiary);
+    border-color: var(--color-border);
+}
+
+/* Messages */
+.quantitative-research__messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+    min-height: 0;
+}
+
+.quantitative-research__welcome {
+    background-color: var(--color-primary-light);
+    padding: var(--space-4) var(--space-5);
+    margin: var(--space-5);
+    border-radius: 8px;
+    border: 1px solid var(--color-primary);
+}
+
+.quantitative-research__welcome p {
+    font-size: 14px;
+    color: var(--color-primary);
+}
+
+/* Base .chat-message, __avatar, __content and markdown typography now live in
+   components/ui/ChatMessage.css (shared with SecondaryResearch). This page tints
+   accent-colored elements (links, blockquotes, status dots) via --chat-message-accent below. */
+
+/* Image styling */
+.chat-message__image-container {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin: var(--space-4) 0;
+    gap: 6px;
+}
+
+.chat-message__image {
+    max-width: 100%;
+    max-height: 300px;
+    width: auto;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    box-shadow: 0 2px 8px var(--color-overlay-8);
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.chat-message__image:hover {
+    transform: scale(1.02);
+    box-shadow: 0 4px 12px var(--color-overlay-12);
+}
+
+/* .chat-message__image-link/-actions/-clip-btn retired — clicking the image
+   itself now clips it directly (see markdownComponents.img above). */
+
+/* .chat-message__content img, .chat-message__sources, .sources-label and the
+   typing/searching status animation now live in components/ui/ChatMessage.css */
+
+.source-tag {
+    display: inline-block;
+    padding: 3px 10px;
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-tertiary);
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* Error Message */
+.quantitative-research__error {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-4) var(--space-6);
+    padding: 10px 14px;
+    background-color: var(--color-error-light);
+    border: 1px solid var(--color-error-light);
+    border-radius: 8px;
+    color: var(--color-error-dark);
+    font-size: 13px;
+}
+
+.quantitative-research__error svg {
+    flex-shrink: 0;
+}
+
+/* Input Area */
+.quantitative-research__input-area {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-3);
+    padding: var(--space-4) 28px var(--space-6);
+    background: linear-gradient(180deg, transparent 0%, var(--color-bg-primary) 20%);
+}
+
+.quantitative-research__input {
+    flex: 1;
+    padding: 10px 14px;
+    font-size: 15px;
+    font-family: var(--font-family);
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    transition: all 0.2s ease;
+    box-shadow: 0 1px 4px var(--color-overlay-4);
+}
+
+.quantitative-research__input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-glow), 0 1px 4px var(--color-overlay-4);
+}
+
+.quantitative-research__input::placeholder {
+    color: var(--color-text-tertiary);
+}
+
+.quantitative-research__input-area button {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-primary);
+    border: none;
+    border-radius: 8px;
+    color: var(--color-text-inverse);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    padding: 0;
+}
+
+.quantitative-research__input-area button:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+    transform: scale(1.02);
+}
+
+.quantitative-research__input-area button:disabled {
+    background: var(--color-border);
+    cursor: not-allowed;
+}
+
+/* Reuse history item styles */
+.quantitative-research .history-item__wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.quantitative-research .history-item__wrapper .quantitative-research__history-item {
+    flex: 1;
+}
+
+.quantitative-research .history-item__title {
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 130px;
+}
+
+.quantitative-research .history-item__actions {
+    position: absolute;
+    right: 8px;
+    display: flex;
+    gap: var(--space-2);
+}
+
+.quantitative-research .history-item__action-btn {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    color: var(--color-text-tertiary);
+}
+
+.quantitative-research .history-item__action-btn:hover {
+    background-color: var(--color-bg-tertiary);
+    border-color: var(--color-border);
+    color: var(--color-text-primary);
+}
+
+.quantitative-research .history-item__action-btn--danger:hover {
+    background-color: var(--color-error-light);
+    border-color: var(--color-error);
+    color: var(--color-error-dark);
+}
+
+/* Assistant avatar stays neutral (components/ui/ChatMessage.css) so it reads
+   distinctly from the accent-colored user avatar. */
+
+/* Responsive */
+@media (max-width: 900px) {
+    .quantitative-research {
+        flex-direction: column;
+    }
+
+    .quantitative-research__sidebar {
+        width: 100% !important;
+        max-width: 100%;
+        min-width: 0;
+        max-height: 140px;
+        border-right: none;
+        border-bottom: 1px solid var(--color-border);
+    }
+
+    .quantitative-research__sidebar-toggle,
+    .quantitative-research__sidebar-toggle-floating,
+    .quantitative-research__resize-handle {
+        display: none;
+    }
+
+    .quantitative-research__input-area {
+        padding: var(--space-5) var(--space-6) var(--space-8);
+    }
+}
+
+/* Clipboard Selection Popup */
+.clipboard-popup {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--space-3) 14px;
+    background: var(--color-primary);
+    color: var(--color-text-inverse);
+    border: none;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 12px var(--color-primary-glow);
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.clipboard-popup:hover {
+    background: var(--color-primary-hover);
+    transform: translate(-50%, -100%) scale(1.05);
+}
+
+.clipboard-popup::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 6px solid var(--color-primary);
+}
+
+/* Toast Notification */
+.quantitative-research__toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: var(--space-4) var(--space-8);
+    background: var(--color-primary);
+    color: var(--color-text-inverse);
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px var(--color-primary-glow);
+    z-index: 10000;
+    animation: toastSlideUp 0.3s ease-out;
+}
+
+@keyframes toastSlideUp {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}
+
+/* ============================================
+   PINNED SUMMARY BANNER
+   ============================================ */
+.pinned-summary {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    margin: 0;
+    padding: 0;
+    background: linear-gradient(135deg, var(--color-primary-light) 0%, var(--color-primary-surface) 100%);
+    border: none;
+    border-bottom: 1px solid var(--color-primary-light);
+    border-left: 4px solid var(--color-primary);
+    overflow: hidden;
+    animation: summarySlideIn 0.3s ease-out;
+    box-shadow: 0 2px 8px var(--color-overlay-6);
+}
+
+@keyframes summarySlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.pinned-summary__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.15s ease;
+}
+
+.pinned-summary__header:hover {
+    background-color: var(--color-primary-glow);
+}
+
+.pinned-summary__title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-primary-hover);
+}
+
+.pinned-summary__icon {
+    font-size: 14px;
+}
+
+.pinned-summary__time {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--color-text-secondary);
+    margin-left: var(--space-2);
+}
+
+.pinned-summary__toggle {
+    background: none;
+    border: none;
+    padding: var(--space-2);
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+}
+
+.pinned-summary__toggle:hover {
+    background-color: var(--color-primary-glow);
+    color: var(--color-primary);
+}
+
+.pinned-summary__content {
+    padding: 0 14px var(--space-4);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--color-text-primary);
+    border-top: 1px solid var(--color-primary-light);
+}
+
+.pinned-summary__content p {
+    margin: 6px 0;
+}
+
+.pinned-summary__content ul,
+.pinned-summary__content ol {
+    margin: 6px 0;
+    padding-left: 18px;
+}
+
+.pinned-summary__content li {
+    margin: 3px 0;
+}
+
+.pinned-summary__content strong {
+    color: var(--color-primary-hover);
+}
+
+/* Generic .spinner/.spinner--small now live in src/index.css */
+
+/* Table styling moved to components/ui/ChatMessage.css to share with SecondaryResearch */

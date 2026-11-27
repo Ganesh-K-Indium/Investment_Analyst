@@ -1,0 +1,17 @@
+# One line-ending convention for every OS: LF in the repository and working copies, so Windows, macOS and Linux
+# developers produce identical diffs. Windows scripts keep CRLF, which cmd.exe requires.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files: never touch them
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.zip binary

@@ -1,0 +1,234 @@
+/* My Reports Page */
+
+.myrep-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+}
+
+/* ── Heading ────────────────────────────────────────────────────────────── */
+.myrep-page__heading { display: flex; flex-direction: column; gap: var(--space-2); }
+.myrep-page__title   { font-size: 22px; font-weight: 700; color: var(--color-text-primary); margin: 0; }
+.myrep-page__subtitle { font-size: 13px; color: var(--color-text-tertiary); margin: 0; }
+
+/* ── Status tabs ───────────────────────────────────────────────────────── */
+.myrep-tabs { display: flex; gap: var(--space-2); border-bottom: 1px solid var(--color-border); }
+
+.myrep-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--space-3) var(--space-5);
+    border: none;
+    background: none;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: all 0.15s;
+}
+.myrep-tab--active { color: var(--color-text-primary); border-bottom-color: var(--color-primary); }
+
+.myrep-tab__count {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 999px;
+}
+.myrep-tab--active .myrep-tab__count {
+    background: var(--color-primary);
+    color: var(--color-text-inverse);
+}
+
+/* ── Loading / Empty ───────────────────────────────────────────────────── */
+.myrep-loading {
+    display: flex;
+    justify-content: center;
+    padding: 80px 0;
+}
+
+.myrep-spinner {
+    width: 32px; height: 32px;
+    border: 3px solid var(--color-border);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: myrep-spin 0.8s linear infinite;
+}
+@keyframes myrep-spin { to { transform: rotate(360deg); } }
+
+.myrep-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 80px 0;
+    color: var(--color-text-tertiary);
+}
+.myrep-empty p    { font-size: 15px; font-weight: 600; color: var(--color-text-secondary); margin: 0; }
+.myrep-empty span { font-size: 13px; margin: 0; }
+
+/* ── Table ─────────────────────────────────────────────────────────────── */
+.myrep-table-wrap {
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.myrep-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.myrep-table thead tr {
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.myrep-table th {
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+
+.myrep-row { border-bottom: 1px solid var(--color-border-light); transition: background 0.1s; }
+.myrep-row:last-child { border-bottom: none; }
+.myrep-row:hover { background: var(--color-bg-secondary); }
+
+.myrep-cell { padding: var(--space-4) 14px; vertical-align: middle; }
+.myrep-cell--title { max-width: 280px; }
+
+.myrep-company { display: block; font-weight: 500; color: var(--color-text-secondary); }
+.myrep-ticker {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--color-text-tertiary);
+    background: var(--color-bg-secondary);
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-top: var(--space-1);
+    border: 1px solid var(--color-border-light);
+}
+
+.myrep-status { font-size: 12px; font-weight: 500; }
+.myrep-status--published { color: var(--color-success); }
+.myrep-status--draft     { color: var(--color-text-tertiary); }
+
+.myrep-cell--date { font-size: 12px; white-space: nowrap; }
+.myrep-date-updated { display: block; font-size: 12px; font-weight: 500; color: var(--color-primary); }
+.myrep-date-created { display: block; font-size: 11px; color: var(--color-text-tertiary); margin-top: var(--space-1); }
+
+/* ── Action buttons ────────────────────────────────────────────────────── */
+.myrep-cell--actions { white-space: nowrap; }
+.myrep-actions { display: flex; align-items: center; gap: 6px; }
+
+.myrep-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    padding: 5px 10px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.myrep-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.myrep-action-btn--publish {
+    background: var(--color-primary);
+    color: var(--color-text-inverse);
+    border-color: var(--color-primary);
+}
+.myrep-action-btn--publish:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+    border-color: var(--color-primary-hover);
+}
+
+.myrep-action-btn--unpublish {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-secondary);
+    border-color: var(--color-border);
+}
+.myrep-action-btn--unpublish:hover:not(:disabled) {
+    border-color: var(--color-text-tertiary);
+}
+
+.myrep-action-btn--pdf {
+    background: var(--color-primary-light);
+    color: var(--color-primary);
+    border-color: transparent;
+    padding: 5px var(--space-3);
+}
+.myrep-action-btn--pdf:hover {
+    background: var(--color-primary-light);
+    border-color: var(--color-primary);
+}
+
+.myrep-action-btn--delete {
+    background: var(--color-error-light);
+    color: var(--color-error);
+    border-color: var(--color-error);
+    padding: 5px var(--space-3);
+}
+.myrep-action-btn--delete:hover { background: var(--color-error-light); }
+
+/* Inline delete confirm */
+.myrep-confirm {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+}
+.myrep-confirm-yes {
+    padding: 3px var(--space-3);
+    background: var(--color-error);
+    color: var(--color-text-inverse);
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.myrep-confirm-no {
+    padding: 3px var(--space-3);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-secondary);
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* ── Toast ─────────────────────────────────────────────────────────────── */
+.myrep-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--color-toast-bg);
+    color: var(--color-text-inverse);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 10px 18px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px var(--color-overlay-20);
+    z-index: 1000;
+    animation: myrep-fadeIn 0.2s ease;
+}
+@keyframes myrep-fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

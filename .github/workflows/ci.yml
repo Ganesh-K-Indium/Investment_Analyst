@@ -1,0 +1,56 @@
+# Runs on every push and pull request: the same checks as `python scripts/dev.py check`.
+name: CI
+
+on: [push, pull_request]
+
+# CI only reads the code.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: System packages (Tesseract OCR for the document-reading tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+      - name: Install dependencies (exact pins)
+        run: pip install -r requirements.txt
+      - name: Dependency files in step
+        run: pytest -q tests/test_dependencies.py tests/test_config.py
+      - name: Tests
+        run: pytest -q
+
+  frontend:
+    name: Web UI (lint, type check, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build

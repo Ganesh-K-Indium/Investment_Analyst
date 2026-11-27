@@ -42,7 +42,7 @@ Investment Analyst puts three systems behind one FastAPI backend:
 | **A quant agent team** | A LangGraph supervisor routes each question to specialists for market data, technicals, ratings, options, your databases, your data providers and your own MCP tools. |
 | **A review-first document pipeline** | Uploaded files are read, checked, held for a person to approve, and only then made searchable. |
 
-The web UI is a separate repository, `investment-analyst-ui`; the quick start installs both.
+Backend and web UI live together in this repository (`backend/` and `frontend/`), versioned, tested and started together.
 
 ---
 
@@ -95,7 +95,7 @@ Portfolio-scoped chat history with AI summaries, an analyst report clipboard wit
 
 ```mermaid
 flowchart LR
-    UI["Web UI<br/>investment-analyst-ui"] --> API["FastAPI<br/>auth · routes · live streams"]
+    UI["Web UI<br/>frontend/ · React + Vite"] --> API["FastAPI<br/>auth · routes · live streams"]
     API --> JOBS["Redis + Arq workers<br/>interactive · batch"]
     API --> RAG["RAG graph<br/>LangGraph"]
     JOBS --> RAG
@@ -125,7 +125,7 @@ How a request flows, the RAG graph, ingestion, the document pipeline, the quant 
 
 | Requirement | Notes |
 |---|---|
-| **Git** and both repositories side by side | `Investment_Analyst` (this one) and `investment-analyst-ui`. |
+| **Git** | One repository holds everything. |
 | **Docker** with Docker Compose | Runs Postgres, Redis and Qdrant, or the whole stack. |
 | **Python 3.11, 3.12 or 3.13** | For running the backend on your machine. Not needed for the all-Docker route. |
 | **Node.js 20.19+** (22 LTS recommended) | For running the web UI on your machine. Not needed for the all-Docker route. |
@@ -136,7 +136,6 @@ Works the same on **Windows, macOS and Linux**. Every pinned package installs fr
 
 ```bash
 git clone https://github.com/Ganesh-K-Indium/Investment_Analyst.git
-git clone <ui-repo-url> investment-analyst-ui        # next to Investment_Analyst
 cd Investment_Analyst
 cp .env.example .env                                 # then fill in the keys (see Configuration)
 ```
@@ -181,6 +180,7 @@ python3 scripts/dev.py start     # Postgres/Redis/Qdrant (Docker), the 5 MCP ser
 | `dev.py install` | Install the pinned dependencies again, e.g. after a `git pull` changed them |
 | `dev.py lock` | Re-pin dependencies after editing `backend/pyproject.toml` (see [Adding or updating a library](#adding-or-updating-a-library)) |
 | `dev.py test` | Run the test suite; extra arguments go to pytest, e.g. `dev.py test -k config` |
+| `dev.py check` | Everything a change must pass: backend tests, then the web UI's lint, type check and build |
 
 <details>
 <summary><b>Running each part by hand</b></summary>
@@ -194,7 +194,7 @@ python -m app.worker batch                             # multi-ticker ALPHA runs
 python ../scripts/dev.py mcp                           # the five MCP servers
 ```
 
-The web UI: `cd ../investment-analyst-ui && npm ci && cp .env.example .env && npm run dev`.
+The web UI, from `frontend/`: `npm ci`, `cp .env.example .env`, `npm run dev` (http://localhost:5173).
 
 </details>
 
@@ -245,6 +245,8 @@ python3 scripts/dev.py install    # 3. install it
 | Remove a library | delete it from `pyproject.toml`, then `dev.py lock` |
 
 Never edit `requirements.txt` or `uv.lock` by hand. `lock` installs the resolver it needs (`uv`) into the virtualenv by itself. Docker builds use the same `requirements.txt`.
+
+**Web UI libraries** use npm from `frontend/`: `npm install <name>` (or `npm install -D <name>` for build tools) updates `package.json` and `package-lock.json`. Commit both; everyone else gets the exact versions with `npm ci` (which `dev.py setup` runs).
 
 ---
 
@@ -298,13 +300,15 @@ Hosting on an internal virtual machine is covered in [docs/VM_Hosting_Proposal.p
 ## Testing
 
 ```bash
-python3 scripts/dev.py test              # or, from backend/: pytest. About 2 minutes; needs no running Postgres, Redis or Qdrant
+python3 scripts/dev.py check             # everything a change must pass: backend tests, then the web UI's lint, type check and build
+python3 scripts/dev.py test              # backend tests only (or, from backend/: pytest). About 2 minutes; no running services needed
+cd frontend && npm run lint && npm run build     # web UI only
 cd backend
 python scripts/extraction_eval.py        # finance extraction accuracy on sample statements (local OCR, no model calls)
 EVAL_TOKEN=… EVAL_THREAD_ID=… python scripts/rag_eval.py    # question set against a running API (uses models)
 ```
 
-How the suite is organised and how to add a test: [backend/tests/README.md](backend/tests/README.md).
+How the backend suite is organised and how to add a test: [backend/tests/README.md](backend/tests/README.md). Every push and pull request runs the same checks in GitHub Actions (`.github/workflows/ci.yml`): backend tests on Python 3.11 and 3.13, and the web UI's lint, type check and build.
 
 ---
 
@@ -332,8 +336,13 @@ Investment_Analyst/
 │   ├── pyproject.toml       Direct dependencies (edit this) and supported Python versions
 │   ├── uv.lock              Resolved dependency graph (generated)
 │   └── requirements.txt     Exact versions for every OS (generated; what pip and Docker install)
+├── frontend/                Web UI: React 19 + TypeScript + Vite (see frontend/README.md)
+│   ├── src/                 pages/, features/, components/, services/ (one module per API resource), store/, context/
+│   ├── package.json         Dependencies (npm) and scripts: dev, build, lint
+│   └── Dockerfile           Production build served on port 80
 ├── docs/                    Architecture guide and reference documents
-├── scripts/                 dev.py: setup, start, test, lock on any OS (start_api / start_mcp_servers wrap it)
+├── scripts/                 dev.py: setup, start, check, test, lock on any OS (start_api / start_mcp_servers wrap it)
+├── .github/workflows/       CI: backend tests and web UI checks on every push
 ├── data/                    Runtime files (git-ignored)
 ├── docker-compose.yml
 ├── .env.example             Secrets and connection strings
@@ -370,7 +379,8 @@ Investment_Analyst/
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Code layout and rules, configuration, request and chat flows, RAG, ingestion, documents, quant, concurrency, data model, API reference, how to extend, known limitations |
 | [config.example.yaml](config.example.yaml) | Every deployment setting with its default and meaning |
-| [backend/tests/README.md](backend/tests/README.md) | The test suite and how to add tests |
+| [frontend/README.md](frontend/README.md) | The web UI: structure, conventions, how it talks to the API |
+| [backend/tests/README.md](backend/tests/README.md) | The backend test suite and how to add tests |
 | [scripts/README.md](scripts/README.md) | The developer tool (`dev.py`) and launch scripts |
 | [docs/options_mcp/](docs/options_mcp/) | The options intelligence agent and the raw data it works from |
 | [docs/RAG_TEST_QUESTIONS.md](docs/RAG_TEST_QUESTIONS.md) | Manual question checklist for the research agent |

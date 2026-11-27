@@ -101,12 +101,12 @@ services:
         condition: service_started
 
   # Web UI (optional): docker compose --profile ui up -d --build
-  # Builds the sibling investment-analyst-ui repository (override with UI_DIR) and serves it on UI_PORT (default 3000).
+  # Builds frontend/ and serves it on UI_PORT (default 3000).
   # VITE_API_BASE_URL is baked in at build time: it is the address the *browser* uses to reach the API.
   ui:
     profiles: ["ui"]
     build:
-      context: ${UI_DIR:-../investment-analyst-ui}
+      context: ./frontend
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
     restart: unless-stopped

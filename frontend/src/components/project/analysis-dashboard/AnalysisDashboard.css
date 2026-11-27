@@ -1,0 +1,248 @@
+.analysis-dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    margin-bottom: var(--space-5);
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-light);
+    border-radius: var(--radius-lg);
+}
+
+.analysis-dashboard__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+}
+
+.analysis-dashboard__title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin: 0 0 2px;
+}
+
+.analysis-dashboard__subtitle {
+    font-size: 0.82rem;
+    color: var(--color-text-secondary);
+    margin: 0;
+    max-width: 46ch;
+}
+
+.analysis-dashboard__actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.analysis-quick-action {
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all var(--transition-fast);
+}
+
+.analysis-quick-action:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+}
+
+/* Summary strip — one horizontal band, dividers instead of separate cards,
+   so it reads as one stat group rather than three unrelated tiles. */
+.analysis-dashboard__summary {
+    display: flex;
+    align-items: center;
+    background: var(--color-bg-secondary, var(--color-bg-primary));
+    border: 1px solid var(--color-border-light);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+}
+
+.analysis-summary-tile {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.analysis-summary-tile__divider {
+    width: 1px;
+    align-self: stretch;
+    background: var(--color-border-light);
+}
+
+.analysis-summary-tile__count {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.analysis-summary-tile__count--ready {
+    color: var(--color-success-dark);
+}
+
+.analysis-summary-tile__count--failed {
+    color: var(--color-error-dark);
+}
+
+.analysis-summary-tile__label {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+}
+
+.analysis-dashboard__list-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.analysis-dashboard__list-heading {
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-secondary);
+    margin: 0;
+}
+
+.analysis-dashboard__empty {
+    color: var(--color-text-secondary);
+    font-size: 0.85rem;
+    margin: var(--space-2) 0;
+}
+
+/* Capped height so a long run history scrolls inside its own box instead of
+   pushing everything below it (Portfolio Details, tabs) out of view. */
+.analysis-run-list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--color-border-light);
+    border-radius: var(--radius-md);
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+/* One row = one clear left-to-right reading order: status, what it is (+
+   progress note), when, action. Grid keeps every row's columns aligned
+   instead of the pieces wrapping independently per-row. */
+.analysis-run-row {
+    display: grid;
+    grid-template-columns: 88px 1fr auto auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--color-border-light);
+}
+
+.analysis-run-row:last-child {
+    border-bottom: none;
+}
+
+.analysis-run-row__body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.analysis-run-row__title {
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--color-text-primary);
+}
+
+.analysis-run-row__progress {
+    font-size: 0.78rem;
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.analysis-run-row__time {
+    font-size: 0.78rem;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.analysis-run-row__view-btn {
+    border: none;
+    background: none;
+    color: var(--color-primary);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+    white-space: nowrap;
+}
+
+.analysis-run-row__view-btn:hover {
+    text-decoration: underline;
+}
+
+.analysis-run-row__view-btn-spacer {
+    display: inline-block;
+    width: 1px;
+}
+
+.run-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px var(--space-2);
+    border-radius: var(--radius-full, 999px);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+.run-pill--pending {
+    background: var(--color-warning-light);
+    color: var(--color-warning-dark);
+}
+
+.run-pill--running {
+    background: var(--color-primary-light);
+    color: var(--color-primary-hover);
+}
+
+.run-pill--completed {
+    background: var(--color-success-light);
+    color: var(--color-success-dark);
+}
+
+.run-pill--failed {
+    background: var(--color-error-light);
+    color: var(--color-error-dark);
+}
+
+@media (max-width: 640px) {
+    .analysis-run-row {
+        grid-template-columns: auto 1fr;
+        grid-template-areas:
+            "pill time"
+            "body body"
+            "action action";
+    }
+
+    .analysis-run-row .run-pill { grid-area: pill; }
+    .analysis-run-row__body { grid-area: body; }
+    .analysis-run-row__time { grid-area: time; justify-self: end; }
+    .analysis-run-row__view-btn,
+    .analysis-run-row__view-btn-spacer { grid-area: action; }
+}

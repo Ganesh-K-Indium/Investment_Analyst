@@ -11,6 +11,7 @@ Investment Analyst developer tool: one command set for Windows, macOS and Linux.
     python scripts/dev.py install        install backend/requirements.txt into the virtualenv (after a pull)
     python scripts/dev.py lock           re-resolve requirements.txt after editing backend/pyproject.toml
     python scripts/dev.py test           run the backend test suite
+    python scripts/dev.py check          everything a change must pass: backend tests, web UI lint + type check + build
 
 On Windows use `py scripts\\dev.py ...` if `python` is not on PATH. Needs Python 3.11-3.13 to create the virtualenv;
 this script itself uses only the standard library.
@@ -30,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 VENV = ROOT / "venv"
-UI_DIR = Path(os.environ.get("UI_DIR") or ROOT.parent / "investment-analyst-ui")
+FRONTEND = ROOT / "frontend"          # the web UI (React + Vite)
 LOGS = ROOT / "data" / "logs" / "dev"
 IS_WINDOWS = os.name == "nt"
 SUPPORTED = ((3, 11), (3, 13))
@@ -176,14 +177,14 @@ def cmd_setup(args) -> None:
     say("Docker found" if docker_compose() else "Docker not found: install Docker Desktop to run Postgres, Redis and Qdrant", "ok" if docker_compose() else "warn")
 
     if not args.no_ui:
-        if UI_DIR.exists() and npm():
-            say(f"Installing the web UI in {UI_DIR}")
-            run([npm(), "ci" if (UI_DIR / "package-lock.json").exists() else "install"], cwd=UI_DIR)
-            ui_env, ui_example = UI_DIR / ".env", UI_DIR / ".env.example"
+        if FRONTEND.exists() and npm():
+            say(f"Installing the web UI in {FRONTEND}")
+            run([npm(), "ci" if (FRONTEND / "package-lock.json").exists() else "install"], cwd=FRONTEND)
+            ui_env, ui_example = FRONTEND / ".env", FRONTEND / ".env.example"
             if not ui_env.exists() and ui_example.exists():
                 shutil.copy(ui_example, ui_env)
-        elif not UI_DIR.exists():
-            say(f"Web UI not found at {UI_DIR}: clone investment-analyst-ui next to this repo (or set UI_DIR)", "warn")
+        elif not FRONTEND.exists():
+            say(f"Web UI not found at {FRONTEND}", "warn")
         else:
             say("Node.js not found: install Node 20.19+ (22 LTS) for the web UI", "warn")
 
@@ -245,6 +246,24 @@ def cmd_status(args) -> None:
         say(f"{name:<18} :{port}  {'running' if port_open(port) else 'not running'}", "ok" if port_open(port) else "warn")
     if venv_python().exists():
         subprocess.call([str(venv_python()), "-m", "app.core.config"], cwd=str(BACKEND), env=backend_env())
+
+
+def cmd_check(args) -> None:
+    """Everything a change should pass before it is committed: backend tests, then the web UI's lint, type check and
+    production build. Stops at the first failure."""
+    py = require_venv()
+    say("Backend: tests", "head")
+    run([py, "-m", "pytest", "-q"], cwd=BACKEND, env=backend_env())
+    if FRONTEND.exists():
+        if not npm():
+            die("Node.js is not installed: it is needed to check the web UI (Node 20.19+, 22 LTS recommended).")
+        if not (FRONTEND / "node_modules").exists():
+            run([npm(), "ci"], cwd=FRONTEND)
+        say("Web UI: lint", "head")
+        run([npm(), "run", "lint"], cwd=FRONTEND)
+        say("Web UI: type check and production build", "head")
+        run([npm(), "run", "build"], cwd=FRONTEND)
+    say("All checks passed", "ok")
 
 
 def cmd_test(args) -> None:
@@ -433,11 +452,11 @@ def cmd_start(args) -> None:
         ui = None
         if not args.no_ui and port_open(5173):
             say("Web UI already running on http://localhost:5173 (left as is)", "ok")
-        elif not args.no_ui and UI_DIR.exists() and npm() and (UI_DIR / "node_modules").exists():
-            ui = sup.spawn("ui", [npm(), "run", "dev"], cwd=UI_DIR, env=dict(os.environ))
+        elif not args.no_ui and FRONTEND.exists() and npm() and (FRONTEND / "node_modules").exists():
+            ui = sup.spawn("ui", [npm(), "run", "dev"], cwd=FRONTEND, env=dict(os.environ))
             say("Web UI starting on http://localhost:5173", "ok")
         elif not args.no_ui:
-            say("Web UI not started (run setup, or clone investment-analyst-ui next to this repo)", "warn")
+            say("Web UI not started: run `python scripts/dev.py setup` to install its packages", "warn")
 
         say(f"Logs of the other processes: {LOGS}", "info")
         say(f"API on http://localhost:{API_PORT}  (docs /docs) · Ctrl+C stops everything", "head")
@@ -515,6 +534,8 @@ def main() -> None:
     p.add_argument("--upgrade", action="store_true", help="move every package to the newest allowed version")
     p.add_argument("--upgrade-package", action="append", metavar="NAME", help="upgrade just this package (repeatable)")
     p.set_defaults(func=cmd_lock)
+
+    sub.add_parser("check", help="backend tests + web UI lint, type check and build").set_defaults(func=cmd_check)
 
     p = sub.add_parser("test", help="run the backend tests (extra arguments go to pytest)")
     p.add_argument("pytest_args", nargs=argparse.REMAINDER)

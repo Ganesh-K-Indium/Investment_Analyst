@@ -1,0 +1,361 @@
+/* Shared chat message primitive — used by SecondaryResearch and QuantitativeResearch.
+   Each host page may override --chat-message-accent to tint links/blockquotes/status dots. */
+
+.chat-message {
+    --chat-message-accent: var(--color-ai-accent);
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-6);
+}
+
+.chat-message__avatar {
+    margin-top: 2px;
+    font-size: 12px;
+    font-weight: var(--font-weight-semibold);
+}
+
+/* Both avatars use the page's own accent (orange on Secondary and Quant) —
+   kept consistent with the rest of that page's UI instead of a fixed brand color. */
+.chat-message__avatar--user {
+    background: var(--chat-message-accent);
+    color: var(--color-text-inverse);
+}
+
+.chat-message__avatar--assistant {
+    background: var(--color-text-primary);
+}
+
+.chat-message__avatar svg {
+    width: 16px;
+    height: 16px;
+    color: var(--color-text-inverse);
+}
+
+/* The assistant avatar's background is --color-text-primary, which flips to
+   a near-white value in dark mode — pair it with --color-bg-primary instead
+   of the fixed --color-text-inverse so the icon stays visible either way. */
+.chat-message__avatar--assistant svg {
+    color: var(--color-bg-primary);
+}
+
+/* Elevated message card — replaces the old full-bleed zebra-striped row */
+.chat-message__card {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    background-color: var(--color-bg-primary);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    padding: var(--space-4) var(--space-5);
+    transition: box-shadow var(--transition-normal);
+}
+
+.chat-message--user .chat-message__card {
+    background-color: var(--color-bg-secondary);
+}
+
+.chat-message__card:hover {
+    box-shadow: var(--shadow-card-hover);
+}
+
+/* Hover-revealed "clip the whole message" action — mirrors the per-chart clip
+   button, just scoped to the entire card instead of one image. */
+.chat-message__clip-btn {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px var(--space-3);
+    font-size: 11px;
+    font-weight: var(--font-weight-medium);
+    font-family: var(--font-family);
+    color: var(--chat-message-accent);
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.chat-message__card:hover .chat-message__clip-btn {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Suppress the card's own clip button while the user has an active text
+   selection — the floating "Add to Clipboard" popup for that selection is
+   already the right affordance, and both appearing at once is just noise. */
+.has-text-selection .chat-message__clip-btn {
+    display: none;
+}
+
+.chat-message__clip-btn:hover {
+    background-color: var(--chat-message-accent);
+    color: var(--color-text-inverse);
+    border-color: var(--chat-message-accent);
+}
+
+.chat-message__content {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--color-text-primary);
+}
+
+/* Markdown content styling */
+.chat-message__content p {
+    margin: 0 0 var(--space-3) 0;
+}
+
+.chat-message__content p:last-child {
+    margin-bottom: 0;
+}
+
+.chat-message__content h1 { font-size: 18px; font-weight: 600; margin: 14px 0 var(--space-3) 0; }
+.chat-message__content h2 { font-size: 16px; font-weight: 600; margin: var(--space-4) 0 6px 0; }
+.chat-message__content h3 { font-size: 15px; font-weight: 600; margin: 10px 0 var(--space-2) 0; }
+.chat-message__content h4 { font-size: 14px; font-weight: 600; margin: 10px 0 var(--space-2) 0; }
+
+.chat-message__content code {
+    background-color: var(--color-bg-secondary);
+    padding: var(--space-1) 5px;
+    border-radius: 4px;
+    font-family: 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+}
+
+.chat-message__content pre {
+    background-color: var(--color-code-bg);
+    color: var(--color-code-muted);
+    padding: var(--space-4);
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: var(--space-3) 0;
+}
+
+.chat-message__content pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+}
+
+.chat-message__content ul,
+.chat-message__content ol {
+    margin: var(--space-3) 0;
+    padding-left: var(--space-6);
+}
+
+.chat-message__content li {
+    margin: 3px 0;
+}
+
+.chat-message__content strong {
+    font-weight: 600;
+}
+
+.chat-message__content a {
+    color: var(--chat-message-accent);
+    text-decoration: none;
+}
+
+.chat-message__content a:hover {
+    text-decoration: underline;
+}
+
+.chat-message__content table {
+    border-collapse: collapse;
+    margin: var(--space-3) 0;
+    width: 100%;
+}
+
+.chat-message__content th,
+.chat-message__content td {
+    border: 1px solid var(--color-border);
+    padding: 6px 10px;
+    text-align: left;
+}
+
+.chat-message__content th {
+    background-color: var(--color-bg-secondary);
+    font-weight: 600;
+}
+
+.chat-message__content blockquote {
+    border-left: 3px solid var(--chat-message-accent);
+    padding-left: var(--space-4);
+    margin: var(--space-3) 0;
+    color: var(--color-text-tertiary);
+}
+
+.chat-message__content img {
+    max-width: 100%;
+    max-height: 300px;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    box-shadow: 0 2px 8px var(--color-overlay-8);
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.chat-message__content img:hover {
+    transform: scale(1.02);
+    box-shadow: 0 4px 12px var(--color-overlay-12);
+}
+
+/* Sources / citations footer */
+.chat-message__sources {
+    margin-top: var(--space-4);
+    padding-top: 10px;
+    border-top: 1px solid var(--color-border);
+    font-size: 12px;
+    text-align: left;
+}
+
+.sources-label {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    font-weight: 500;
+}
+
+/* Thinking / searching status indicator (replaces an assistant message while streaming) */
+.chat-message__status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.chat-message__status-text {
+    font-size: 11px;
+    color: var(--chat-message-accent);
+    font-style: italic;
+    font-weight: 500;
+}
+
+.chat-message__status-dots {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.chat-message__status-dots span {
+    width: 4px;
+    height: 4px;
+    background-color: var(--chat-message-accent);
+    border-radius: 50%;
+    animation: chat-message-bounce 1.2s infinite ease-in-out;
+}
+
+.chat-message__status-dots span:nth-child(1) { animation-delay: 0s; }
+.chat-message__status-dots span:nth-child(2) { animation-delay: 0.15s; }
+.chat-message__status-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes chat-message-bounce {
+    0%, 60%, 100% {
+        opacity: 0.3;
+        transform: scale(0.8);
+    }
+    30% {
+        opacity: 1;
+        transform: scale(1.1);
+    }
+}
+
+/* ============================================
+   TABLE STYLING FOR DATABASE/RAG OUTPUTS
+   ============================================ */
+.chat-message__table-wrapper {
+    position: relative;
+    margin: var(--space-4) 0;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-primary);
+    box-shadow: 0 1px 3px var(--color-overlay-4);
+    overflow: hidden; /* For rounded corners */
+}
+
+.chat-message__table-scroll {
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.chat-message__table-scroll::-webkit-scrollbar {
+    height: 8px;
+}
+.chat-message__table-scroll::-webkit-scrollbar-thumb {
+    background: var(--color-border-dark);
+    border-radius: 4px;
+}
+
+.chat-message__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    text-align: left;
+    white-space: nowrap; /* Keep data densely packed */
+}
+
+.chat-message__th {
+    position: sticky;
+    top: 0;
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-secondary);
+    font-weight: 600;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.chat-message__td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+}
+
+.chat-message__tr:last-child .chat-message__td {
+    border-bottom: none;
+}
+
+.chat-message__tr:nth-child(even) {
+    background-color: var(--color-bg-secondary);
+}
+
+.chat-message__tr:hover {
+    background-color: var(--color-bg-tertiary);
+}
+
+/* Clip Table Button */
+.chat-message__clip-table-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-inverse);
+    background-color: var(--chat-message-accent);
+    border: none;
+    border-radius: 4px;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px);
+    transition: all 0.2s ease;
+    cursor: pointer;
+    box-shadow: 0 2px 6px var(--color-overlay-8);
+    z-index: 2;
+}
+
+.chat-message__table-wrapper:hover .chat-message__clip-table-btn {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.chat-message__clip-table-btn:hover {
+    filter: brightness(1.1);
+    transform: scale(1.05);
+}

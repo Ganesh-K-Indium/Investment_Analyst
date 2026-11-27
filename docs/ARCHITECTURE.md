@@ -1,8 +1,8 @@
 # Architecture
 
-How the backend is put together, how a request flows through it, and where to make a change. Read [the README](../README.md) first for what the product does and how to run it.
+How the system (backend in `backend/`, web UI in `frontend/`) is put together, how a request flows through it, and where to make a change. Read [the README](../README.md) first for what the product does and how to run it.
 
-**Contents:** [System at a glance](#1-system-at-a-glance) · [Code layout and rules](#2-code-layout-and-rules) · [Configuration](#3-configuration) · [A request, end to end](#4-a-request-end-to-end) · [Chat and background runs](#5-chat-and-background-runs) · [The RAG graph](#6-the-rag-graph) · [SEC filing ingestion](#7-sec-filing-ingestion) · [Your documents](#8-your-documents) · [The quant system](#9-the-quant-system) · [Concurrency and scaling](#10-concurrency-and-scaling) · [Data model](#11-data-model) · [API reference](#12-api-reference) · [Extending the system](#13-extending-the-system) · [Known limitations](#14-known-limitations)
+**Contents:** [System at a glance](#1-system-at-a-glance) · [Code layout and rules](#2-code-layout-and-rules) · [Configuration](#3-configuration) · [A request, end to end](#4-a-request-end-to-end) · [Chat and background runs](#5-chat-and-background-runs) · [The RAG graph](#6-the-rag-graph) · [SEC filing ingestion](#7-sec-filing-ingestion) · [Your documents](#8-your-documents) · [The quant system](#9-the-quant-system) · [The web UI](#10-the-web-ui) · [Concurrency and scaling](#11-concurrency-and-scaling) · [Data model](#12-data-model) · [API reference](#13-api-reference) · [Extending the system](#14-extending-the-system) · [Known limitations](#15-known-limitations)
 
 ---
 
@@ -10,7 +10,7 @@ How the backend is put together, how a request flows through it, and where to ma
 
 ```mermaid
 flowchart LR
-    UI["Web UI<br/>investment-analyst-ui"] -->|HTTPS · JWT · SSE| API
+    UI["Web UI<br/>frontend/ · React + Vite"] -->|HTTPS · JWT · SSE| API
 
     subgraph API_C["api process"]
       API["FastAPI<br/>routes · auth · relay"]
@@ -70,6 +70,8 @@ backend/
 ├── alembic/               Migrations (single linear chain)
 ├── scripts/               Ingestion CLI, evaluations, developer tools
 └── tests/                 pytest suite (see tests/README.md)
+
+frontend/                  Web UI (React + Vite); see section 10 and frontend/README.md
 ```
 
 **Rules that keep the codebase easy to change**
@@ -254,7 +256,36 @@ Reading runs as a background task in the API process (CPU work in threads and su
 
 ---
 
-## 10. Concurrency and scaling
+## 10. The web UI
+
+`frontend/` is a React 19 + TypeScript app built with Vite. It talks to the API only over HTTP, so it can be served from anywhere (`npm run dev` on :5173 in development, its Docker image on :80 in production); `VITE_API_BASE_URL` (read at build time, in `services/http.ts` only) says where the API is.
+
+```
+frontend/src/
+├── App.tsx          Routes; every page except /login sits behind ProtectedRoute
+├── pages/           Route-level screens: Home (portfolio workspace), Repository, MyReports, DataSources, ...
+├── features/        Self-contained areas with their own components and API calls: settings, userDocs, documents
+│                    (filing library and inspector), notes, dataSources, library, chatScope
+├── components/      layout/ (shell), ui/ (shared primitives), project/ (the research, quant and report tabs)
+├── services/        One module per API resource; http.ts holds API_BASE, JSON requests and server-sent events
+├── store/           Zustand stores (analysis runs, clipboard, report editor, providers, pending navigation)
+└── context/         Providers (Auth, Theme, ChatCache) with their hooks in useAuth.ts, useTheme.ts, useChatCache.ts
+```
+
+| Concern | How it works |
+|---|---|
+| **Sign-in** | `useAuth()` holds the user and the access token in memory only; the refresh token is an httpOnly cookie the browser sends to `/auth/refresh`. `services/authInterceptor.ts` patches `fetch` once: on a 401 it refreshes silently and retries, and only signs the user out if that fails. |
+| **API calls** | Each `services/*Api.ts` builds URLs from `API_BASE` and adds the bearer header (`authHeader.ts`). Response shapes are typed to match the backend's models. |
+| **Live answers** | `streamPost()` in `http.ts` reads server-sent events over POST (EventSource cannot send a body or a bearer token): `/ask/stream` gives steps, tokens, then the full result. |
+| **Background runs** | `analysisTasksApi` subscribes to `/analysis-tasks/stream/{portfolio}` and `/stream/user/{id}`; `store/analysisRunsStore` keeps the dashboard and notification bell in step with the workers. |
+| **Settings** | The Settings screens are generated from `GET /settings/schema` (`features/settings/FieldControl.tsx`), so a field added to the backend schema appears with its label, help, limits and the deployment's default, with no UI change. |
+| **Theme** | Colours, spacing and radii are CSS custom properties in `src/index.css` (light in `:root`, dark under `[data-theme="dark"]`); Tailwind reads the same variables. |
+
+**Rules for UI code:** components get data through a `services/` module, never a raw `fetch` with a hand-built URL; a file under `context/` exports only its provider component (hooks live in `useX.ts`, so hot reload keeps state); Zustand selectors return stored values, never a freshly built array or object (that re-renders forever); use the CSS tokens rather than literal colours; `npm run lint` and `npm run build` must pass (CI runs both).
+
+---
+
+## 11. Concurrency and scaling
 
 | Concern | Mechanism | Setting |
 |---|---|---|
@@ -268,7 +299,7 @@ The API process is a single process by design: heavy work runs on workers, and a
 
 ---
 
-## 11. Data model
+## 12. Data model
 
 | Table | Purpose |
 |---|---|
@@ -289,7 +320,7 @@ LangGraph's checkpoint tables live in the same database. Migrations are one line
 
 ---
 
-## 12. API reference
+## 13. API reference
 
 Interactive documentation is served at `/docs`. Every route needs a JWT except signup, login, refresh, `/`, `/health` (the app, its database and Redis), `/rag/health`, `/quant/health`, `/capabilities` and `/quant/capabilities`. Another user's resource returns 404, not 403.
 
@@ -316,7 +347,7 @@ Interactive documentation is served at `/docs`. Every route needs a JWT except s
 
 ---
 
-## 13. Extending the system
+## 14. Extending the system
 
 **A Python library.** Add it with a version range to `dependencies` in `backend/pyproject.toml`, run `python scripts/dev.py lock` (re-pins only what changed) and `python scripts/dev.py install`, and commit `pyproject.toml`, `uv.lock` and `requirements.txt` together. Prefer libraries that ship wheels for Windows, macOS and Linux; run blocking ones off the event loop (rule 5).
 
@@ -332,16 +363,18 @@ Interactive documentation is served at `/docs`. Every route needs a JWT except s
 
 **A database change.** Edit `app/database/models.py`, then from `backend/`: `alembic revision -m "short_name"` with a revision id following the chain (`026_...`), write `upgrade`/`downgrade`, and run `alembic upgrade head`.
 
-**A test.** See [tests/README.md](../backend/tests/README.md).
+**A UI screen or API call.** Add the request to the matching `frontend/src/services/*Api.ts` (typed to the backend's response), build the screen under `features/<area>/` (or `pages/` for a new route, registered in `App.tsx` behind `ProtectedRoute`), keep shared state in a `store/` slice if more than one screen needs it, and run `npm run lint && npm run build` (or `python scripts/dev.py check`). A new product setting needs no UI work: add it to the backend schema.
+
+**A test.** Backend: see [tests/README.md](../backend/tests/README.md). Before committing anything: `python scripts/dev.py check`.
 
 ---
 
-## 14. Known limitations
+## 15. Known limitations
 
 - **Embeddings are shared.** Search uses the server's OpenAI key for everyone, whatever chat provider a user picks, and changing the embedding model means re-indexing every collection.
 - **Poor scans.** Vision models can invent plausible text on very bad scans. Doubtful pages are held for review by default, and `scripts/extraction_eval.py` measures behaviour on financial statements.
 - **Verification scope.** Answers are checked for figures and units against their sources, not for claims or reasoning.
-- **Single API process.** Document reading and the login rate limiter keep state in the API process's memory, so run one API process and scale with workers (see [§10](#10-concurrency-and-scaling)).
+- **Single API process.** Document reading and the login rate limiter keep state in the API process's memory, so run one API process and scale with workers (see [§11](#11-concurrency-and-scaling)).
 - **Confirmation for changing tools.** Calls to a connected MCP tool that changes things rely on the agent asking first, because the quant stream has no interrupt step.
 - **Bloomberg and Refinitiv** have no open internet API. Reach them through your own gateway with the Custom API data source.
 - **Migration names.** Three early migrations share the name `add_chat_summary_fields`; they are a genuine linear sequence, not a branch.

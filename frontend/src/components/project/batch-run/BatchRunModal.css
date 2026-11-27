@@ -1,0 +1,168 @@
+.batch-run {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.batch-run__subtitle {
+    font-size: 0.85rem;
+    color: var(--color-text-secondary);
+    margin: 0;
+}
+
+.batch-run__field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.batch-run__label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.batch-run__label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.batch-run__sic-badge {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--color-text-tertiary);
+}
+
+.batch-run__compare-selects {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+}
+
+.batch-run__compare-selects select {
+    flex: 1 1 160px;
+}
+
+.batch-run__select-all {
+    border: none;
+    background: none;
+    color: var(--color-primary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+}
+
+.batch-run__agent-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.batch-run__agent-option {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-primary);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.batch-run__agent-option:hover {
+    border-color: var(--color-primary);
+}
+
+.batch-run__agent-option--active {
+    border-color: var(--color-primary);
+    background: var(--color-primary-light);
+}
+
+.batch-run__agent-option-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.batch-run__agent-option-hint {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+}
+
+.batch-run__portfolio-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--color-border-light);
+    border-radius: var(--radius-md);
+}
+
+.batch-run__portfolio-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--color-border-light);
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.batch-run__portfolio-row:last-child {
+    border-bottom: none;
+}
+
+.batch-run__portfolio-name {
+    flex: 1;
+    color: var(--color-text-primary);
+}
+
+.batch-run__portfolio-meta {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+}
+
+.batch-run__empty {
+    padding: var(--space-3);
+    font-size: 0.82rem;
+    color: var(--color-text-secondary);
+    margin: 0;
+}
+
+.batch-run__checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.85rem;
+    color: var(--color-text-primary);
+    cursor: pointer;
+}
+
+.batch-run__schedule-input {
+    max-width: 260px;
+}
+
+.batch-run__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+
+.batch-run__result-summary {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin: 0;
+}
+
+.batch-run__result-failures {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-4);
+    font-size: 0.82rem;
+    color: var(--color-error-dark);
+}

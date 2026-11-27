@@ -1,0 +1,987 @@
+/* Home Page Styles - Compact & Professional */
+
+/* Page chrome (gutters, heading) comes from PageLayout / PageHeader. */
+
+/* Section */
+.home-page__section {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+.home-page__section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-5);
+}
+
+.home-page__section-header h2 {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: -0.015em;
+    color: var(--color-text-primary);
+}
+
+.home-page__count {
+    padding: 1px 9px;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+    background: var(--color-bg-tertiary);
+    border-radius: var(--radius-full);
+}
+
+/* Controls */
+.home-page__controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.home-page__sort-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.home-page__sort-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 20;
+    min-width: 170px;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 16px var(--color-overlay-12);
+    padding: var(--space-1);
+    display: flex;
+    flex-direction: column;
+}
+
+.home-page__sort-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.home-page__sort-option:hover {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+}
+
+.home-page__sort-option--active {
+    color: var(--color-primary);
+    font-weight: var(--font-weight-semibold);
+}
+
+.home-page__filter-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.home-page__filter-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-inverse);
+    background: var(--color-primary);
+    border-radius: 999px;
+}
+
+.home-page__filter-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 20;
+    min-width: 200px;
+    max-width: 260px;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 16px var(--color-overlay-12);
+    padding: var(--space-2);
+}
+
+.home-page__filter-menu-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--space-2) var(--space-2);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+}
+
+.home-page__filter-clear {
+    background: none;
+    border: none;
+    color: var(--color-primary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+    padding: 0;
+}
+
+.home-page__filter-empty {
+    padding: var(--space-2);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+}
+
+.home-page__filter-options {
+    display: flex;
+    flex-direction: column;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.home-page__filter-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-primary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.home-page__filter-option:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.home-page__filter-option input {
+    cursor: pointer;
+}
+
+.home-page__filter-btn,
+.home-page__sort-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    height: 34px;
+    padding: 0 var(--space-4);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.home-page__filter-btn svg,
+.home-page__sort-btn svg {
+    width: 12px;
+    height: 12px;
+}
+
+.home-page__filter-btn:hover,
+.home-page__sort-btn:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+}
+
+.home-page__view-toggle {
+    display: flex;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.home-page__view-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: none;
+    border: none;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.home-page__view-btn svg {
+    width: 12px;
+    height: 12px;
+}
+
+.home-page__view-btn:first-child {
+    border-right: 1px solid var(--color-border);
+}
+
+.home-page__view-btn:hover {
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+}
+
+.home-page__view-btn--active {
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+}
+
+/* Project Grid */
+.home-page__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: var(--space-5);
+}
+
+.home-page__grid--list {
+    grid-template-columns: 1fr;
+}
+
+/* Project Card */
+.project-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 180px;
+}
+
+/* Everything above the footer grows to fill the card, so the footer divider
+   below always lands in the same visual place regardless of how much a
+   given card has (description, companies, run status) above it — avoids
+   the card looking like it has a random dead gap before Target Date. */
+.project-card__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    flex: 1;
+}
+
+/* Project List (list view) */
+.project-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.project-list__row {
+    display: grid;
+    grid-template-columns: 2fr 1.5fr 190px 140px;
+    align-items: center;
+    gap: var(--space-4);
+    min-height: auto;
+}
+
+.project-list__row--head {
+    padding: 0 var(--space-4);
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.project-list__col {
+    min-width: 0;
+    overflow: hidden;
+}
+
+.project-list__col--name {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.project-list__title {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.project-list__desc {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.project-list__col--companies {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+}
+
+.project-list__chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px var(--space-2);
+    font-size: 10px;
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    background: var(--color-bg-tertiary);
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+}
+
+.project-list__chip--more {
+    color: var(--color-text-tertiary);
+}
+
+.project-list__muted {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+}
+
+.project-list__col--date {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+}
+
+.project-list__col--actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-3);
+}
+
+.project-list__icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--color-text-placeholder);
+    cursor: pointer;
+    padding: var(--space-1);
+}
+
+.project-list__icon-btn:hover {
+    color: var(--color-text-primary);
+}
+
+.project-list__link {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-primary);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    white-space: nowrap;
+    transition: all var(--transition-fast);
+}
+
+.project-list__link svg {
+    width: 12px;
+    height: 12px;
+}
+
+.project-list__link:hover {
+    gap: 6px;
+}
+
+.project-card__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-2);
+}
+
+.project-card__title {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+
+.project-card__description {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    line-height: var(--line-height-relaxed);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-clamp: 2;
+    overflow: hidden;
+}
+
+.project-card__companies-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+}
+
+.project-card__run-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.project-card__last-activity {
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+}
+
+.project-card__no-activity {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    font-style: italic;
+}
+
+.run-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-full, 999px);
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.run-status-chip--running {
+    background: var(--color-primary-light);
+    color: var(--color-primary-hover);
+}
+
+.run-status-chip--ready {
+    background: var(--color-success-light);
+    color: var(--color-success-dark);
+}
+
+.run-status-chip--failed {
+    background: var(--color-error-light);
+    color: var(--color-error-dark);
+}
+
+/* Small spinning ring inside the "N running" chip — the loader the
+   portfolio cards were missing while an analysis is in flight. */
+.run-status-spinner {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+    border-top-color: transparent;
+    animation: run-status-spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes run-status-spin {
+    to { transform: rotate(360deg); }
+}
+
+.project-card__footer {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-top: var(--space-3);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--color-border-light);
+}
+
+.project-card__date {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.project-card__label {
+    font-size: 10px;
+    color: var(--color-text-tertiary);
+}
+
+.project-card__value {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+}
+
+.project-card__link {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-primary);
+    text-decoration: none;
+    transition: all var(--transition-fast);
+}
+
+.project-card__link svg {
+    width: 12px;
+    height: 12px;
+}
+
+.project-card__link:hover {
+    gap: 6px;
+}
+
+/* Breadcrumbs */
+.breadcrumbs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-bottom: var(--space-4);
+}
+
+.breadcrumbs__link {
+    font-size: var(--font-size-sm);
+    color: var(--color-primary);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    font-family: var(--font-family);
+    transition: all var(--transition-fast);
+}
+
+.breadcrumbs__link:hover {
+    text-decoration: underline;
+}
+
+.breadcrumbs__separator {
+    display: flex;
+    align-items: center;
+    color: var(--color-text-tertiary);
+}
+
+.breadcrumbs__separator svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* Project Detail */
+.project-detail__header {
+    margin-bottom: var(--space-4);
+}
+
+.project-detail__title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.project-detail__title {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-text-primary);
+}
+
+/* Detail Tabs */
+.project-detail__tabs {
+    display: flex;
+    gap: var(--space-2);
+    margin-bottom: var(--space-5);
+    flex-wrap: wrap;
+}
+
+.project-detail__tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--space-3) var(--space-5);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    font-family: var(--font-family);
+    color: var(--color-text-secondary);
+    background-color: var(--color-bg-tertiary);
+    border: none;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.project-detail__tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    font-size: 10px;
+    font-weight: 700;
+    background: var(--color-error);
+    color: var(--color-text-inverse);
+    border-radius: 999px;
+    line-height: 1;
+}
+
+.project-detail__tab--active .project-detail__tab-badge {
+    background: var(--color-spinner-ring);
+    color: var(--color-text-inverse);
+}
+
+.project-detail__tab:hover {
+    background-color: var(--color-bg-hover);
+}
+
+.project-detail__tab--active {
+    background: var(--gradient-primary);
+    color: var(--color-text-inverse);
+    box-shadow: var(--shadow-primary-glow);
+}
+
+.project-detail__tab--active:hover {
+    background: var(--gradient-primary-hover);
+}
+
+/* Project Content */
+.project-detail__content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    /* .home-page__main is a fixed-height flex column with overflow:hidden
+       (see top of this file) — without claiming remaining space and
+       scrolling internally, content past that clipped height is hidden
+       outright rather than merely unscrollable, e.g. as the analysis run
+       list grows. Matches the same flex:1/min-height:0 pattern the other
+       detail tabs (e.g. .secondary-research) already use. */
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.project-detail__details-card {
+    background-color: var(--color-bg-primary);
+    border-radius: var(--radius-lg);
+    padding: var(--space-5);
+    box-shadow: var(--shadow-card);
+    border: 1px solid var(--color-border-light);
+}
+
+.project-detail__details-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.project-detail__details-header .project-detail__section-title {
+    margin-bottom: 0;
+}
+
+/* Read-only summary grid shown when Portfolio Details isn't in edit mode */
+.project-detail__details-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: var(--space-4);
+}
+
+.project-detail__meta--full {
+    grid-column: 1 / -1;
+}
+
+@media (max-width: 768px) {
+    .project-detail__details-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.project-detail__placeholder-content {
+    text-align: center;
+    padding: var(--space-8);
+    color: var(--color-text-tertiary);
+}
+
+.project-detail__placeholder-content h3 {
+    font-size: var(--font-size-lg);
+    color: var(--color-text-primary);
+    margin-bottom: var(--space-2);
+}
+
+.project-detail__placeholder-content p {
+    font-size: var(--font-size-sm);
+}
+
+.project-detail__form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.project-detail__form .modal-form__row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-4);
+}
+
+.project-detail__form .modal-form__field {
+    display: flex;
+    flex-direction: column;
+}
+
+.project-detail__form input[type="date"]:disabled,
+.input-field--disabled {
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-tertiary);
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+/* Ensure consistent styling for all input-field elements in form */
+.project-detail__form .input-field {
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-size-sm);
+    font-family: var(--font-family);
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    transition: all var(--transition-fast);
+}
+
+.project-detail__form .input-field:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-light);
+}
+
+.project-detail__form textarea.input-field {
+    min-height: 100px;
+    resize: vertical;
+}
+
+.project-detail__form-actions {
+    display: flex;
+    justify-content: flex-start;
+    margin-top: var(--space-4);
+}
+
+.project-detail__section-title {
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    margin-bottom: var(--space-3);
+}
+
+.project-detail__meta {
+    margin-bottom: var(--space-4);
+}
+
+.project-detail__meta-label {
+    display: block;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    margin-bottom: var(--space-1);
+}
+
+.project-detail__meta-value {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .home-page__section-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-3);
+    }
+
+    .home-page__controls {
+        flex-wrap: wrap;
+    }
+
+    .home-page__grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Empty State */
+.home-page__grid--empty {
+    display: block !important;
+}
+
+.home-page__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-12) var(--space-4);
+    background-color: var(--color-bg-primary);
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-xl);
+    text-align: center;
+    width: 100%;
+}
+
+.empty-state__icon {
+    width: 80px;
+    height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--color-bg-secondary);
+    border-radius: 50%;
+    color: var(--color-text-tertiary);
+    margin-bottom: var(--space-6);
+}
+
+.home-page__empty h2 {
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    margin-bottom: var(--space-2);
+}
+
+.home-page__empty p {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-tertiary);
+    max-width: 440px;
+    margin-bottom: var(--space-8);
+    line-height: 1.5;
+}
+
+/* Company Display in Overview */
+.project-detail__companies {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background-color: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    min-height: 48px;
+}
+
+.project-detail__company-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background-color: var(--color-primary-light);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+}
+
+.project-detail__company-ticker {
+    font-weight: 600;
+    color: var(--color-primary);
+}
+
+.project-detail__company-name {
+    color: var(--color-text-secondary);
+}
+
+.project-detail__no-companies {
+    color: var(--color-text-tertiary);
+    font-size: 13px;
+    font-style: italic;
+}
+
+/* Modal form full-width row */
+.modal-form__row--full {
+    grid-column: 1 / -1;
+}
+/* ==========================================================================
+   Portfolio cards & list — flat, neutral, hairline. Colour is reserved for
+   run status; the card identity is a neutral monogram.
+   ========================================================================== */
+
+.project-card {
+    min-height: 208px;
+    padding: var(--space-6);
+}
+
+.project-card__body { gap: var(--space-3); }
+
+.project-card__header {
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--space-4);
+}
+
+.project-card__monogram {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-bold);
+    letter-spacing: 0.02em;
+    color: var(--color-text-secondary);
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.project-card__title {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.project-card__description { font-size: var(--font-size-sm); }
+
+.project-card__delete-btn { opacity: 0; transition: opacity var(--transition-fast); }
+.project-card:hover .project-card__delete-btn,
+.project-card__delete-btn:focus-visible { opacity: 1; }
+.project-card__delete-btn:hover { color: var(--color-error) !important; }
+@media (hover: none) { .project-card__delete-btn { opacity: 1; } }
+
+.project-card__footer { margin-top: var(--space-4); padding-top: var(--space-4); }
+.project-card__label { font-size: var(--font-size-xs); }
+.project-card__value { font-size: var(--font-size-sm); font-variant-numeric: tabular-nums; }
+
+/* Links stay quiet; the arrow carries the affordance */
+.project-card__link,
+.project-list__link { color: var(--color-text-secondary); font-weight: var(--font-weight-medium); }
+.project-card:hover .project-card__link,
+.project-list__row:hover .project-list__link { color: var(--color-primary); }
+
+.project-list__chip {
+    padding: 2px var(--space-3);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+}
+
+.project-list__row--head { font-size: 11px; letter-spacing: 0.06em; }
+
+.run-status-chip { font-size: 11.5px; }
+
+/* Empty state: one definition (this file and EmptyState.css both declared
+   .empty-state__icon, with different looks). Scoped to the page so the
+   shared component keeps its own. */
+.home-page__empty .empty-state__icon {
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-tertiary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .project-card, .project-card__delete-btn { transition: none; }
+}

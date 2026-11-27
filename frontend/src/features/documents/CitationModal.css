@@ -1,0 +1,9 @@
+.cm-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .5); }
+.cm { display: flex; flex-direction: column; width: min(900px, 94vw); height: min(88vh, 900px); overflow: hidden; border-radius: var(--radius-xl); background: var(--color-bg-primary); box-shadow: var(--shadow-xl); }
+.cm-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); }
+.cm-title { display: flex; flex-direction: column; font-size: var(--font-size-sm); color: var(--color-text-primary); }
+.cm-title span { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.cm-actions { display: flex; align-items: center; gap: var(--space-2); }
+.cm-open { display: inline-flex; align-items: center; text-decoration: none; }
+.cm-body { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--color-bg-tertiary); }
+.cm-text { padding: var(--space-4); overflow: auto; background: var(--color-bg-primary); height: 100%; }

@@ -1,0 +1,21 @@
+.scope { display: flex; flex-direction: column; gap: 6px; padding: 0 var(--space-4); }
+.scope__toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-bg-secondary); font: inherit; font-size: var(--font-size-xs); color: var(--color-text-secondary); cursor: pointer; text-align: left; }
+.scope__toggle:disabled { opacity: .6; cursor: default; }
+.scope__toggle:focus-visible, .scope__chip:focus-visible, .scope__reset:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.scope__label { font-weight: var(--font-weight-semibold); color: var(--color-text-tertiary); font-size: 10px; }
+.scope__summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope__panel { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-bg-primary); }
+.scope__group { display: flex; flex-direction: column; gap: 6px; }
+.scope__title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); color: var(--color-text-tertiary); }
+.scope__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.scope__chip { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--color-border); background: var(--color-bg-secondary); font: inherit; font-size: var(--font-size-xs); color: var(--color-text-secondary); cursor: pointer; }
+.scope__chip--on { background: var(--color-primary-light); border-color: var(--color-primary); color: var(--color-primary); font-weight: var(--font-weight-semibold); }
+.scope__select { height: 30px; padding: 0 8px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-bg-secondary); font: inherit; font-size: var(--font-size-xs); color: var(--color-text-primary); max-width: 280px; }
+.scope__hint { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.scope__reset { align-self: flex-start; background: none; border: 0; padding: 0; font: inherit; font-size: var(--font-size-xs); color: var(--color-primary); text-decoration: underline; cursor: pointer; }
+.answer-meta { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 8px; font-size: 11px; color: var(--color-text-tertiary); align-items: center; }
+.answer-meta__badge { padding: 2px 8px; border-radius: 999px; font-weight: var(--font-weight-semibold); }
+.answer-meta__badge--ok { background: var(--color-success-light); color: var(--color-success-dark); }
+.answer-meta__badge--warn { background: var(--color-warning-light); color: var(--color-warning-dark); }
+.chat-clarify { margin-top: 6px; font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.chat-stream-draft { margin-bottom: 8px; white-space: pre-wrap; font-size: var(--font-size-sm); line-height: 1.55; color: var(--color-text-primary); }
