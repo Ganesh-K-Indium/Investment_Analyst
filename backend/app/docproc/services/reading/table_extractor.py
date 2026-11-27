@@ -233,6 +233,16 @@ def _is_caption_line(words: list) -> bool:
     return bool(words) and longest <= CAPTION_MAX_PHRASE_WORDS
 
 
+_MONTH = re.compile(r"(?i)^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?$")
+
+
+def _dates_only(ln: dict) -> bool:
+    """A caption line of dates, not figures: every number is a year or the day after a month name ("March 31,", "2026")."""
+    words = ln["words"]
+    return all(_YEAR.match(w[4]) or (k and _MONTH.match(words[k - 1][4]) and re.fullmatch(r"\d{1,2},?", w[4]))
+               for k, w in enumerate(words) if _is_num(w[4]))
+
+
 def _caption_groups(phrases: list, centers: list):
     """The columns each caption of a stacked header spans, or None when the line does not split the columns evenly.
 
@@ -266,7 +276,7 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
         return [w for w in ln["words"] if _is_num(w[4])]
 
     in_body = [ln for ln in lines if bbox[1] - 2 <= ln["cy"] <= bbox[3] + 2]
-    data = [ln for ln in in_body if nums(ln) and not all(_YEAR.match(w[4]) for w in nums(ln))]
+    data = [ln for ln in in_body if nums(ln) and not _dates_only(ln)]
     if len(data) < 2:
         return None
 
@@ -326,7 +336,7 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
     centers = [(c["x0"] + c["x1"]) / 2 for c in cols]
     pitch = median([b - a for a, b in zip(centers, centers[1:])]) if len(cols) > 1 else 0.0
     caption_left = edge - max(25.0, 1.2 * pitch)  # wide group captions start left of the first numeric column
-    unit_parts, header_src, lifted = [], [], []
+    unit_parts, header_src, lifted, label_head = [], [], [], ""
     for ln in reversed(above):
         left = [w for w in ln["words"] if w[0] < caption_left]
         right = [w for w in ln["words"] if w[0] >= caption_left]
@@ -339,8 +349,13 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
         if short and not left:
             header_lines.insert(0, ln)
             header_src.append(ln)
-        elif short and right and 0 < len(left) <= 6 and not any(_is_num(w[4]) for w in left):
-            unit_parts.insert(0, _join(left))  # a units label such as "(Dollars in Millions)" sharing the captions' line
+        elif short and right and (0 < len(left) <= 6 or _UNITS_NOTE.fullmatch(_join(left))) and not any(_is_num(w[4]) for w in left) \
+                and right[0][0] - left[-1][2] > 14:  # set apart from the captions; a centred title runs straight across
+            text = _join(left)
+            if len(left) <= 3 and not _UNITS_NOTE.fullmatch(text) and not text.startswith("("):
+                label_head = label_head or text  # "Item", "Segment": the heading of the label column itself
+            else:
+                unit_parts.insert(0, text)  # a units label such as "(Dollars in Millions)" sharing the captions' line
             header_lines.insert(0, {**ln, "words": right})
             header_src.append(ln)
         elif not header_lines and ln in in_body and all(w[2] < caption_left + 1 or w[0] < edge for w in ln["words"]):
@@ -350,7 +365,7 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
     # A caption line inside the detected box (often the years line) is the header, not also a body row.
     in_body = lifted + [ln for ln in in_body if ln not in header_src]
     col_headers = [[] for _ in cols]
-    spanning = []
+    spanning, last_groups = [], None
     for ln in header_lines:
         phrases, cur = [], []
         for w in ln["words"]:
@@ -363,7 +378,12 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
             spanning.append(_join(phrases[0]))
             continue
         groups = _caption_groups(phrases, centers)
-        if groups:  # "Three Months Ended" over two year columns, "Six Months Ended" over the next two: each spans its group
+        if groups is None and last_groups and len(phrases) == len(last_groups) and all(
+                min(centers[i] for i in g) - pitch / 2 <= (ph[0][0] + ph[-1][2]) / 2 <= max(centers[i] for i in g) + pitch / 2
+                for ph, g in zip(phrases, last_groups)):
+            groups = last_groups  # "March 31," under each "Three Months Ended", set over one of its columns rather than centred
+        if groups:
+            last_groups = groups  # "Three Months Ended" over two year columns, "Six Months Ended" over the next two: each spans its group
             for ph, idx in zip(phrases, groups):
                 for i in idx:
                     col_headers[i].append(_join(ph))
@@ -408,7 +428,7 @@ def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
     # figures are, so it is kept whole: it is never cut off by a long title, and a lone year is not a page number.
     title = " ".join((" ".join(title.split())[:200] + " " + " ".join(spanning)).split())
 
-    headers = ["Line item"] + [" ".join(h) if h else f"Col {i + 1}" for i, h in enumerate(col_headers)]
+    headers = [label_head or "Line item"] + [" ".join(h) if h else f"Col {i + 1}" for i, h in enumerate(col_headers)]
     all_words = [w for ln in header_lines + in_body for w in ln["words"]]
     table_bbox = (min(w[0] for w in all_words), min(w[1] for w in all_words),
                   max(w[2] for w in all_words), max(w[3] for w in all_words))

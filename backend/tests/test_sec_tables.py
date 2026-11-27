@@ -19,15 +19,20 @@ def _centred(page, cx, y, text, size=8):
     page.insert_text((cx - pymupdf.get_text_length(text, fontsize=size) / 2, y), text, fontsize=size)
 
 
-def _income_statement(rule_years: bool):
+def _income_statement(rule_years: bool, msft: bool = False):
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     _centred(page, 300, 60, "CONSOLIDATED STATEMENTS OF INCOME")
     _centred(page, 300, 72, "(in millions, except per share amounts; unaudited)")
     _centred(page, 397, 90, "Three Months Ended")
     _centred(page, 547, 90, "Six Months Ended")
-    _centred(page, 397, 102, "June 30,")
-    _centred(page, 547, 102, "June 30,")
+    if msft:   # the date set over the second column of each pair, with the units note at the left of the same line
+        page.insert_text((40, 102), "(In millions, except per share amounts) (Unaudited)", fontsize=8)
+        _right(page, EDGES[1], 102, "June 30,")
+        _right(page, EDGES[3], 102, "June 30,")
+    else:
+        _centred(page, 397, 102, "June 30,")
+        _centred(page, 547, 102, "June 30,")
     for x1, year in zip(EDGES, ["2025", "2026", "2025", "2026"]):
         _right(page, x1, 115, year)
     rows = [("Revenues", ["96,428", "119,796", "186,662", "229,692"], True),
@@ -51,9 +56,9 @@ def _income_statement(rule_years: bool):
     return doc
 
 
-@pytest.mark.parametrize("rule_years", [True, False])
-def test_stacked_period_captions_name_every_column_and_the_years_are_not_a_row(rule_years):
-    doc = _income_statement(rule_years)
+@pytest.mark.parametrize("rule_years,msft", [(True, False), (False, False), (True, True), (False, True)])
+def test_stacked_period_captions_name_every_column_and_the_years_are_not_a_row(rule_years, msft):
+    doc = _income_statement(rule_years, msft)
     tables = te.extract_page_tables(doc[0], 1)
     assert len(tables) == 1
     t = tables[0]

@@ -547,6 +547,17 @@ def _emit_grid(g, words: "List[Word]") -> "List[Dict[str, Any]]":
     return [t]
 
 
+_PLACEHOLDER_HEAD = re.compile(r"Line item|Col \d+")
+
+
+def _with_header_row(t: Dict[str, Any]) -> List[List[str]]:
+    """The word-position extractor's rows, with its column captions as the first row when it found any. Everything downstream
+    (digital.split_header) reads a table's labels from its first rows; the extractor keeps the captions apart from the rows,
+    already joined per column ("Three Months Ended June 30, 2026"), and names a column "Col 2" when it has none."""
+    heads = [h if not _PLACEHOLDER_HEAD.fullmatch(h or "") else "" for h in t["headers"]]
+    return ([heads] + list(t["rows"])) if any(heads[1:]) else list(t["rows"])
+
+
 def _tables(page, page_num: int, noise=lambda w: False, shown=lambda w: w[4]) -> List[Dict[str, Any]]:
     """Tables on a page. A table drawn with ruling lines is read from its rules: the lines say exactly where the cells are,
     including cells that span rows (datasheets, forms with boxes). A table without rules (statements, schedules) comes from
@@ -557,7 +568,7 @@ def _tables(page, page_num: int, noise=lambda w: False, shown=lambda w: w[4]) ->
     try:
         from app.docproc.services.reading.table_extractor import extract_page_tables_with_bbox
         for t, bb in extract_page_tables_with_bbox(page, page_num):
-            out.append(_attach_header(_rebuild_by_header(_trim_trailing({"bbox": round_rect(bb), "headers": t["headers"], "rows": t["rows"], "method": "layout"}, lwords), lwords), lwords))
+            out.append(_attach_header(_rebuild_by_header(_trim_trailing({"bbox": round_rect(bb), "headers": t["headers"], "rows": _with_header_row(t), "method": "layout"}, lwords), lwords), lwords))
     except Exception:
         out = []
     try:
