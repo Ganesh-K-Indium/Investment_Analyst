@@ -35,6 +35,11 @@ async def get_arq_pool() -> ArqRedis:
     return _pool
 
 
+def get_pool_if_ready() -> ArqRedis | None:
+    """The API process's pool if startup has connected it, else None (never connects)."""
+    return _pool
+
+
 async def close_arq_pool():
     global _pool
     if _pool is not None:

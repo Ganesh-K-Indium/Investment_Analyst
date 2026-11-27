@@ -3088,7 +3088,7 @@ async def alpha_dimension_retrieve(state, config=None):
             logger.info(f"    {ticker} is a foreign private issuer — home-market macro from {market}; U.S. snapshot omitted")
 
         for query, search_tool, source_label in web_jobs:
-            web_results = search_tool.invoke({"query": query})
+            web_results = await asyncio.to_thread(search_tool.invoke, {"query": query})
             # Parse Tavily response using helper
             sources = _parse_tavily_response(web_results, query)
             for source in sources:
@@ -3178,7 +3178,7 @@ async def alpha_dimension_retrieve(state, config=None):
         horizon_docs = []
         for query in horizon_queries:
             # All trends and notable trends fetched exclusively from SeekingAlpha
-            web_results = web_search_seekingalpha.invoke({"query": query})
+            web_results = await asyncio.to_thread(web_search_seekingalpha.invoke, {"query": query})
             sources = _parse_tavily_response(web_results, query)
             for source in sources:
                 doc = Document(
@@ -3250,7 +3250,7 @@ async def alpha_dimension_retrieve(state, config=None):
         logger.info("    Fetching RSI(14) and current price from web...")
         try:
             rsi_query = f"{ticker} RSI 14 relative strength index current technical indicators"
-            rsi_results = web_search_technical.invoke({"query": rsi_query})
+            rsi_results = await asyncio.to_thread(web_search_technical.invoke, {"query": rsi_query})
             rsi_sources = _parse_tavily_response(rsi_results, rsi_query)
             for source in rsi_sources:
                 doc = Document(
@@ -3271,7 +3271,7 @@ async def alpha_dimension_retrieve(state, config=None):
         logger.info("    Fetching SMA200 from web...")
         try:
             sma_query = f"{ticker} 200 day moving average SMA200 current stock price technical"
-            sma_results = web_search_technical.invoke({"query": sma_query})
+            sma_results = await asyncio.to_thread(web_search_technical.invoke, {"query": sma_query})
             sma_sources = _parse_tavily_response(sma_results, sma_query)
             for source in sma_sources:
                 doc = Document(
@@ -3292,7 +3292,7 @@ async def alpha_dimension_retrieve(state, config=None):
         logger.info("    Fetching Current Stock Price from web...")
         try:
             sma_query = f"{ticker} today's stock price current stock price"
-            sma_results = web_search_technical_stock_price.invoke({"query": sma_query})
+            sma_results = await asyncio.to_thread(web_search_technical_stock_price.invoke, {"query": sma_query})
             sma_sources = _parse_tavily_response(sma_results, sma_query)
             for source in sma_sources:
                 doc = Document(
@@ -3313,7 +3313,7 @@ async def alpha_dimension_retrieve(state, config=None):
         logger.info("    Fetching EBITDA from web (trusted domains)...")
         try:
             ebitda_query = f"{ticker} EBITDA annual earnings current"
-            ebitda_results = web_search.invoke({"query": ebitda_query})
+            ebitda_results = await asyncio.to_thread(web_search.invoke, {"query": ebitda_query})
             ebitda_sources = _parse_tavily_response(ebitda_results, ebitda_query)
             for source in ebitda_sources:
                 doc = Document(
@@ -3334,7 +3334,7 @@ async def alpha_dimension_retrieve(state, config=None):
         logger.info("    Fetching P/E ratio from web (trusted domains)...")
         try:
             pe_query = f"{ticker} P/E ratio price to earnings current valuation"
-            pe_results = web_search.invoke({"query": pe_query})
+            pe_results = await asyncio.to_thread(web_search.invoke, {"query": pe_query})
             pe_sources = _parse_tavily_response(pe_results, pe_query)
             for source in pe_sources:
                 doc = Document(

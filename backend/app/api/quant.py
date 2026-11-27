@@ -196,6 +196,10 @@ async def query_core(
         run_context.preflight(settings, creds, run_context.QUANT_ROLES)
         final_query = f"{final_query}\n\n{quant_runtime.request_preamble(settings)}"
 
+        # Release the pooled connection for the length of the agent run (see rag._run_agent_tracked); expire_on_commit=False
+        # keeps the objects loaded above usable.
+        await db.commit()
+
         # Invoke supervisor with thread_id for memory persistence
         with track_usage(f"quant:{session_id}") as tracker, app_settings.use(settings), llm_providers.use_credentials(creds):
             run_inputs = {"messages": [HumanMessage(content=final_query)]}
@@ -279,9 +283,15 @@ async def query_core(
 
 @router.post("/query/stream")
 async def stream_stock_query(payload: StockQueryRequest, db: AsyncSession = Depends(get_db_session), current_user: User = Depends(get_current_user)):
-    """Server-sent events for a quant query: {"type":"step","node"} as each agent finishes, tokens, then {"type":"done","result"} or {"type":"error"}."""
+    """Server-sent events for a quant query: {"type":"step","node"} as each agent finishes, tokens, then {"type":"done","result"} or {"type":"error"}.
+    Runs on the interactive worker when one is up (same events, see app/jobs/chat_stream.py), otherwise in this process."""
     import asyncio
     from fastapi.responses import StreamingResponse
+    from app.jobs.chat_stream import stream_via_worker, KIND_QUANT
+    relayed = await stream_via_worker(KIND_QUANT, payload.model_dump(), current_user.id)
+    if relayed is not None:
+        return relayed
+
     queue: asyncio.Queue = asyncio.Queue()
 
     async def emit(event):

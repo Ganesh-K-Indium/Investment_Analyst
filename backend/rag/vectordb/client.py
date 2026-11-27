@@ -237,7 +237,8 @@ class load_vector_database():
         sparse_vector = None
         if self.sparse_model:
             try:
-                sparse_embeddings = list(self.sparse_model.embed([query]))
+                # Local CPU model: run it off the event loop so one search doesn't stall every other request.
+                sparse_embeddings = await asyncio.to_thread(lambda: list(self.sparse_model.embed([query])))
                 if sparse_embeddings:
                     # Convert to Qdrant sparse vector format
                     sparse_emb = sparse_embeddings[0]
@@ -427,14 +428,12 @@ class load_vector_database():
         if self.sparse_model:
             logger.info("Generating sparse (BM25) embeddings for %d %s...", len(texts), label)
             try:
-                # Use tqdm with the generator
-                sparse_embeddings = []
-                for sparse_emb in tqdm(self.sparse_model.embed(texts), 
-                                      desc="Sparse embeddings (BM25)", 
-                                      total=len(texts), 
-                                      unit="doc"):
-                    sparse_embeddings.append(sparse_emb)
-                
+                # CPU-bound and can take seconds for a large document: run it in a thread so the event loop (and every
+                # other user's request in this process) keeps going meanwhile.
+                def _embed_sparse():
+                    return list(tqdm(self.sparse_model.embed(texts), desc="Sparse embeddings (BM25)", total=len(texts), unit="doc"))
+                sparse_embeddings = await asyncio.to_thread(_embed_sparse)
+
                 for sparse_emb in sparse_embeddings:
                     result['sparse'].append(
                         models.SparseVector(

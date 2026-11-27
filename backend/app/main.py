@@ -87,6 +87,7 @@ import app.api.quant as quant_router_module
 import app.api.analysis_tasks as analysis_tasks_module
 from app.services.stock_agent import cleanup_stock_agents
 from app.jobs.queue import get_arq_pool, close_arq_pool
+from app.core.concurrency import configure_default_executor
 import asyncio
 from ingestion.ingest_macro_data import run_ingestion
 from pathlib import Path
@@ -148,6 +149,7 @@ async def startup_event():
     logger.info("=" * 70)
     logger.info("Starting Investment Analyst API v2.1...")
     logger.info("=" * 70)
+    configure_default_executor()
 
     logger.info("Initializing database...")
     init_db()

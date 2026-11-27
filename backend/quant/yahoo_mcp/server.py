@@ -1,3 +1,8 @@
+import asyncio
+import functools
+import inspect
+import os
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import pandas as pd
@@ -60,6 +65,26 @@ Available tools:
 - get_stock_5_year_projection: Analyze stock growth and revenue projection over the last 5 years using Yahoo Finance data.""",
 )
 
+
+def _off_loop(fn):
+    """Run a tool off this server's event loop. yfinance is blocking (HTTP inside), so called directly on the loop one slow
+    Yahoo request would hold up every other user's tool call; in a thread, requests from many users proceed side by side.
+    The tool's name, signature and docstring (what the MCP schema is built from) are unchanged."""
+    if inspect.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def run_async(*args, **kwargs):
+            return await asyncio.get_running_loop().run_in_executor(_TOOL_THREADS, asyncio.run, fn(*args, **kwargs))
+        return run_async
+
+    @functools.wraps(fn)
+    async def run_sync(*args, **kwargs):
+        return await asyncio.get_running_loop().run_in_executor(_TOOL_THREADS, functools.partial(fn, *args, **kwargs))
+    return run_sync
+
+
+# Own pool, sized for many concurrent users: the loop's default pool is only CPUs + 4 threads.
+_TOOL_THREADS = ThreadPoolExecutor(max_workers=int(os.getenv("MCP_TOOL_THREADS", "32")), thread_name_prefix="yfinance-tool")
+
 @yfinance_server.tool(
     name="get_historical_stock_prices",
     description="""Get historical stock prices for a given ticker symbol from yahoo finance. Include the following information: Date, Open, High, Low, Close, Volume, Adj Close.
@@ -76,6 +101,7 @@ Args:
         Default is "1d"
 """,
 )
+@_off_loop
 async def get_historical_stock_prices(
     ticker: str, period: str = "1mo", interval: str = "1d"
 ) -> str:
@@ -118,6 +144,7 @@ Args:
         The ticker symbol of the stock to get information for, e.g. "AAPL"
 """,
 )
+@_off_loop
 async def get_stock_info(ticker: str) -> str:
     """Get stock information for a given ticker symbol"""
     company = yf.Ticker(ticker)
@@ -141,6 +168,7 @@ Args:
         The ticker symbol of the stock to get news for, e.g. "AAPL"
 """,
 )
+@_off_loop
 async def get_yahoo_finance_news(ticker: str) -> str:
     """Get news for a given ticker symbol
 
@@ -187,6 +215,7 @@ Args:
         The ticker symbol of the stock to get stock actions for, e.g. "AAPL"
 """,
 )
+@_off_loop
 async def get_stock_actions(ticker: str) -> str:
     """Get stock dividends and stock splits for a given ticker symbol"""
     try:
@@ -210,6 +239,7 @@ Args:
         The type of financial statement to get. You can choose from the following financial statement types: income_stmt, quarterly_income_stmt, balance_sheet, quarterly_balance_sheet, cashflow, quarterly_cashflow.
 """,
 )
+@_off_loop
 async def get_financial_statement(ticker: str, financial_type: str) -> str:
     """Get financial statement for a given ticker symbol"""
 
@@ -263,6 +293,7 @@ Args:
         The type of holder information to get. You can choose from the following holder types: major_holders, institutional_holders, mutualfund_holders, insider_transactions, insider_purchases, insider_roster_holders.
 """,
 )
+@_off_loop
 async def get_holder_info(ticker: str, holder_type: str) -> str:
     """Get holder information for a given ticker symbol"""
 
@@ -300,6 +331,7 @@ Args:
         The ticker symbol of the stock to get option expiration dates for, e.g. "AAPL"
 """,
 )
+@_off_loop
 async def get_option_expiration_dates(ticker: str) -> str:
     """Fetch the available options expiration dates for a given ticker symbol."""
 
@@ -327,6 +359,7 @@ Args:
         The type of option to fetch ('calls' or 'puts')
 """,
 )
+@_off_loop
 async def get_option_chain(ticker: str, expiration_date: str, option_type: str) -> str:
     """Fetch the option chain for a given ticker symbol, expiration date, and option type.
 
@@ -376,6 +409,7 @@ Args:
         The number of months back to get upgrades/downgrades for, default is 12.
 """,
 )
+@_off_loop
 async def get_recommendations(ticker: str, recommendation_type: str, months_back: int = 12) -> str:
     """Get recommendations or upgrades/downgrades for a given ticker symbol"""
     company = yf.Ticker(ticker)
@@ -411,6 +445,7 @@ Args:
         The ticker symbol of the stock to get the target price for, e.g. "AAPL"
 """,
 )
+@_off_loop
 def get_target_price(ticker: str) -> str:
     """
     Fetch the 1-year analyst target price for the given ticker symbol.
@@ -441,6 +476,7 @@ def get_target_price(ticker: str) -> str:
             Stock ticker symbol, e.g. "AAPL"
     """,
 )
+@_off_loop
 def get_news_sentiment_and_price_prediction(ticker: str) -> dict:
     """
     Get news headlines for the ticker, analyze sentiment, and predict price movement.
@@ -507,6 +543,7 @@ def get_news_sentiment_and_price_prediction(ticker: str) -> dict:
         JSON with 5Y price CAGR, 5Y revenue CAGR, and 5-year projected revenue.
     """,
 )
+@_off_loop
 async def get_stock_5_year_projection(ticker: str) -> str:
     """Analyze 5-year price CAGR, revenue CAGR, and project future revenue."""
     stock = yf.Ticker(ticker)
@@ -578,6 +615,7 @@ Args:
         Whether to include current price and EPS for context (default: True)
 """,
 )
+@_off_loop
 async def get_pe_ratios(
     ticker: str,
     ratio_type: PERatioType = PERatioType.both,

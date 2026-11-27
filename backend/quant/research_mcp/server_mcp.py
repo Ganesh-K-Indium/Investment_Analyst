@@ -252,7 +252,7 @@ async def web_search(
         if exclude_domains:
             search_params["exclude_domains"] = exclude_domains
         
-        response = client.search(**search_params)
+        response = await asyncio.to_thread(client.search, **search_params)
         
         # Process results
         results = []
@@ -346,7 +346,7 @@ async def _search_analyst_ratings_impl(
         
         for query in queries:
             try:
-                response = client.search(
+                response = await asyncio.to_thread(client.search, 
                     query=query,
                     max_results=5,
                     search_depth="advanced",
@@ -1120,7 +1120,7 @@ async def _extract_mda_from_web(symbol: str, quarter_hint: str = "latest") -> Di
         else:
             search_query = f"{symbol} previous quarter earnings call management discussion analysis MD&A transcript"
         
-        search_results = tavily_client.search(
+        search_results = await asyncio.to_thread(tavily_client.search, 
             query=search_query,
             max_results=5,
             search_depth="advanced",

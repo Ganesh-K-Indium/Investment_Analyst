@@ -65,6 +65,11 @@ async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str, 
 
     Returns (result, usage_summary_dict).
     """
+    if db is not None:
+        # End the request's open transaction before the (minutes-long) model run so its pooled connection goes back to the pool
+        # instead of sitting idle for the whole run. Sessions use expire_on_commit=False, so loaded objects stay usable, and the
+        # usage write below simply checks out a connection again.
+        await db.commit()
     with track_usage(run_label) as tracker, app_settings.use(settings), llm_providers.use_credentials(creds):
         start = time.perf_counter()
         with get_openai_callback() as cb:
@@ -422,7 +427,14 @@ async def ask_stream(
 ):
     """Server-sent events: {"type":"step","node"} as each stage finishes, {"type":"token","text"} while the answer is written, then
     {"type":"done","result":{...same as /ask...}} (or {"type":"error"}). The final answer in "done" replaces the streamed text:
-    verification may add a note after the last token."""
+    verification may add a note after the last token.
+
+    Runs on the interactive worker when one is up (same events, see app/jobs/chat_stream.py), otherwise in this process."""
+    from app.jobs.chat_stream import stream_via_worker, KIND_ASK
+    relayed = await stream_via_worker(KIND_ASK, payload.model_dump(), current_user.id)
+    if relayed is not None:
+        return relayed
+
     queue: asyncio.Queue = asyncio.Queue()
 
     async def emit(event: dict):

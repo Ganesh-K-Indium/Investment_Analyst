@@ -31,7 +31,18 @@ def _to_sync_url(url: str) -> str:
 
 
 # Runtime engine — async, used by every route/service via get_db_session().
-engine = create_async_engine(_to_async_url(DATABASE_URL), pool_pre_ping=True)
+# Pool sized per process. The API and each worker process get their own pool, so with the defaults (10 + 20 overflow = up to 30
+# connections each) the API plus two workers stay under Postgres's default max_connections of 100. Raise DB_POOL_SIZE /
+# DB_MAX_OVERFLOW together with Postgres's max_connections when adding worker processes. pool_recycle drops connections that
+# idled long enough for a firewall/NAT to have silently cut them.
+engine = create_async_engine(
+    _to_async_url(DATABASE_URL),
+    pool_pre_ping=True,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
+    pool_timeout=int(os.getenv("DB_POOL_TIMEOUT", "30")),
+    pool_recycle=int(os.getenv("DB_POOL_RECYCLE", "1800")),
+)
 
 # Session factory
 SessionLocal = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
