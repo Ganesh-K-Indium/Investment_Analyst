@@ -37,7 +37,7 @@ flowchart LR
 |---|---|---|
 | **API** (`app/main.py`) | `uvicorn app.main:app` | HTTP routes, auth, file uploads, document reading, settings. Hands chats and long analyses to the workers and relays their live events to the browser. |
 | **Interactive worker** (`app/worker.py`) | `python -m app.worker interactive` (Docker: `arq app.worker.InteractiveWorkerSettings`) | Streamed chats, queued asks/compares, quant queries. Up to `WORKER_INTERACTIVE_MAX_JOBS` at once. |
-| **Batch worker** | `python -m app.worker batch` | Multi-ticker ALPHA runs, so they never delay a chat. |
+| **Batch worker** | `python -m app.worker batch` | Multi-ticker ALPHA runs, so they never delay a chat. Once a minute it also starts any re-run schedule a user has switched on (none exist until a user creates one). |
 | **MCP servers** (`quant/*_mcp`) | the API container's entrypoint, or `scripts/dev.py start` / `dev.py mcp` | Market-data tools the quant agents call: stock info 8565, technical 8566, research 8567, options 8568, Postgres 8570. |
 | **PostgreSQL** | compose / managed | All application data, plus the LangGraph checkpointer shared by RAG and quant. |
 | **Redis** | compose / managed | Arq job queues, live-update pub/sub, worker health keys. |
@@ -58,13 +58,16 @@ backend/
 │   │                      concurrency.py, agents_init.py, security.py
 │   ├── api/               One router per resource. Thin: validate, authorise, call a *_core or a service.
 │   ├── services/          Business logic: app_settings (product settings), llm_providers, user_docs, chat,
-│   │                      portfolio, report, connectors, data_sources, user_mcp, mcp_registry, ...
+│   │                      portfolio, report, connectors, data_sources, user_mcp, mcp_registry,
+│   │                      analysis_tasks / analysis_runs / run_insights / portfolio_pulse (runs and dashboards),
+│   │                      usage_ledger and pricing (spend), ...
 │   ├── jobs/              queue.py (Redis/Arq), rag_jobs.py, quant_jobs.py, chat_stream.py (worker chat relay)
 │   ├── docproc/           Document-reading engine: OCR engines, layout, tables, figures, finance checks
 │   ├── database/          models.py (SQLAlchemy), connection.py (async engine, sessions, migrations)
 │   ├── auth/              JWT, password hashing, get_current_user, ownership checks, rate limits
 │   └── utils/             Small shared helpers (company/fiscal mapping, filing types, progress, usage)
-├── rag/                   LangGraph RAG pipeline: graph/, vectordb/, retrieval/ (re-rank), prompts/, utils/
+├── rag/                   LangGraph RAG pipeline: graph/, vectordb/, retrieval/ (re-rank), prompts/, verify/, utils/,
+│                          alpha/ (the ALPHA framework's stance rule, fact checks and report assembly)
 ├── quant/                 stock_agent/ (supervisor + sub-agents) and the five *_mcp servers
 ├── ingestion/             SEC filing PDFs, images, EDGAR fetcher, Form 4, macro data, batch ingest
 ├── alembic/               Migrations (single linear chain)
@@ -129,12 +132,17 @@ Deployment defaults are validated against the schema at startup and shown in the
 
 ## 4. A request, end to end
 
-1. **Middleware.** CORS (explicit origins; credentials allowed for the refresh-token cookie), then `RequestLoggingMiddleware` (pure ASGI so streamed responses are never buffered).
+1. **Middleware.** CORS (explicit origins; credentials allowed for the refresh-token cookie), `RequestLoggingMiddleware`, and `UsageMeterMiddleware` (`app/core/usage_middleware.py`), which meters every signed-in request (see step 6). Both are pure ASGI, so streamed responses are never buffered.
 2. **Auth.** `get_current_user` decodes the JWT, loads the user, and rejects a token whose `ver` no longer matches `users.token_version` (logout and password change revoke every token).
 3. **Database session.** `get_db_session` yields an `AsyncSession` (`expire_on_commit=False`). Routes commit explicitly. Before a long agent run, the request's transaction is committed so its pooled connection returns to the pool for the length of the run.
 4. **Run context.** `app/services/run_context.py` loads the effective product settings and the user's provider credentials, checks the models needed are usable, and makes both current (context variables) for every node and tool in the run.
 5. **Agent.** The route calls its `*_core` function, which invokes the compiled LangGraph graph with a checkpoint thread id prefixed `rag:` or `quant:` (the two systems share one checkpointer and can never collide).
-6. **Usage.** Every model call reports tokens to a per-run tracker; totals are stored per role (`usage_events`) for the monthly budget.
+6. **Usage.** Every model and embedding call, on any provider, reports its tokens to the active tracker (`app/utils/usage_tracker.py`): models built by the registry through a callback, embeddings and vision calls directly, and the research MCP server by returning its usage with each tool result (`quant_runtime.harden_tools` records it and strips it). What is stored (`usage_events`, one row per role and model, with the portfolio and background run it belongs to):
+   - every signed-in request is metered and stores what it used when it ends;
+   - flows that store their own usage (chat answers, ALPHA, quant) do so straight away and mark it stored, so the request does not count it again;
+   - work that outlives a request (document processing, SEC ingestion, scheduled runs) is `detached` and stores its own.
+
+   Trackers nest: an inner one (one ingestion file) hands its entries to the enclosing one unless it already stored them. Costs are estimated by `app/services/pricing.py` from list prices for OpenAI, Anthropic, Gemini and embedding models; local models (Ollama, self-hosted on a private address) cost nothing; `model_prices` overrides. A model with no known price is stored with `priced = false` and shown as unknown, never as $0.
 
 ---
 
@@ -164,12 +172,16 @@ worker: ask_core(..., emit=publish) ──publish {"type":"step"|"token"|"done"|
 
 ### Queued runs (`app/api/analysis_tasks.py`, `app/jobs/rag_jobs.py`, `quant_jobs.py`)
 
-Each enqueue creates an `analysis_tasks` row (`PENDING → RUNNING → COMPLETED | FAILED`), with step-by-step progress in `result_metadata.progress` and the full response in `result_metadata.response`. Every status change is written to the row and published on two Redis channels (per portfolio and per user), which back `GET /analysis-tasks/stream/{portfolio_id}` and `/stream/user/{user_id}`. Any enqueue accepts `scheduled_at` to defer the run.
+Each enqueue creates an `analysis_tasks` row (`PENDING → RUNNING → COMPLETED | FAILED | CANCELLED`), with step-by-step progress in `result_metadata.progress`, the full response in `result_metadata.response` and the request in `result_metadata.request` (so it can be retried). The row also records what the run was and produced (`app/services/run_insights.py`): title and tickers when queued; summary, stance per ticker (`ticker_signals`), duration, cost and, for a failure, its kind and failed step when it ends. Every status change is written to the row and published on two Redis channels (per portfolio and per user), which back `GET /analysis-tasks/stream/{portfolio_id}` and `/stream/user/{user_id}`. Lists and live events carry a slim copy of the row (no response body); `GET /analysis-tasks/{id}` returns everything. Any enqueue accepts `scheduled_at` to defer the run. A cancelled run stays cancelled whatever its job writes afterwards.
 
 | Route | Queue |
 |---|---|
 | `POST /analysis-tasks/rag/ask`, `/rag/compare`, `/quant/query` | interactive |
 | `POST /analysis-tasks/rag/alpha` | batch |
+
+**Re-run schedules** (`analysis_schedules`, `app/services/analysis_runs.py`): ALPHA daily, weekly, monthly, or when a filing for a holding is ingested (at most once a day, only for the holdings with new filings). Every schedule is created switched off; the batch worker's cron (`run_due_schedules`, one minute) starts only enabled, due schedules, skips a user who is over the monthly token budget, and does nothing when `analysis_schedules_allowed` is off.
+
+**Dashboards** (`app/services/portfolio_pulse.py`) read all of a user's portfolios in a handful of queries: latest and previous signal per holding, coverage and staleness (`analysis_stale_days`), filings ingested after the last analysis, open-market insider flow (`analysis_insider_alert_usd`), failed runs not yet made up for, and spend from `usage_events`. The attention rules are pure functions of that data.
 
 ---
 
@@ -195,6 +207,16 @@ generate → verify_answer → generate_chart (optional) → show_result
 - **Fiscal calendars.** `app/utils/company_mapping.py` maps each company's fiscal year-end month, so "Apple Q1" means October–December. A comparison across mismatched calendars carries a warning into the answer.
 - **Verify** checks the figures and units in the answer against the retrieved evidence (`answers.verify_mode`: off, warn or strict).
 - **Clarify** is a human-in-the-loop interrupt: the run pauses with a question and resumes with the user's answer (`clarification` on the next request).
+
+### ALPHA (`alpha_retrieve → alpha_generate`; logic in `rag/alpha/framework.py`)
+
+1. **Read.** The five pillars' sources are read concurrently: Alignment (Form 4 and governance / MD&A), Liquidity (macro snapshot, risk factors, government sources), Performance (three fiscal years of filings), Horizon (filings and recent commentary), Action (web, as a fallback). Web queries use the company's name as well as its ticker.
+2. **Write.** Each pillar is written by the `analysis` model with a one-line verdict, a score from −2 to +2 and its fact-bearing sentences tagged `[[+|…]]`, `[[-|…]]` or `[[~|…]]`. Pillars run in parallel; Horizon waits for Performance so it cannot contradict it. Action is written in code from live market data (yfinance: price, 200-day average, RSI-14, trailing P/E, EBITDA) whenever that data is available.
+3. **Check.** Each pillar is checked against the sources it was written from (`check_section`, using `rag/verify/numbers.py`): figures that are in no source and are not a calculation from figures that are, and trend words its own figures contradict (a margin called stable while it moved by more than a point). A pillar with findings is revised once; anything still unconfirmed is printed under the pillar.
+4. **Stance.** The mean of the available pillar scores, in fixed bands (≥ 1.25 Bullish, ≥ 0.5 Cautiously Bullish, > −0.5 Neutral, > −1.25 Cautiously Bearish, else Bearish). A pillar that could not be written is left out and named in the report; with fewer than three pillars there is no stance.
+5. **Summary and report.** The summary model is given the stance and explains it pillar by pillar (it cannot choose another); the report is assembled in code, so pillar text reaches the reader as checked. The structured result (`alpha_result`: stance, each pillar's score, verdict and findings) is returned with the report and stored as `ticker_signals`.
+
+`python scripts/dev.py alpha-eval` runs it on real tickers and checks completeness, unconfirmed figures, revenue against reported revenue, and stance stability across runs (it spends model budget).
 
 ---
 
@@ -265,7 +287,8 @@ frontend/src/
 ├── App.tsx          Routes; every page except /login sits behind ProtectedRoute
 ├── pages/           Route-level screens: Home (portfolio workspace), Repository, MyReports, DataSources, ...
 ├── features/        Self-contained areas with their own components and API calls: settings, userDocs, documents
-│                    (filing library and inspector), notes, dataSources, library, chatScope
+│                    (filing library and inspector), notes, dataSources, library, chatScope, analysis (portfolio
+│                    overview, run history, run detail, comparison, stance timeline, schedules)
 ├── components/      layout/ (shell), ui/ (shared primitives), project/ (the research, quant and report tabs)
 ├── services/        One module per API resource; http.ts holds API_BASE, JSON requests and server-sent events
 ├── store/           Zustand stores (analysis runs, clipboard, report editor, providers, pending navigation)
@@ -277,7 +300,7 @@ frontend/src/
 | **Sign-in** | `useAuth()` holds the user and the access token in memory only; the refresh token is an httpOnly cookie the browser sends to `/auth/refresh`. `services/authInterceptor.ts` patches `fetch` once: on a 401 it refreshes silently and retries, and only signs the user out if that fails. |
 | **API calls** | Each `services/*Api.ts` builds URLs from `API_BASE` and adds the bearer header (`authHeader.ts`). Response shapes are typed to match the backend's models. |
 | **Live answers** | `streamPost()` in `http.ts` reads server-sent events over POST (EventSource cannot send a body or a bearer token): `/ask/stream` gives steps, tokens, then the full result. |
-| **Background runs** | `analysisTasksApi` subscribes to `/analysis-tasks/stream/{portfolio}` and `/stream/user/{id}`; `store/analysisRunsStore` keeps the dashboard and notification bell in step with the workers. |
+| **Background runs** | `analysisTasksApi` subscribes to `/analysis-tasks/stream/{portfolio}` and `/stream/user/{id}`; `store/analysisRunsStore` keeps the dashboards, the notification bell and the research tabs in step with the workers. A research tab reattaches to a run still in progress on the server (its step panel shows again) and reloads the chat when it ends. |
 | **Settings** | The Settings screens are generated from `GET /settings/schema` (`features/settings/FieldControl.tsx`), so a field added to the backend schema appears with its label, help, limits and the deployment's default, with no UI change. |
 | **Theme** | Colours, spacing and radii are CSS custom properties in `src/index.css` (light in `:root`, dark under `[data-theme="dark"]`); Tailwind reads the same variables. |
 
@@ -307,16 +330,18 @@ The API process is a single process by design: heavy work runs on workers, and a
 | `portfolios`, `sessions` | Named ticker collections and their conversation sessions. |
 | `chat_sessions`, `chat_messages`, `consolidated_summaries` | Conversation history for RAG and quant, with cached AI summaries. |
 | `analyst_reports`, `report_draft_items` | Published and draft reports (Postgres full-text search) and the clipboard. |
-| `analysis_tasks` | Status, progress and results of background runs. |
+| `analysis_tasks` | Status, progress and results of background runs, with title, tickers, summary, outcome, timings, cost, failure kind, review state, pin and tags. |
+| `ticker_signals` | One ticker's outcome from one ALPHA run: stance, pillar directions and scores, fact counts, main risk. |
+| `analysis_schedules` | Opt-in re-run schedules per portfolio (off when created). |
 | `documents` | Cache of what is in Qdrant, behind the filing library. |
 | `user_documents` | Uploaded files: status, approval, review state, extraction stats. |
 | `analyst_notes`, `analyst_note_inclusions` | Notes, and who has switched shared notes into their analysis. |
-| `app_settings`, `usage_events` | Layered product settings (system, user, portfolio) and per-call token and cost records. |
+| `app_settings`, `usage_events` | Layered product settings (system, user, portfolio) and token and cost records per role and model, with portfolio, background run and whether the model's price is known. |
 | `provider_credentials` | Model-provider keys saved in the app, encrypted. |
 | `integrations`, `user_mcp_servers`, `user_data_sources` | Connected file/database sources, MCP servers and market-data providers, credentials encrypted. |
 | `form4_transactions` | Insider transactions, indexed by issuer and date. |
 
-LangGraph's checkpoint tables live in the same database. Migrations are one linear Alembic chain (head `025_user_data_sources`); the API and each worker run `alembic upgrade head` at startup, one process at a time (a Postgres advisory lock), so a fresh database is never migrated twice at once.
+LangGraph's checkpoint tables live in the same database. Migrations are one linear Alembic chain (head `029_signal_detail`); the API and each worker run `alembic upgrade head` at startup, one process at a time (a Postgres advisory lock), so a fresh database is never migrated twice at once.
 
 ---
 
@@ -329,7 +354,8 @@ Interactive documentation is served at `/docs`. Every route needs a JWT except s
 | Auth | `/auth` | `POST /signup`, `/login`, `/refresh`, `/logout` · `GET`/`PUT /me` |
 | RAG | none | `POST /ask`, `/ask/stream`, `/compare`, `/alpha` · `GET /rag/health`, `/capabilities`, `/sessions/{id}`, `/portfolio/{id}/sessions` |
 | Quant | `/quant` | `POST /query`, `/query/stream` · `GET /health`, `/capabilities`, `/sessions/{id}`, `/portfolio/{id}/sessions` |
-| Background runs | `/analysis-tasks` | `POST /rag/ask`, `/rag/compare`, `/rag/alpha`, `/quant/query` · `GET /`, `/{task_id}`, `/stream/{portfolio_id}`, `/stream/user/{user_id}` |
+| Background runs | `/analysis-tasks` | `POST /rag/ask`, `/rag/compare`, `/rag/alpha`, `/quant/query`, `/rerun-alpha`, `/reviewed`, `/{id}/retry`, `/{id}/cancel` · `GET /`, `/history` (filters, cursor paging), `/compare`, `/{task_id}`, `/stream/{portfolio_id}`, `/stream/user/{user_id}` · `PATCH`/`DELETE /{task_id}` (deleting a run also deletes its chat when the chat holds no answer) |
+| Analysis dashboards | `/analysis` | `GET /config`, `/overview`, `/portfolios/{id}/pulse`, `/timeline/{ticker}` · schedules: `GET`/`POST /portfolios/{id}/schedules`, `PATCH`/`DELETE /schedules/{id}` |
 | Portfolios | `/portfolios` | CRUD, `GET /user/{user_id}`, `/dashboard/cross-portfolio`, `POST`/`GET /sessions` |
 | Chats | `/chats` | Sessions, messages, export, stats, summaries |
 | Reports | `/reports` | Clipboard (`/draft/items`), `POST /from-draft/{user_id}`, CRUD, `/search`, `/repository/stats`, publish, `GET /{id}/export/pdf` |
@@ -373,7 +399,9 @@ Interactive documentation is served at `/docs`. Every route needs a JWT except s
 
 - **Embeddings are shared.** Search uses the server's OpenAI key for everyone, whatever chat provider a user picks, and changing the embedding model means re-indexing every collection.
 - **Poor scans.** Vision models can invent plausible text on very bad scans. Doubtful pages are held for review by default, and `scripts/extraction_eval.py` measures behaviour on financial statements.
-- **Verification scope.** Answers are checked for figures and units against their sources, not for claims or reasoning.
+- **Verification scope.** Answers are checked for figures and units against their sources, not for claims or reasoning. ALPHA's trend check covers margins called stable against the section's own figures, not every qualitative claim.
+- **ALPHA stance.** The five pillars weigh equally in the stance; the bands are fixed in `rag/alpha/framework.py`.
+- **Costs are estimates** from list prices (`pricing.PRICES_AS_OF`), without prompt-cache or batch discounts. Update the table, or set `model_prices`, when prices change.
 - **Single API process.** Document reading and the login rate limiter keep state in the API process's memory, so run one API process and scale with workers (see [§11](#11-concurrency-and-scaling)).
 - **Confirmation for changing tools.** Calls to a connected MCP tool that changes things rely on the agent asking first, because the quant stream has no interrupt step.
 - **Bloomberg and Refinitiv** have no open internet API. Reach them through your own gateway with the Custom API data source.

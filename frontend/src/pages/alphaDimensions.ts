@@ -1,6 +1,6 @@
 // The five A[i]LPHA dimensions — shared by the landing page and the live run.
 // Sources reflect what each dimension actually reads in the backend
-// (Form 4 insider data, FRED/BLS macro series, SEC filings, web + technical research).
+// (Form 4 insider data, FRED/BLS macro series, SEC filings, web research, live market data).
 
 export interface Dimension {
     letter: string;
@@ -35,6 +35,6 @@ export const DIMENSIONS: Dimension[] = [
     {
         letter: 'A', label: 'Action & Timing',
         question: 'Technical analysis reveals when. Find optimal entry zones and execution signals.',
-        sources: 'Technical signals · web research', sourceCount: 3,
+        sources: 'Live market data · price, 200-day average, RSI, P/E', sourceCount: 3,
     },
 ];

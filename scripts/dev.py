@@ -379,7 +379,8 @@ def cmd_backfill_insights(args) -> None:
 def cmd_alpha_eval(args) -> None:
     """Live ALPHA evaluation (spends model budget): completeness, fact checks, revenue vs filings, stance stability."""
     py = require_venv()
-    run([py, "scripts/alpha_eval.py", *args.rest], cwd=BACKEND, env=backend_env())
+    rest = args.rest[1:] if args.rest[:1] == ["--"] else args.rest     # `dev.py alpha-eval -- --tickers NVDA`
+    run([py, "scripts/alpha_eval.py", *rest], cwd=BACKEND, env=backend_env())
 
 
 def cmd_check(args) -> None:
@@ -690,6 +691,8 @@ def main() -> None:
     args, extra = parser.parse_known_args()
     if args.command == "test":
         args.pytest_args = extra + list(args.pytest_args or [])      # e.g. dev.py test -k config -x
+    elif args.command == "alpha-eval":
+        args.rest = extra + list(args.rest or [])                    # e.g. dev.py alpha-eval --tickers NVDA --runs 3
     elif extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
     args.func(args)

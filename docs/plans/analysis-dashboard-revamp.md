@@ -1,6 +1,12 @@
 # Analysis Dashboard & History — Revamp Plan
 
-**Status:** proposal · **Date:** 27 Nov 2026 · **Scope:** the per-portfolio *Overview* tab and the cross-portfolio *Analysis Dashboard* (`/dashboard`), backend and frontend.
+**Status:** implemented (27 Nov 2026) · **Scope:** the per-portfolio *Overview* tab and the cross-portfolio *Analysis Dashboard* (`/dashboard`), backend and frontend.
+
+> **As built.** All five phases shipped together. Where the build differs from this proposal:
+> - **Stance and pillars** come from the ALPHA run itself (each pillar's score −2..+2 and verdict; stance from the mean in fixed bands, `rag/alpha/framework.py`), not from parsing report text. Parsing remains only for runs made before that.
+> - **Spend** covers every model and embedding call for any provider (requests, ingestion, document processing, tool servers), not only background runs; see `docs/ARCHITECTURE.md` §4.
+> - **Not built:** a sidebar badge for the review inbox (the header bell shows finished runs), TanStack Query (a small fetch hook per view instead), and a weekly digest.
+> - **Current reference:** `docs/ARCHITECTURE.md` (§5 runs, schedules and dashboards; §6 ALPHA; §12 data model; §13 API). The phase estimates below are historical.
 
 ---
 

@@ -5,9 +5,10 @@ import { DIMENSIONS } from './alphaDimensions';
  * Live "ALPHA analysis run" — the landing page's one animated moment.
  *
  * It replays what the platform actually does: pick a company, read the sources
- * behind each of the five ALPHA dimensions in turn, resolve each to a signal,
- * and finish with a drafted report. Illustrative only — the figures are not
- * real analysis output, and the panel says so.
+ * behind each of the five ALPHA dimensions in turn, score each from -2 to +2,
+ * and finish with the stance computed from those scores (the same bands as
+ * backend/rag/alpha/framework.py). Illustrative only — the scores are not real
+ * analysis output, and the panel says so.
  *
  * The whole animation is a pure function of elapsed time (no chained timers),
  * so it can never drift out of sync, and reduced-motion users get the finished
@@ -16,13 +17,23 @@ import { DIMENSIONS } from './alphaDimensions';
 
 const TOTAL_SOURCES = DIMENSIONS.reduce((n, d) => n + d.sourceCount, 0);
 
-// Illustrative scores (0–1) per run — different shapes so the radar visibly
-// changes company to company.
+// Illustrative pillar scores (-2..+2) per run: different shapes, so the radar and the stance change company to company.
 const RUNS = [
-    { ticker: 'AAPL', name: 'Apple Inc.',      scores: [0.82, 0.62, 0.92, 0.88, 0.56] },
-    { ticker: 'NVDA', name: 'NVIDIA Corp.',    scores: [0.70, 0.48, 0.95, 0.78, 0.84] },
-    { ticker: 'JPM',  name: 'JPMorgan Chase',  scores: [0.78, 0.40, 0.74, 0.86, 0.62] },
+    { ticker: 'AAPL', name: 'Apple Inc.',      scores: [1, 0, 2, 1, -1] },   // mean +0.6 -> Cautiously Bullish
+    { ticker: 'NVDA', name: 'NVIDIA Corp.',    scores: [1, 0, 2, 2, 2] },    // mean +1.4 -> Bullish
+    { ticker: 'JPM',  name: 'JPMorgan Chase',  scores: [1, -1, 1, 1, 0] },   // mean +0.4 -> Neutral
 ];
+
+/** The stance from the pillar scores: their mean, in the product's fixed bands. */
+const stanceFor = (scores: number[]) => {
+    const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const stance = mean >= 1.25 ? 'Bullish' : mean >= 0.5 ? 'Cautiously Bullish' : mean > -0.5 ? 'Neutral'
+        : mean > -1.25 ? 'Cautiously Bearish' : 'Bearish';
+    return { mean, stance };
+};
+const signed = (n: number, digits = 0) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(digits)}`;
+/** Radar distance for a score: -2 at the centre, +2 at the rim. */
+const scale = (score: number) => Math.max(0.08, (score + 2) / 4);
 
 // Timeline (ms)
 const START = 500;       // before first dimension starts reading
@@ -49,9 +60,9 @@ const easeOut = (n: number) => 1 - Math.pow(1 - n, 3);
 
 type Signal = { text: string; tone: 'pos' | 'neu' | 'neg' };
 const signalFor = (score: number): Signal =>
-    score >= 0.75 ? { text: 'Strong', tone: 'pos' }
-        : score >= 0.55 ? { text: 'Neutral', tone: 'neu' }
-            : { text: 'Weak', tone: 'neg' };
+    score > 0 ? { text: `${signed(score)} Supportive`, tone: 'pos' }
+        : score === 0 ? { text: '0 Mixed', tone: 'neu' }
+            : { text: `${signed(score)} Concern`, tone: 'neg' };
 
 const prefersReducedMotion = () =>
     typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -84,7 +95,8 @@ export const AlphaRun: React.FC = () => {
         return clamp01((t - s) / DUR);
     });
     const phase = progress.map(p => (p <= 0 ? 'queued' : p < 1 ? 'reading' : 'done'));
-    const fills = progress.map((p, i) => easeOut(p) * run.scores[i]);
+    const fills = progress.map((p, i) => easeOut(p) * scale(run.scores[i]));
+    const result = stanceFor(run.scores);
 
     const doneCount = phase.filter(p => p === 'done').length;
     const readingIndex = phase.indexOf('reading');
@@ -105,7 +117,8 @@ export const AlphaRun: React.FC = () => {
             {/* Screen readers get the static framework, not the animation. */}
             <p className="sr-only">
                 The ALPHA framework analyses a company across five dimensions:{' '}
-                {DIMENSIONS.map(d => d.label).join(', ')}.
+                {DIMENSIONS.map(d => d.label).join(', ')}. Each is scored from −2 to +2, and the overall stance is
+                computed from those scores.
             </p>
 
             <div className="alpharun__panel" aria-hidden="true">
@@ -116,7 +129,7 @@ export const AlphaRun: React.FC = () => {
                     </div>
                     <span className={`alpharun__status alpharun__status--${status}`}>
                         {status === 'running' && <span className="alpharun__spinner" />}
-                        {status === 'ready' ? 'Report ready' : status === 'running' ? 'ALPHA analysis running' : 'Queued'}
+                        {status === 'ready' ? `Stance: ${result.stance}` : status === 'running' ? 'ALPHA analysis running' : 'Queued'}
                     </span>
                 </div>
 
@@ -187,7 +200,11 @@ export const AlphaRun: React.FC = () => {
                     </ul>
                 </div>
 
-                <p className="alpharun__question" key={spotlight}>{DIMENSIONS[spotlight].question}</p>
+                <p className="alpharun__question" key={finished ? `done-${run.ticker}` : spotlight}>
+                    {finished
+                        ? `Average pillar score ${signed(result.mean, 1)} → ${result.stance}. Every figure checked against its sources.`
+                        : DIMENSIONS[spotlight].question}
+                </p>
 
                 <div className="alpharun__foot">
                     <span className="alpharun__count">

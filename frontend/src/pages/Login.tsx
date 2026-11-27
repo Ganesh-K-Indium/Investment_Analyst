@@ -21,7 +21,7 @@ const FEATURES = [
     { span: 1, tag: 'Insider & macro', t: 'Signals in context', d: 'Form 4 trades scored by role and dollar value, plus GDP, CPI, rates and jobs from FRED and BLS.' },
     { span: 1, tag: 'Compare · Scenarios', t: 'Side by side, or bull to bear', d: 'Compare companies, or run bull, bear and base cases on the same evidence.' },
     { span: 2, tag: 'Documents', t: 'Your files, read properly', d: 'Upload PDFs, scans, spreadsheets, Word or PowerPoint, or import from S3, SharePoint, Google Drive, Azure Blob, OneDrive, SFTP and Confluence. Read locally first, with finance arithmetic checked and doubtful pages held for review.' },
-    { span: 1, tag: 'Analysis Dashboard', t: 'Every portfolio at a glance', d: 'See what is running, ready or failed, and batch-run a whole portfolio in the background.' },
+    { span: 1, tag: 'Analysis Dashboard', t: 'Every holding at a glance', d: 'Each holding’s stance and pillar scores, what changed since the last run, alerts on new filings, downgrades and insider moves, and a stance timeline per company.' },
     { span: 2, tag: 'Creation · Repository', t: 'From findings to a published report', d: 'Collect what matters, draft the report, publish it to a searchable repository and export it to PDF.' },
     { span: 2, tag: 'Analyst notes', t: 'Notes that join the evidence', d: 'Typed or handwritten notes are transcribed, reviewed and searched alongside the filings.' },
 ];
@@ -29,7 +29,7 @@ const FEATURES = [
 const TRUST = [
     { t: 'Cited to the page', d: 'Citations open the Document Inspector on the exact page, with the passage highlighted.' },
     { t: 'Right filing, right period', d: 'Fiscal calendars differ by company. Comparisons across mismatched periods are flagged, not blended.' },
-    { t: 'Figures checked', d: 'Numbers and units in an answer are compared with the evidence it cites.' },
+    { t: 'Figures checked', d: 'Numbers and units are compared with the evidence they cite. Each ALPHA pillar is checked against its own sources and corrected; anything unconfirmed is shown, never hidden.' },
     { t: 'People review the doubtful', d: 'Low-confidence reads are held for approval instead of being indexed silently.' },
 ];
 
@@ -44,6 +44,7 @@ const COVERAGE = [
 
 const CONTROLS = [
     { t: 'Bring your own model', d: 'OpenAI, Anthropic, Gemini, Ollama or any OpenAI-compatible server. Provider keys are stored encrypted.' },
+    { t: 'Spend you can see', d: 'Tokens and estimated cost per model, for any provider, including document reading and filing ingestion.' },
     { t: 'Local-only mode', d: 'Switch off every cloud call. Local OCR and self-hosted models keep working.' },
     { t: 'Runs in the background', d: 'Interactive and batch queues keep long analyses off the page, with progress streamed live.' },
 ];

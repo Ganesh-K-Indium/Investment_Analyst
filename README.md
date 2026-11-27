@@ -53,7 +53,7 @@ Backend and web UI live together in this repository (`backend/` and `frontend/`)
 | Feature | What you get |
 |---|---|
 | **RAG over SEC filings** | Filing-type-aware retrieval (a "latest quarter" question goes to 10-Qs, an "annual report" question searches 10-K and 20-F together), fiscal-calendar-aware periods, hybrid dense + BM25 search, and guardrails when a comparison spans mismatched fiscal calendars. |
-| **ALPHA framework** | A five-part equity report per ticker: Alignment (insider activity), Liquidity, Performance, Horizon and Action. |
+| **ALPHA framework** | A five-part equity report per ticker: Alignment (insider activity), Liquidity, Performance, Horizon and Action. Each pillar is scored from −2 to +2 with its own verdict and fact-checked against its sources (revised once if a figure is unsupported; anything unconfirmed is shown). The overall stance is computed from the pillar scores, Action is written from live market data, and a pillar that cannot be completed is reported as missing rather than guessed. |
 | **Scenario framework** | Bull, base and bear cases generated on the same retrieval pipeline. |
 | **Macro framework** | FRED and BLS series (GDP, CPI, PCE, PPI, Fed Funds, the Treasury yield curve, unemployment and participation), refreshed daily. |
 | **Insider trading advisory** | Form 4 filings scored by role and dollar value into a plain-language recommendation. |
@@ -87,7 +87,13 @@ Backend and web UI live together in this repository (`backend/` and `frontend/`)
 
 ### Platform
 
-Portfolio-scoped chat history with AI summaries, an analyst report clipboard with PDF export, a searchable repository for published reports, usage tracking, and Redis/Arq job queues so long analyses never block a request.
+Portfolio-scoped chat history with AI summaries, an analyst report clipboard with PDF export, a searchable repository for published reports, and Redis/Arq job queues so long analyses never block a request.
+
+| Feature | What you get |
+|---|---|
+| **Analysis Dashboard** | Per portfolio: each holding's stance and pillar scores, what changed since the last run, alerts (new filings since the last analysis, downgrades, insider moves, stale or failed runs), live runs with cancel, and the full searchable history with retry, pin, tags and run comparison. Across portfolios: a review inbox, stance changes this week and a stance timeline per company. |
+| **Automatic re-runs** | ALPHA on a timetable or when a new filing arrives. Every schedule starts switched off and runs only once its owner turns it on; runs are skipped while the monthly budget is used up. Administrators can disable them with `analysis_schedules_allowed`. |
+| **Spend tracking** | Tokens and estimated cost for every model call and embedding, for any provider, including document reading and SEC ingestion, per run, per portfolio and per month. Models with no known price are counted in tokens and marked unpriced; set your own prices with `model_prices`. |
 
 ---
 
@@ -182,6 +188,8 @@ python3 scripts/dev.py start     # Postgres/Redis/Qdrant (Docker), the 5 MCP ser
 | `dev.py ocr` / `dev.py ocr add ENGINE` | OCR status, or install an engine: `tesseract`, `rapidocr`, `paddleocr`, `doctr`, `all` (see [OCR engines](#ocr-engines)) |
 | `dev.py test` | Run the test suite; extra arguments go to pytest, e.g. `dev.py test -k config` |
 | `dev.py check` | Everything a change must pass: backend tests, then the web UI's lint, type check and build |
+| `dev.py backfill-insights` | Fill the dashboard fields of runs made before the Analysis Dashboard existed and re-price stored usage. No model calls; safe to run again. Run once after upgrading. |
+| `dev.py alpha-eval` | Live ALPHA check on real tickers (spends model budget): every pillar written, no unconfirmed figures, revenue matches the filings, stance stable across runs. Choose with `dev.py alpha-eval --tickers NVDA --runs 3`. |
 
 <details>
 <summary><b>Running each part by hand</b></summary>
@@ -327,6 +335,7 @@ cd frontend && npm run lint && npm run build     # web UI only
 cd backend
 python scripts/extraction_eval.py        # finance extraction accuracy on sample statements (local OCR, no model calls)
 EVAL_TOKEN=… EVAL_THREAD_ID=… python scripts/rag_eval.py    # question set against a running API (uses models)
+python ../scripts/dev.py alpha-eval      # ALPHA on real tickers: completeness, fact checks, revenue vs filings, stance stability (uses models)
 ```
 
 How the backend suite is organised and how to add a test: [backend/tests/README.md](backend/tests/README.md). Every push and pull request runs the same checks in GitHub Actions (`.github/workflows/ci.yml`): backend tests on Python 3.11 and 3.13, and the web UI's lint, type check and build.
@@ -393,6 +402,8 @@ Investment_Analyst/
 | The UI build fails in Docker or locally | Node is older than 20.19. Use Node 22. |
 | Database errors after switching branches | The database is migrated past this branch's revision. Use a separate database (`COMPOSE_PROJECT_NAME`) or `alembic downgrade`. |
 | Charts have no hosted image | Cloudinary is not configured; charts are still generated. |
+| Older runs show no title, stance or cost on the dashboards | They were made before those fields existed: run `python scripts/dev.py backfill-insights` once. |
+| A model's cost shows "—" | Its price is unknown (a new or self-hosted model). Tokens are still counted; set a price with `model_prices` in `config.yaml`. |
 
 ---
 

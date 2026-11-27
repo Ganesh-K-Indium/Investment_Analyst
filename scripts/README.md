@@ -14,6 +14,8 @@ Needs only Python (3.11–3.13 to create the virtualenv). On Windows write `py s
 | `python3 scripts/dev.py mcp [--reload]` | Only the MCP servers, in the foreground. |
 | `python3 scripts/dev.py install` | Install `backend/requirements.txt` (exact versions) into `venv/`. |
 | `python3 scripts/dev.py lock [--upgrade] [--upgrade-package NAME]` | Re-pin dependencies after editing `backend/pyproject.toml` (also regenerates `backend/requirements-ocr/`). |
+| `python3 scripts/dev.py backfill-insights` | Fill the dashboard fields (title, tickers, stance, cost) of runs made before the Analysis Dashboard and re-price stored usage with the current price table. No model calls; safe to run again. |
+| `python3 scripts/dev.py alpha-eval [--tickers T ...] [--runs N]` | Live ALPHA evaluation (spends model budget): completeness, fact checks, revenue vs filings, stance stability. Writes `data/output/alpha_eval_<time>.json`; exits 1 when a check fails. |
 | `python3 scripts/dev.py ocr` | Which OCR engines are installed and whether their models are downloaded. |
 | `python3 scripts/dev.py ocr add ENGINE...` | Install `tesseract` (winget / Homebrew), `rapidocr`, `paddleocr`, `doctr` or `all` (exact versions from `backend/requirements-ocr/`), download the models and check each on a sample page. |
 | `python3 scripts/dev.py test [pytest args]` | Run the backend tests. |
