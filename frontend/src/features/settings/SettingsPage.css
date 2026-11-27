@@ -97,14 +97,9 @@
 .set-link { background: none; border: 0; padding: 0; font: inherit; font-size: var(--font-size-xs); color: var(--color-primary); cursor: pointer; text-decoration: underline; }
 
 .set-usage { padding: var(--space-5) var(--space-6); border-radius: 12px; background: var(--color-bg-primary); border: 1px solid var(--color-border); box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 12px; }
-.set-usage__top { display: flex; justify-content: space-between; align-items: baseline; font-size: var(--font-size-sm); color: var(--color-text-secondary); }
-.set-usage__top strong { font-size: var(--font-size-xl); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; margin-right: 4px; }
-.set-usage__cost { color: var(--color-text-secondary); }
 .set-meter { height: 6px; border-radius: 999px; background: var(--color-bg-tertiary); overflow: hidden; }
 .set-meter__bar { height: 100%; background: var(--color-primary); transition: width var(--transition-slow); }
 .set-meter__bar--over { background: var(--color-error); }
-.set-usage__roles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 24px; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: capitalize; }
-.set-usage__roles li { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
 
 .set-health { display: flex; flex-direction: column; gap: 10px; padding: var(--space-5) var(--space-6); background: var(--color-bg-primary); border: 1px solid var(--color-border); border-radius: 12px; box-shadow: var(--shadow-card); }
 .set-health__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -204,5 +199,24 @@ body.sidebar-collapsed .set-bar { left: var(--sidebar-width-collapsed); }
 .mcp-tools li { display: inline-flex; gap: 6px; align-items: center; padding: 2px 8px; border: 1px solid var(--color-border); border-radius: 6px; font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
 .mcp-tools code { color: var(--color-text-primary); }
 .mcp-check { display: flex; gap: 8px; align-items: center; font-size: var(--font-size-sm); color: var(--color-text-secondary); }
-.set-usage__note { margin: 0; font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
-.set-usage__roles[aria-label="By model"] { text-transform: none; }
+
+/* Usage card: two headline figures, the budget, then tokens and cost per model */
+.set-usage__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); }
+.set-usage__title { margin: 0; font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+.set-usage__period { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.set-usage__figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); margin: 0; }
+.set-usage__figure { padding: var(--space-4); border-radius: var(--radius-md); background: var(--color-bg-secondary); }
+.set-usage__figure dt { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.set-usage__figure dd { margin: var(--space-1) 0 0; font-size: var(--font-size-2xl); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+.set-usage__budget { display: flex; flex-direction: column; gap: var(--space-2); }
+.set-usage__budget-label { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.set-usage__table { width: 100%; border-collapse: collapse; font-size: var(--font-size-sm); }
+.set-usage__table th, .set-usage__table td { padding: var(--space-3) var(--space-2); border-bottom: 1px solid var(--color-border-light); text-align: left; vertical-align: middle; }
+.set-usage__table tbody tr:last-child th, .set-usage__table tbody tr:last-child td { border-bottom: 0; }
+.set-usage__table thead th { padding-top: 0; font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); color: var(--color-text-tertiary); }
+.set-usage__table .num { text-align: right; white-space: nowrap; color: var(--color-text-primary); }
+.set-usage__table tbody th { font-weight: var(--font-weight-normal); }
+.set-usage__model { display: block; color: var(--color-text-primary); font-family: var(--font-family-mono); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
+.set-usage__provider { display: block; margin-top: 2px; font-size: 11px; color: var(--color-text-tertiary); }
+.set-usage__muted { color: var(--color-text-tertiary); font-size: var(--font-size-sm); margin: 0; }
+
