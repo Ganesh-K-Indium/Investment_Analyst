@@ -1788,3 +1788,8 @@
 .value-neutral {
     color: var(--color-value-neutral);
 }
+
+.secondary-research__run-ended {
+    margin: 0;
+    color: var(--color-text-secondary);
+}

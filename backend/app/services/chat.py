@@ -653,6 +653,21 @@ class ChatService:
         return count  # 0 means session existed but was already empty
 
     @staticmethod
+    async def has_answer(db: AsyncSession, session_id: str, user_id: str) -> bool:
+        """Whether a chat holds any reply. A chat whose only content is the request (a run that was cancelled or failed)
+        has nothing worth keeping. A chat of another user counts as kept (never deleted from here)."""
+        chat = (await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))).scalar_one_or_none()
+        if chat is None:
+            from app.database.models import Session as PortfolioSession
+            bare = await db.get(PortfolioSession, session_id)
+            return bare is not None and str(bare.user_id) != str(user_id)
+        if str(chat.user_id) != str(user_id):
+            return True
+        n = (await db.execute(select(func.count()).select_from(ChatMessage).where(
+            ChatMessage.chat_session_id == chat.id, ChatMessage.role == MessageRole.ASSISTANT))).scalar()
+        return bool(n)
+
+    @staticmethod
     async def delete_session(
         db: AsyncSession,
         session_id: str,

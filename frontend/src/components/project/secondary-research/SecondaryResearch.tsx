@@ -601,6 +601,8 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
         const match = chatSessions.find(s => s.threadId === focusSessionId);
         if (match) {
             setActiveSession(match);
+            // The copy kept in memory can be from before the run finished (the screen was closed mid-run): read it fresh.
+            fetchMessages(match);
             onFocusApplied?.();
             focusRetriesRef.current = 0;
             return;
@@ -618,7 +620,12 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
     const fetchMessages = useEffectEvent(async (reload?: ChatSession) => {
             // `reload`: fetch this session's history again even if it has messages (a run on it just finished on the server)
             const target = reload ?? activeSession;
-            if (target && (reload || target.messages.length === 0) && target.threadId && !target.isNew) {
+            if (!target || !target.threadId || target.isNew) return;
+            if (busySessionIds.has(target.id)) return;       // a run this screen started is still writing into it
+            // Also stale: the last thing kept is the user's own turn, i.e. the screen closed before the answer came back.
+            const last = target.messages[target.messages.length - 1];
+            const stale = target.messages.length === 0 || last?.role === 'user';
+            if (reload || stale) {
                 const isActive = activeSession?.id === target.id;
                 if (isActive) setIsLoadingMessages(true);
                 try {
@@ -690,6 +697,27 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
     }, [portfolioRuns]);
     const resumedRun = activeSession?.threadId && !busySessionIds.has(activeSession.id)
         ? serverRunByThread.get(activeSession.threadId) : undefined;
+    // The latest run of the open chat that ended without an answer (cancelled or failed), to say so instead of the
+    // "start a run" placeholder when the chat is empty.
+    const endedRun = useMemo(() => {
+        if (!activeSession?.threadId) return undefined;
+        let latest: AnalysisTask | undefined;
+        for (const t of Object.values(portfolioRuns ?? {})) {
+            if ((t.result_metadata as { session_ref?: string } | null)?.session_ref !== activeSession.threadId) continue;
+            if (!latest || t.created_at > latest.created_at) latest = t;
+        }
+        return latest && (latest.status === 'CANCELLED' || latest.status === 'FAILED') ? latest : undefined;
+    }, [portfolioRuns, activeSession?.threadId]);
+
+    // A chat deleted together with its run (from the dashboards) leaves this tab's list at once.
+    const deletedChats = useAnalysisRunsStore(s => s.deletedChats);
+    const dropDeletedChats = useEffectEvent((threads: string[]) => {
+        const gone = new Set(threads);
+        if (!chatSessions.some(x => x.threadId && gone.has(x.threadId))) return;
+        setChatSessions(prev => prev.filter(x => !(x.threadId && gone.has(x.threadId))));
+        if (activeSession?.threadId && gone.has(activeSession.threadId)) setActiveSession(null);
+    });
+    useEffect(() => { if (deletedChats.length) dropDeletedChats(deletedChats); }, [deletedChats]);
 
     const onServerRunEnded = useEffectEvent((threadId: string) => {
         const session = chatSessions.find(x => x.threadId === threadId);
@@ -996,7 +1024,9 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
             const errorMessage: ChatMessage = {
                 id: `msg-${Date.now()}`,
                 role: 'assistant',
-                content: 'Sorry, I encountered an error running the ALPHA analysis. Please try again.',
+                content: err instanceof Error && err.message === 'Cancelled'
+                    ? 'This ALPHA run was cancelled before it finished. Nothing was saved.'
+                    : 'Sorry, I encountered an error running the ALPHA analysis. Please try again.',
                 timestamp: new Date(),
                 resultLabel: alphaLabel
             };
@@ -1101,7 +1131,9 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
             const errorMessage: ChatMessage = {
                 id: `msg-${Date.now()}`,
                 role: 'assistant',
-                content: 'Sorry, I encountered an error comparing these stocks. Please try again.',
+                content: err instanceof Error && err.message === 'Cancelled'
+                    ? 'This comparison was cancelled before it finished. Nothing was saved.'
+                    : 'Sorry, I encountered an error comparing these stocks. Please try again.',
                 timestamp: new Date(),
                 resultLabel: compareLabel
             };
@@ -2124,7 +2156,15 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
                                     📋 Add to Clipboard
                                 </button>
                             )}
-                            {activeSession.messages.length === 0 && !busySessionIds.has(activeSession.id) ? (
+                            {activeSession.messages.length === 0 && !busySessionIds.has(activeSession.id) && !resumedRun && endedRun ? (
+                                <ChatMessage role="assistant">
+                                    <p className="secondary-research__run-ended">
+                                        {endedRun.status === 'CANCELLED'
+                                            ? `This ${endedRun.task_type === 'alpha' ? 'ALPHA run' : endedRun.task_type === 'compare' ? 'comparison' : 'run'} was cancelled before it finished. Nothing was saved.`
+                                            : `This run failed${endedRun.failed_step ? ` at ${endedRun.failed_step}` : ''}: ${endedRun.progress_message || 'unknown error'}. You can retry it from the Analysis Dashboard.`}
+                                    </p>
+                                </ChatMessage>
+                            ) : activeSession.messages.length === 0 && !busySessionIds.has(activeSession.id) && !resumedRun ? (
                                 isAlphaMode ? (
                                     <div className="empty-state empty-state--lg">
                                         <img src={alphaLogo} alt="ALPHA Analysis" className="secondary-research__alpha-empty-logo" />

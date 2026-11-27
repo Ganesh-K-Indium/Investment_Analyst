@@ -5,6 +5,8 @@ interface AnalysisRunsState {
     // Runs keyed by portfolio id, each a map of task id -> task.
     runsByPortfolio: Record<number, Record<string, AnalysisTask>>;
     isLoading: Record<number, boolean>;
+    /** Chats (thread ids) deleted along with their run, so open research tabs drop them from their lists. */
+    deletedChats: string[];
 
     // These build a NEW array/number on every call. Safe for one-off
     // imperative reads (e.g. inside an event handler via getState()), but
@@ -39,6 +41,7 @@ interface AnalysisRunsState {
 export const useAnalysisRunsStore = create<AnalysisRunsState>((set, get) => ({
     runsByPortfolio: {},
     isLoading: {},
+    deletedChats: [],
 
     runsFor: (portfolioId) => {
         const runs = get().runsByPortfolio[portfolioId] ?? {};
@@ -58,7 +61,10 @@ export const useAnalysisRunsStore = create<AnalysisRunsState>((set, get) => ({
         }));
     },
 
-    removeTask: ({ id, portfolio_id }) => {
+    removeTask: ({ id, portfolio_id, session_ref, chat_deleted }) => {
+        if (chat_deleted && session_ref) {
+            set((state) => (state.deletedChats.includes(session_ref) ? state : { deletedChats: [...state.deletedChats, session_ref] }));
+        }
         if (portfolio_id == null) return;
         set((state) => {
             const runs = state.runsByPortfolio[portfolio_id];
@@ -111,7 +117,7 @@ export const useAnalysisRunsStore = create<AnalysisRunsState>((set, get) => ({
     },
 
     clearAll: () => {
-        set({ runsByPortfolio: {}, isLoading: {} });
+        set({ runsByPortfolio: {}, isLoading: {}, deletedChats: [] });
     },
 }));
 

@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +30,7 @@ from app.database.models import AgentType, AnalysisTask, TaskStatus, User
 from app.auth.deps import get_current_user, verify_user_id_matches
 from app.services.analysis_tasks import AnalysisTaskService, channel_for_portfolio, channel_for_user
 from app.services.portfolio import PortfolioService
+from app.services.chat import ChatService
 from app.services import analysis_runs, run_insights
 from app.api.rag import AskInput, CompareInput, AlphaInput
 from app.api.quant import StockQueryRequest
@@ -401,15 +402,21 @@ async def delete_task(
     db: AsyncSession = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ):
-    """Remove a run from the history. Its research chat (if any) is kept."""
+    """Remove a run from the history. Its research chat goes too when it holds no answer (a cancelled or failed run's
+    chat is only the request): an empty session would otherwise linger in the research tab. A chat with answers is kept."""
     task = await _own_task(db, task_id, current_user)
     if (task.status.value if hasattr(task.status, "value") else task.status) in ("PENDING", "RUNNING"):
         raise HTTPException(status_code=409, detail="Cancel the run before deleting it")
     ref = (task.id, task.portfolio_id, task.user_id)
+    session_ref = (task.result_metadata or {}).get("session_ref")
     await AnalysisTaskService.delete_ids(db, [task.id])
     pool = get_arq_pool_if_ready()
+    chat_deleted = False
+    if session_ref and not await ChatService.has_answer(db, session_ref, str(current_user.id)):
+        chat_deleted = await ChatService.delete_session(db, session_ref, redis_client=pool)
     if pool is not None:
-        await AnalysisTaskService.publish_deleted(pool, *ref)
+        await AnalysisTaskService.publish_deleted(pool, *ref, session_ref=session_ref, chat_deleted=chat_deleted)
+    return Response(status_code=204, headers={"X-Chat-Deleted": "1" if chat_deleted else "0"})
 
 
 @router.get("/stream/{portfolio_id}")

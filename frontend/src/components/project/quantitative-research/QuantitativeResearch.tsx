@@ -10,6 +10,8 @@ import 'katex/dist/katex.min.css';
 import { Button, AutoResizingTextarea, ChatMessage, ChatMessageStatus, RenameModal, ResizableSidebar, EmptyState } from '../../ui';
 import { useResizableSidebar } from '../../../hooks/useResizableSidebar';
 import { quantAgentApi } from '../../../services/quantAgentApi';
+import type { AnalysisTask } from '../../../services/analysisTasksApi';
+import { useAnalysisRunsStore } from '../../../store/analysisRunsStore';
 import { portfolioApi } from '../../../services/portfolioApi';
 import { chatApi } from '../../../services/chatApi';
 import { integrationApi } from '../../../services/integrationApi';
@@ -297,6 +299,8 @@ export const QuantitativeResearch: React.FC<QuantitativeResearchProps> = ({ proj
         const match = chatSessions.find(s => s.apiSessionId === focusSessionId);
         if (match) {
             setActiveSession(match);
+            // The copy kept in memory can be from before the run finished (the screen was closed mid-run): read it fresh.
+            fetchMessages(match);
             onFocusApplied?.();
             focusRetriesRef.current = 0;
             return;
@@ -311,21 +315,26 @@ export const QuantitativeResearch: React.FC<QuantitativeResearchProps> = ({ proj
 
     // Load a saved session's messages when it is opened. An effect event reads the latest activeSession without
     // re-running when it changes (it changes as soon as the loaded history is stored), so this runs once per switch.
-    const fetchMessages = useEffectEvent(async () => {
-            if (activeSession && activeSession.messages.length === 0 && activeSession.apiSessionId && !activeSession.isNew) {
+    const fetchMessages = useEffectEvent(async (reload?: ChatSession) => {
+            // `reload`: fetch this session's history again even if it has messages (its run just finished on the server)
+            const target = reload ?? activeSession;
+            if (!target || !target.apiSessionId || target.isNew) return;
+            if (busySessionIds.has(target.id)) return;       // a run this screen started is still writing into it
+            // Also stale: the last thing kept is the user's own turn, i.e. the screen closed before the answer came back.
+            const last = target.messages[target.messages.length - 1];
+            if (reload || target.messages.length === 0 || last?.role === 'user') {
                 try {
-                    const history = await chatApi.getSessionHistory(activeSession.apiSessionId);
+                    const history = await chatApi.getSessionHistory(target.apiSessionId);
                     const mappedMessages: ChatMessage[] = history.messages.map((m, idx) => ({
-                        id: `msg-${activeSession.id}-${idx}`,
+                        id: `msg-${target.id}-${idx}`,
                         role: m.role as 'user' | 'assistant',
                         content: m.content,
                         timestamp: new Date(m.timestamp)
                     }));
 
-                    const updatedSession = { ...activeSession, messages: mappedMessages };
-                    setActiveSession(updatedSession);
+                    setActiveSession(prev => prev && prev.id === target.id ? { ...prev, messages: mappedMessages } : prev);
                     setChatSessions(prev =>
-                        prev.map(s => s.id === activeSession.id ? updatedSession : s)
+                        prev.map(s => s.id === target.id ? { ...s, messages: mappedMessages } : s)
                     );
                 } catch (err) {
                     console.error('Failed to fetch quant session history:', err);
@@ -336,6 +345,34 @@ export const QuantitativeResearch: React.FC<QuantitativeResearchProps> = ({ proj
     useEffect(() => {
         fetchMessages();
     }, [activeSession?.id]);
+
+    // A question keeps running on the server when this screen is closed. Coming back, it is picked up from the live run
+    // feed (the portfolio's task stream, kept by the Overview tab), shown as still running, and the chat reloads when it ends.
+    const portfolioRuns = useAnalysisRunsStore(s => s.runsByPortfolio[Number(projectId)]);
+    const serverRunBySession = useMemo(() => {
+        const bySession = new Map<string, AnalysisTask>();
+        for (const t of Object.values(portfolioRuns ?? {})) {
+            if (t.agent_type !== 'quant' || (t.status !== 'PENDING' && t.status !== 'RUNNING')) continue;
+            const ref = (t.result_metadata as { session_ref?: string } | null)?.session_ref;
+            if (ref) bySession.set(ref, t);
+        }
+        return bySession;
+    }, [portfolioRuns]);
+    const resumedRun = activeSession?.apiSessionId && !busySessionIds.has(activeSession.id)
+        ? serverRunBySession.get(activeSession.apiSessionId) : undefined;
+    const onServerRunEnded = useEffectEvent((apiSessionId: string) => {
+        const session = chatSessions.find(x => x.apiSessionId === apiSessionId);
+        if (session && !busySessionIds.has(session.id)) fetchMessages(session);
+    });
+    const runningSessionsRef = useRef<Map<string, string>>(new Map());   // task id -> api session id, as of the last update
+    useEffect(() => {
+        const now = new Map<string, string>();
+        for (const [sid, t] of serverRunBySession) now.set(t.id, sid);
+        for (const [taskId, sid] of runningSessionsRef.current) {
+            if (!now.has(taskId)) onServerRunEnded(sid);
+        }
+        runningSessionsRef.current = now;
+    }, [serverRunBySession]);
 
 
     // Sync state changes to cache
@@ -1040,9 +1077,9 @@ export const QuantitativeResearch: React.FC<QuantitativeResearchProps> = ({ proj
                                     ))}
                                 </>
                             )}
-                            {busySessionIds.has(activeSession.id) && (
+                            {(busySessionIds.has(activeSession.id) || resumedRun) && (
                                 <ChatMessage role="assistant">
-                                    <ChatMessageStatus text="Running Quant Agent..." />
+                                    <ChatMessageStatus text={resumedRun?.progress_message && resumedRun.progress_message !== 'Done' ? resumedRun.progress_message : 'Running Quant Agent...'} />
                                 </ChatMessage>
                             )}
                             {error && (

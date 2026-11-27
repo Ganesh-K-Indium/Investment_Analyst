@@ -132,6 +132,9 @@ export function getRunProgress(task: Pick<AnalysisTask, 'result_metadata'>): Run
 export interface TaskDeletedEvent {
     id: string;
     portfolio_id: number | null;
+    /** The run's chat, and whether it was deleted with the run (it held no answer). */
+    session_ref?: string | null;
+    chat_deleted?: boolean;
 }
 
 // A completed task's stashed job response (result_metadata.response) already

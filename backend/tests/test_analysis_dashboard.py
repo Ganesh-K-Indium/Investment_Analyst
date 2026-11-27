@@ -349,3 +349,43 @@ def test_alpha_runs_made_before_usage_was_stored_get_it_from_their_response():
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_deleting_a_run_removes_its_chat_only_when_the_chat_holds_no_answer():
+    from app.api.analysis_tasks import delete_task
+    from app.database.models import ChatMessage, ChatSession, MessageRole
+
+    async def run():
+        engine, maker = _db()
+        await _setup(engine)
+        async with maker() as db:
+            db.add(Portfolio(id=1, user_id="7", name="A", company_names=["AAPL"]))
+            empty = ChatSession(session_id="thread_cancelled", user_id="7", agent_type=AgentType.RAG, portfolio_id=1)
+            kept = ChatSession(session_id="thread_answered", user_id="7", agent_type=AgentType.RAG, portfolio_id=1)
+            db.add_all([empty, kept])
+            await db.flush()
+            db.add(ChatMessage(chat_session_id=empty.id, role=MessageRole.USER, content="Provide ALPHA for AAPL"))
+            db.add_all([ChatMessage(chat_session_id=kept.id, role=MessageRole.USER, content="q"),
+                        ChatMessage(chat_session_id=kept.id, role=MessageRole.ASSISTANT, content="a")])
+            for tid, ref, status in (("cancelled", "thread_cancelled", TaskStatus.CANCELLED), ("answered", "thread_answered", TaskStatus.COMPLETED),
+                                     ("running", "thread_answered", TaskStatus.RUNNING)):
+                db.add(AnalysisTask(id=tid, user_id="7", portfolio_id=1, agent_type=AgentType.RAG, task_type="alpha", status=status,
+                                    result_metadata={"session_ref": ref}, pinned=False))
+            await db.commit()
+            user = SimpleNamespace(id=7)
+
+            r = await delete_task("cancelled", db, user)
+            assert r.headers["X-Chat-Deleted"] == "1"
+            assert (await db.execute(ChatSession.__table__.select().where(ChatSession.session_id == "thread_cancelled"))).first() is None
+
+            r = await delete_task("answered", db, user)
+            assert r.headers["X-Chat-Deleted"] == "0"
+            assert (await db.execute(ChatSession.__table__.select().where(ChatSession.session_id == "thread_answered"))).first() is not None
+
+            from fastapi import HTTPException
+            with pytest.raises(HTTPException) as e:
+                await delete_task("running", db, user)                     # a running run must be cancelled first
+            assert e.value.status_code == 409
+        await engine.dispose()
+
+    asyncio.run(run())

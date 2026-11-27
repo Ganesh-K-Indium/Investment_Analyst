@@ -144,7 +144,7 @@ export const RunDetail: React.FC<RunDetailProps> = ({ taskId, portfolioName, onC
                     {notice && <p className="ad-notice" role="status">{notice}</p>}
                     {confirmDelete && (
                         <div className="ad-confirm" role="alertdialog" aria-label="Confirm delete">
-                            <p>Delete “{runTitle(task)}” from the history? Its research conversation is kept. This cannot be undone.</p>
+                            <p>Delete “{runTitle(task)}” from the history? If its conversation has no answer in it (a cancelled or failed run), the conversation is deleted too; otherwise it is kept. This cannot be undone.</p>
                             <div className="ad-confirm__actions">
                                 <button type="button" className="ad-btn" onClick={() => setConfirmDelete(false)}>Keep run</button>
                                 <button type="button" className="ad-btn ad-btn--danger" disabled={busy === 'delete'}

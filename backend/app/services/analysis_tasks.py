@@ -487,8 +487,10 @@ class AnalysisTaskService:
         await db.commit()
 
     @staticmethod
-    async def publish_deleted(redis_client, task_id: str, portfolio_id: Optional[int], user_id: str) -> None:
-        payload = json.dumps({"type": "task_deleted", "id": task_id, "portfolio_id": portfolio_id})
+    async def publish_deleted(redis_client, task_id: str, portfolio_id: Optional[int], user_id: str,
+                              session_ref: Optional[str] = None, chat_deleted: bool = False) -> None:
+        payload = json.dumps({"type": "task_deleted", "id": task_id, "portfolio_id": portfolio_id,
+                              "session_ref": session_ref, "chat_deleted": chat_deleted})
         try:
             await redis_client.publish(channel_for_portfolio(portfolio_id), payload)
         except Exception as e:
