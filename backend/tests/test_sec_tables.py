@@ -77,6 +77,8 @@ def test_caption_groups_need_an_even_split():
     assert te._caption_groups([phrase(340, 420), phrase(490, 570)], centers[:3]) is None      # 2 captions over 3 columns: unclear
     assert te._caption_groups([phrase(340, 360)], centers) is None                           # one caption: it titles the table
     assert te._caption_groups([phrase(330, 350), phrase(405, 430), phrase(480, 505), phrase(555, 580)], centers) is None
+    # a roll-forward: "June 30," over the first column and "March 31," over the last name one column each
+    assert te._caption_groups([phrase(325, 365), phrase(550, 590)], centers) is None
 
 
 def _segment_page():

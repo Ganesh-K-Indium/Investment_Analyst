@@ -247,8 +247,9 @@ def _caption_groups(phrases: list, centers: list):
     """The columns each caption of a stacked header spans, or None when the line does not split the columns evenly.
 
     A caption set over a group of columns ("Three Months Ended" over 2025 and 2026) is centred over the group, so its
-    columns are those nearer to it than to the next caption. Used only when there are fewer captions than columns and
-    every caption gets the same number of them, so a header that is simply missing a caption is left alone."""
+    columns are those nearer to it than to the next caption. Used only when there are fewer captions than columns, every
+    caption gets the same number of them and sits over the middle of its group, so a header that is simply missing a
+    caption, or names single columns, is left alone."""
     if not 2 <= len(phrases) < len(centers) or len(centers) % len(phrases):
         return None
     mids = [(ph[0][0] + ph[-1][2]) / 2 for ph in phrases]
@@ -256,7 +257,14 @@ def _caption_groups(phrases: list, centers: list):
     groups = [[i for i, c in enumerate(centers) if (k == 0 or c >= bounds[k - 1]) and (k == len(mids) - 1 or c < bounds[k])]
               for k in range(len(mids))]
     size = len(centers) // len(phrases)
-    return groups if all(len(g) == size for g in groups) else None
+    if not all(len(g) == size for g in groups):
+        return None
+    # each caption must sit over the middle of its group: "June 30," over one column of a roll-forward
+    # (June 30, 2025 | Acquisitions | Other | March 31, 2026) names that column only
+    pitch = (centers[-1] - centers[0]) / (len(centers) - 1)
+    if any(abs(m - (centers[g[0]] + centers[g[-1]]) / 2) > 0.3 * pitch for m, g in zip(mids, groups)):
+        return None
+    return groups
 
 
 def reconstruct_table_by_words(page, bbox, prev_bottom: float, page_num: int):
