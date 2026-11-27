@@ -6,6 +6,7 @@ Run:  ./venv/bin/python -m pytest -q tests/test_rag_notes_graph.py
 """
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda
 
@@ -13,6 +14,13 @@ from rag.graph import edges, nodes
 from rag.graph.doc_kinds import ANALYST_NOTE, is_analyst_note, split_notes
 from rag.prompts import prompts
 from app.services import analyst_notes as svc
+
+
+@pytest.fixture(autouse=True)
+def _no_real_models(monkeypatch):
+    """Nodes build their models through the settings layer (get_llm), which needs a configured provider key. Every chain
+    in this file is stubbed, so a placeholder model is enough, and the tests pass on a machine with no keys at all (CI)."""
+    monkeypatch.setattr(nodes, "get_llm", lambda *a, **k: object())
 
 
 def _filing(text="Revenue was $100M", **meta):
@@ -76,7 +84,6 @@ def _state(docs):
 
 
 def _grade(monkeypatch, docs, grader):
-    monkeypatch.setattr(nodes, "ChatOpenAI", lambda *a, **k: object())
     monkeypatch.setattr(nodes, "get_financial_analyst_grader_chain", lambda llm: grader)
     return nodes.grade_documents(_state(docs))
 
@@ -130,7 +137,6 @@ def _generate(monkeypatch, docs):
         captured["kwargs"] = kw
         return Chain()
 
-    monkeypatch.setattr(nodes, "ChatOpenAI", lambda *a, **k: object())
     monkeypatch.setattr(nodes, "get_rag_chain", fake_chain)
     out = nodes.generate({"messages": [SimpleNamespace(content="q")], "documents": docs, "sub_query_analysis": {}})
     return out, captured
