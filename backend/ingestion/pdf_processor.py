@@ -15,13 +15,12 @@ from rag.vectordb.client import load_vector_database
 from ingestion.image_data_prep import ImageDescription
 from app.docproc.services.reading.table_extractor import extract_tables_markdown_for_page
 from ingestion.chunking import chunk_page_documents, embed_text, make_text_splitter
-from dotenv import load_dotenv
 
 from app.utils.company_mapping import get_company_name, get_ticker
 from app.utils.usage_tracker import track_usage, record_usage
 from app.utils.filing_types import VALID_FILING_TYPES
+from app.core.config import get_settings
 
-load_dotenv()
 
 logger = logging.getLogger("ingestion.pdf_processor")
 
@@ -40,7 +39,7 @@ def init_vector_stores(collection_name: str = None, use_hybrid_search: bool = No
     """
     # Auto-detect hybrid search mode from environment variable if not specified
     if use_hybrid_search is None:
-        use_hybrid_search = os.getenv("USE_HYBRID_SEARCH", "true").lower() == "true"
+        use_hybrid_search = get_settings().use_hybrid_search
     
     # Initialize with specific collection name if provided
     db_init = load_vector_database(
@@ -748,7 +747,7 @@ async def process_pdf_and_stream(uploaded_pdf_path: str, ticker: str = None, fil
                 text_splitter = make_text_splitter()
                 # tiktoken encoding of the full document is CPU-bound — offload.
                 text_chunks = await asyncio.to_thread(chunk_page_documents, documents, text_splitter,
-                                                      os.getenv("CONTEXTUAL_PREFIX", "1").lower() not in ("0", "false", "no"))
+                                                      get_settings().contextual_prefix)
                 logger.info("Created %d text chunks", len(text_chunks))
 
                 # Generate deterministic UUIDs using the common function

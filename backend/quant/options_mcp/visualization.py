@@ -13,7 +13,7 @@ from datetime import datetime
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
-from cloud_storage import upload_chart_to_cloudinary
+from app.cloudinary import upload_chart_to_cloudinary_async as upload_chart_to_cloudinary
 
 logger = logging.getLogger("quant.options_mcp.visualization")
 

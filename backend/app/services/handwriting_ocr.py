@@ -19,13 +19,13 @@ import difflib
 import io
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.utils.usage_tracker import record_usage
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.services.handwriting_ocr")
 
@@ -282,12 +282,13 @@ def _get_client():
 
 
 def configured_models() -> List[str]:
-    raw = os.getenv("HANDWRITING_OCR_MODELS", DEFAULT_MODELS)
+    raw = get_settings().handwriting_ocr_models or DEFAULT_MODELS
     return [m.strip() for m in raw.split(",") if m.strip()][:2]
 
 
 def is_enabled() -> bool:
-    return os.getenv("HANDWRITING_OCR_ENABLED", "1").lower() not in ("0", "false", "no") and bool(os.getenv("OPENAI_API_KEY"))
+    cfg = get_settings()
+    return cfg.handwriting_ocr_enabled and bool(cfg.openai_api_key)
 
 
 def parse_lines(raw: str) -> List[str]:

@@ -13,10 +13,10 @@ import asyncio
 import ipaddress
 import json
 import logging
-import os
 import socket
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.user_mcp")
 
@@ -30,7 +30,7 @@ class UnsafeServer(ValueError):
 
 
 def allow_private() -> bool:
-    return os.getenv("MCP_ALLOW_PRIVATE_URLS", "0").lower() in ("1", "true", "yes")
+    return get_settings().mcp_allow_private_urls
 
 
 def check_url(url: str) -> str:

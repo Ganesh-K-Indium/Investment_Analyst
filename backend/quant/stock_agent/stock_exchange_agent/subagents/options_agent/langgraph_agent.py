@@ -6,7 +6,6 @@ institutional-style insights. All numerical analysis happens in the MCP server.
 """
 import asyncio
 import logging
-from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from app.services import mcp_registry
 from app.services.quant_runtime import RoleChatModel, harden_tools
@@ -15,7 +14,6 @@ from langchain.agents import create_agent
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-load_dotenv()
 
 logger = logging.getLogger("quant.stock_agent.stock_exchange_agent.subagents.options_agent.langgraph_agent")
 

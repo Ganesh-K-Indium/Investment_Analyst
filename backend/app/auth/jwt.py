@@ -1,15 +1,15 @@
-import os
 import secrets
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
+from app.core.config import get_settings
 
 logger = logging.getLogger("api")
 
-APP_ENV = os.getenv("APP_ENV", "development")
+APP_ENV = get_settings().app_env
 
-_env_secret = os.getenv("JWT_SECRET_KEY")
+_env_secret = get_settings().jwt_secret_key
 if _env_secret:
     SECRET_KEY = _env_secret
 elif APP_ENV == "production":
@@ -30,8 +30,8 @@ else:
     )
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+ACCESS_TOKEN_EXPIRE_MINUTES = get_settings().access_token_expire_minutes
+REFRESH_TOKEN_EXPIRE_DAYS = get_settings().refresh_token_expire_days
 
 
 def _create_token(data: dict, expires_delta: timedelta) -> str:

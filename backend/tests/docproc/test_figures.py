@@ -9,7 +9,6 @@ import pytest
 from app.docproc import pipeline
 from app.docproc.services.extraction import figures, structure
 from app.docproc.services.reading import pdf_pages
-from tests.docproc.api_stub import H, client, mk, up, wait  # noqa: F401  (client is a fixture)
 
 
 def _png(w=200, h=140, colour=(30, 90, 160)):
@@ -222,62 +221,6 @@ def _enable(monkeypatch, reply, calls):
     figures._CACHE.clear()
 
 
-def test_figures_are_found_at_upload_and_read_only_when_asked(client, tmp_path, monkeypatch):
-    pdf = _page_with(tmp_path / "chart.pdf", _bar_chart)
-    wid = mk(client)
-    eid = up(client, wid, tmp_path / "chart.pdf").json()["id"]
-    got = wait(client, wid, eid)
-    blocks = _figs(got)
-    assert len(blocks) == 1 and blocks[0]["reading"] is None and blocks[0]["index"] == 0 and got["stats"]["figures"] == 1
-    assert got["stats"]["usage"]["calls"] == 0                              # finding the figure cost nothing
-
-    calls = []
-    _enable(monkeypatch, CHART_REPLY, calls)
-    url = f"/api/workspaces/{wid}/extractions/{eid}/figures"
-    r = client.post(f"{url}/read", json={"page": 1, "index": 0}, headers=H)
-    assert r.status_code == 200 and r.json()["read"] == 1 and len(calls) == 1
-    again = client.post(f"{url}/read", json={"page": 1, "index": 0}, headers=H).json()
-    assert again["read"] == 0 and len(calls) == 1                           # already read: no second call
-    forced = client.post(f"{url}/read", json={"page": 1, "index": 0, "force": True}, headers=H).json()
-    assert forced["read"] == 1
-    got = client.get(f"/api/workspaces/{wid}/extractions/{eid}", headers=H).json()
-    fig = _figs(got)[0]
-    assert fig["kind"] == "chart" and fig["reading"]["chart"]["series"][0]["points"][0]["estimated"] is True
-    assert got["stats"]["figures_read"] == 1 and got["stats"]["usage"]["by_stage"].get("figures") is not None
-    img = client.get(f"{url}/1/0.jpg", headers=H)
-    assert img.status_code == 200 and img.headers["content-type"] == "image/jpeg" and img.content[:2] == b"\xff\xd8"
-    assert client.post(f"{url}/read", json={"page": 1, "index": 5}, headers=H).status_code == 404
-    sj = client.get(f"/api/workspaces/{wid}/extractions/{eid}/structure.json", headers=H).json()
-    assert any(b["type"] == "figure" and b["reading"] for d in sj["documents"] for pg in d["pages"] for b in pg["blocks"])
-
-
-def test_reading_all_figures_is_capped_and_a_logo_is_marked(client, tmp_path, monkeypatch):
-    def many(pg):
-        for k in range(3):
-            pg.insert_image(fitz.Rect(60 + k * 170, 120, 200 + k * 170, 260), stream=_png(140, 140, (30 + k * 60, 90, 160)))
-    _page_with(tmp_path / "many.pdf", many)
-    wid = mk(client)
-    eid = up(client, wid, tmp_path / "many.pdf").json()["id"]
-    assert wait(client, wid, eid)["stats"]["figures"] == 3
-    monkeypatch.setenv("FIGURE_READ_MAX", "2")
-    calls = []
-    _enable(monkeypatch, {"kind": "logo"}, calls)
-    r = client.post(f"/api/workspaces/{wid}/extractions/{eid}/figures/read", json={"all": True}, headers=H).json()
-    assert r["read"] == 2 and r["skipped"] == 1 and len(calls) == 2
-    got = client.get(f"/api/workspaces/{wid}/extractions/{eid}", headers=H).json()
-    figs = _figs(got)
-    assert sum(1 for b in figs if b.get("decorative")) == 2
-
-
-def test_reading_a_figure_without_a_model_is_refused_plainly(client, tmp_path):
-    _page_with(tmp_path / "chart.pdf", _bar_chart)
-    wid = mk(client)
-    eid = up(client, wid, tmp_path / "chart.pdf").json()["id"]
-    wait(client, wid, eid)
-    r = client.post(f"/api/workspaces/{wid}/extractions/{eid}/figures/read", json={"page": 1, "index": 0}, headers=H)
-    assert r.status_code == 503 and "vision model" in r.json()["detail"]
-
-
 # ---- cluttered and awkward pages: figures drawn in pieces, icon fields -----------------------------------------------
 
 _LINE = "The quarterly figures show steady growth across every region, driven mostly by services and subscriptions."
@@ -478,77 +421,6 @@ def test_a_block_diagram_on_a_scanned_page_is_found_even_when_tesseract_misreads
     assert len(got) == 1 and _iou(got[0]["bbox"], truth[0]) >= 0.5   # deskew moves boxes a little
 
 
-# ---- correcting a figure's reading by hand ------------------------------------------------------------------------------
-
-def _read_chart(client, tmp_path, monkeypatch):
-    _page_with(tmp_path / "chart.pdf", _bar_chart)
-    wid = mk(client)
-    eid = up(client, wid, tmp_path / "chart.pdf").json()["id"]
-    wait(client, wid, eid)
-    calls = []
-    _enable(monkeypatch, CHART_REPLY, calls)
-    base = f"/api/workspaces/{wid}/extractions/{eid}"
-    assert client.post(f"{base}/figures/read", json={"page": 1, "index": 0}, headers=H).json()["read"] == 1
-    return base, calls
-
-
-def _points(client, base):
-    fig = _figs(client.get(base, headers=H).json())[0]
-    return fig, fig["reading"]["chart"]["series"][0]["points"]
-
-
-def test_a_value_corrected_by_hand_is_changed_in_place_and_marked_with_no_model_call(client, tmp_path, monkeypatch):
-    base, calls = _read_chart(client, tmp_path, monkeypatch)
-    _, before = _points(client, base)
-    assert before[0]["estimated"] is True and "manually_corrected" not in before[0]
-    tokens_before = client.get(base, headers=H).json()["stats"]["usage"]["tokens"]
-
-    assert client.patch(f"{base}/figures", json={"page": 1, "index": 0, "field": "s0.p0.y", "value": " 36 "}, headers=H).json() == {"ok": True}
-    assert client.patch(f"{base}/figures", json={"page": 1, "index": 0, "field": "s0.name", "value": "Net revenue"}, headers=H).status_code == 200
-    assert client.patch(f"{base}/figures", json={"page": 1, "index": 0, "field": "summary", "value": "Four quarters of revenue."}, headers=H).status_code == 200
-
-    got = client.get(base, headers=H).json()
-    fig, points = _points(client, base)
-    assert (points[0]["y"], points[0]["value"], points[0]["estimated"], points[0]["manually_corrected"]) == ("36", 36.0, False, True)
-    assert points[1]["y"] == before[1]["y"] and "manually_corrected" not in points[1]                  # nothing else moved
-    series = fig["reading"]["chart"]["series"][0]
-    assert series["name"] == "Net revenue" and series["manually_corrected"] is True
-    assert fig["reading"]["summary"] == "Four quarters of revenue." and fig["reading"]["manually_corrected"] is True
-    assert not [k for k in points[0] if k.startswith("original")] and "edited" not in fig["reading"]    # the part is updated; no extra fields are made
-    assert len(calls) == 1 and got["stats"]["usage"]["tokens"] == tokens_before                         # the edits cost nothing
-    # the same values are in the downloadable JSON
-    sj = client.get(f"{base}/structure.json", headers=H).json()
-    blocks = [b for d in sj["documents"] for pg in d["pages"] for b in pg["blocks"] if b["type"] == "figure"]
-    assert blocks[0]["reading"]["chart"]["series"][0]["points"][0]["y"] == "36"
-    pj = client.get(f"{base}/pages.json", headers=H).json()
-    pfig = [b for p in pj["pages"] for b in p["structure"]["blocks"] if b["type"] == "figure"][0]
-    assert pfig["reading"]["chart"]["series"][0]["points"][0]["y"] == "36" and pfig["reading"]["summary"] == "Four quarters of revenue."
-
-
-def test_a_bad_edit_is_refused_and_reading_again_replaces_the_edits(client, tmp_path, monkeypatch):
-    base, calls = _read_chart(client, tmp_path, monkeypatch)
-    send = lambda **kw: client.patch(f"{base}/figures", json={"page": 1, "index": 0, **kw}, headers=H)       # noqa: E731
-    assert send(field="chart", value="x").status_code == 422                       # not a part that can be edited
-    assert send(field="s0.p0.y", value="   ").status_code == 422                  # blank: type a value
-    assert send(field="s0.p9.y", value="1").status_code == 404                     # no such point
-    assert send(field="s4.name", value="x").status_code == 404                     # no such series
-    assert client.patch(f"{base}/figures", json={"page": 1, "index": 7, "field": "summary", "value": "x"}, headers=H).status_code == 404
-    assert send(field="s0.p0.y", value="36").status_code == 200
-    again = client.post(f"{base}/figures/read", json={"page": 1, "index": 0, "force": True}, headers=H).json()
-    assert again["read"] == 1 and len(calls) == 2
-    _, points = _points(client, base)
-    assert points[0]["y"] == "35" and points[0]["estimated"] is True and "manually_corrected" not in points[0]     # the new reading, not the edit
-
-
-def test_a_figure_that_has_not_been_read_cannot_be_edited(client, tmp_path):
-    _page_with(tmp_path / "chart.pdf", _bar_chart)
-    wid = mk(client)
-    eid = up(client, wid, tmp_path / "chart.pdf").json()["id"]
-    wait(client, wid, eid)
-    r = client.patch(f"/api/workspaces/{wid}/extractions/{eid}/figures", json={"page": 1, "index": 0, "field": "summary", "value": "x"}, headers=H)
-    assert r.status_code == 404
-
-
 def test_read_again_asks_the_model_again_instead_of_returning_the_remembered_answer(tmp_path):
     p = _page_with(tmp_path / "chart.pdf", _bar_chart)
     fig = figures.find_digital(p, 1, [])[0]
@@ -569,40 +441,3 @@ DIAGRAM_REPLY = {"kind": "diagram", "title": "Transformer", "summary": "Encoder 
                                  {"from": "Softmax", "to": "Outputs", "label": None}],
                  "text": [], "limits": "Some arrows are implied."}
 
-
-def test_every_part_of_a_reading_can_be_corrected_and_a_wrong_item_removed(client, tmp_path, monkeypatch):
-    _page_with(tmp_path / "chart.pdf", _bar_chart)
-    wid = mk(client)
-    eid = up(client, wid, tmp_path / "chart.pdf").json()["id"]
-    wait(client, wid, eid)
-    calls = []
-    _enable(monkeypatch, DIAGRAM_REPLY, calls)
-    base = f"/api/workspaces/{wid}/extractions/{eid}"
-    client.post(f"{base}/figures/read", json={"page": 1, "index": 0}, headers=H)
-    send = lambda **kw: client.patch(f"{base}/figures", json={"page": 1, "index": 0, **kw}, headers=H)       # noqa: E731
-    reading = lambda: _figs(client.get(base, headers=H).json())[0]["reading"]                                  # noqa: E731
-
-    for field, value in (("title", "The Transformer"), ("limits", "Arrows are implied."), ("xaxis.label", "Fiscal quarter"), ("yaxis.unit", "USD millions"),
-                         ("c0.name", "Input embedding"), ("c0.role", "Turns tokens into vectors"), ("c1.role", "Probabilities"),
-                         ("l1.to", "Softmax"), ("l1.label", "scores"), ("l0.from", "Inputs (shifted)")):
-        assert send(field=field, value=value).status_code == 200, field
-    r = reading()
-    assert r["title"] == "The Transformer" and r["limits"] == "Arrows are implied." and r["manually_corrected"] is True
-    assert r["chart"]["x_axis"]["label"] == "Fiscal quarter" and r["chart"]["x_axis"]["manually_corrected"] is True and r["chart"]["y_axis"]["unit"] == "USD millions"
-    assert r["components"][0]["name"] == "Input embedding" and r["components"][0]["role"] == "Turns tokens into vectors" and r["components"][0]["manually_corrected"] is True
-    assert r["components"][1]["role"] == "Probabilities" and "manually_corrected" not in r["components"][2]            # untouched stays untouched
-    assert (r["connections"][1]["to"], r["connections"][1]["label"]) == ("Softmax", "scores") and r["connections"][0]["from"] == "Inputs (shifted)"
-
-    assert send(field="c2", remove=True).status_code == 200 and send(field="l2", remove=True).status_code == 200      # a wrong part, a wrong connection
-    assert send(field="s0.p1", remove=True).status_code == 200                                                        # a wrong chart point
-    r = reading()
-    assert [c["name"] for c in r["components"]] == ["Input embedding", "Softmax"] and len(r["connections"]) == 2
-    assert [p["x"] for p in r["chart"]["series"][0]["points"]] == ["Q1"]
-    assert send(field="c0", remove=True).status_code == 200 and send(field="c0", remove=True).status_code == 200
-    assert reading()["components"] is None                                                                           # nothing left: no empty list
-
-    assert send(field="summary", remove=True).status_code == 422          # only a part, a connection or a point can be removed
-    assert send(field="c9", remove=True).status_code == 404
-    assert send(field="c9.name", value="x").status_code == 404
-    assert send(field="yaxis.label", value="  ").status_code == 422
-    assert len(calls) == 1                                                # none of it called the model

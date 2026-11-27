@@ -7,14 +7,11 @@ from langchain_openai import ChatOpenAI
 from app.services.quant_runtime import RoleChatModel
 from langchain_community.tools import TavilySearchResults
 from langchain.agents import create_agent
-from dotenv import load_dotenv
-import os
 import warnings
 from langchain_core._api import LangChainDeprecationWarning
 
 warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
 
-load_dotenv()
 
 
 async def create_ticker_finder_agent(checkpointer=None):

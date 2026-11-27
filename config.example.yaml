@@ -1,0 +1,131 @@
+# Investment Analyst: deployment configuration.
+#
+# GENERATED from backend/app/core/config.py by `python -m app.core.config --example`. Do not edit by hand.
+# Copy to config.yaml (repo root, or set APP_CONFIG_FILE) and uncomment what you change. Each key is also an
+# environment variable of the same name in upper case; the environment and .env win over this file.
+# Keep secrets (keys, passwords) in .env or the environment rather than here.
+# `python -m app.core.config` prints the values in force and where each came from.
+
+# ── Application ─────────────────────────────────────────────────────────────────────────────────────────
+# app_env: "development"  # `production` turns on the startup checks for secrets and safe defaults.
+# log_level: "INFO"  # Root log level: DEBUG, INFO, WARNING, ERROR.
+# data_dir: ""  # Where the app writes files (filings, uploads, keys, caches, logs). Default: <repo>/data.
+# save_debug_responses: false  # Dump full agent responses to data/output/json for debugging.
+
+# ── HTTP / CORS ─────────────────────────────────────────────────────────────────────────────────────────
+# cors_allowed_origins: "http://localhost:5173,http://127.0.0.1:5173"  # Comma-separated web UI origins allowed to call the API.
+# cors_allowed_origin_regex: "^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$"  # Extra origins as a regex (default: localhost on any port, for development). Set empty in production.
+
+# ── Security ────────────────────────────────────────────────────────────────────────────────────────────
+# jwt_secret_key: ""  # Signs login tokens. Required in production; in development a random key is used per start.
+# access_token_expire_minutes: 30  # Lifetime of an access token.
+# refresh_token_expire_days: 7  # Lifetime of a refresh token.
+# app_secret_key: ""  # Encrypts the model-provider keys users save. Changing it makes saved keys unreadable.
+# integration_secret_key: ""  # Encrypts stored file/database connector credentials (a Fernet key).
+# mcp_shared_secret: ""  # Signs the per-request token the Postgres MCP tool verifies. Falls back to JWT_SECRET_KEY outside production.
+# lock_settings: false  # Make the AI-provider screen read-only (keys managed through configuration only).
+# local_only: false  # Nothing leaves this machine: cloud models and model downloads are off.
+# llm_enabled: true  # Master switch for document-reading model calls.
+# llm_allow_private_urls: true  # Allow model servers on localhost/private networks (Ollama, a private gateway). Set 0 on a shared server.
+# mcp_allow_private_urls: false  # Allow users' MCP servers on localhost/private networks.
+
+# ── PostgreSQL ──────────────────────────────────────────────────────────────────────────────────────────
+# database_url: "postgresql://investment_analyst:investment_analyst@localhost:5432/investment_analyst"  # Application database (async SQLAlchemy + LangGraph checkpoints).
+# db_pool_size: 10  # Pooled connections kept per process (API and each worker).
+# db_max_overflow: 20  # Extra connections a process may open under load. Keep processes x (size + overflow) under Postgres max_connections.
+# db_pool_timeout: 30  # Seconds to wait for a free connection before failing.
+# db_pool_recycle: 1800  # Recycle connections older than this (seconds), so a firewall cannot silently cut them.
+
+# ── Redis, workers, concurrency ─────────────────────────────────────────────────────────────────────────
+# redis_url: "redis://localhost:6379/0"  # Job queues and live-update channels.
+# worker_interactive_max_jobs: 30  # Concurrent jobs per interactive worker (chats, quick runs).
+# worker_interactive_job_timeout: 1800  # Longest an interactive job may run (seconds).
+# worker_batch_max_jobs: 5  # Concurrent jobs per batch worker (multi-ticker ALPHA runs).
+# worker_batch_job_timeout: 7200  # Longest a batch job may run (seconds).
+# chat_stream_mode: "auto"  # Where streamed chats run: auto = on a worker when one is up, else in the API.
+# chat_stream_timeout_seconds: 1800  # Longest a streamed chat may run on a worker.
+# threadpool_workers: 64  # Threads per process for blocking model calls and agent steps.
+
+# ── Vector database ─────────────────────────────────────────────────────────────────────────────────────
+# qdrant_url: "http://localhost:6333"  # Qdrant (self-hosted or Qdrant Cloud).
+# qdrant_api_key: ""  # Qdrant Cloud API key.
+# use_hybrid_search: true  # Store BM25 sparse vectors next to dense ones at ingestion.
+# contextual_prefix: true  # Embed each chunk with a company/filing/period/section header.
+# rerank_local_model: "Xenova/ms-marco-MiniLM-L-6-v2"  # Local cross-encoder re-ranker (downloaded on first use).
+# rerank_cohere_model: "rerank-english-v3.0"  # Cohere re-ranker, when a user picks the hosted re-ranker.
+# cohere_api_key: ""  # Cohere key for the hosted re-ranker.
+
+# ── Model providers (server-wide fallbacks; users can save their own in Settings) ───────────────────────
+# openai_api_key: ""  # Embeddings for all search, filing captions, and the default chat models. Required.
+# openai_base_url: ""  # OpenAI-compatible endpoint instead of api.openai.com.
+# anthropic_api_key: ""  # Anthropic models.
+# gemini_api_key: ""  # Google Gemini models (falls back to GOOGLE_API_KEY).
+# google_api_key: ""  # Gemini vision for quant chart summaries.
+# ollama_base_url: ""  # Self-hosted Ollama server.
+# llm_custom_base_url: ""  # Any OpenAI-compatible server.
+# llm_custom_api_key: ""  # Key for LLM_CUSTOM_BASE_URL.
+# groq_api_key: ""  # Groq models.
+
+# ── Market, web and macro data ──────────────────────────────────────────────────────────────────────────
+# tavily_api_key: ""  # Web search (research agent, web fallback).
+# fred_api_key: ""  # FRED macro series. Required for the macro framework.
+# bls_api_key: ""  # BLS macro series (optional).
+# sec_user_agent: "Indium Capital contact@indium.com"  # Sent on every SEC EDGAR request. SEC requires your company name and a contact email.
+
+# ── Chart hosting ───────────────────────────────────────────────────────────────────────────────────────
+# cloudinary_cloud_name: ""  # Cloudinary chart hosting (optional; charts still work without it).
+# cloudinary_api_key: ""
+# cloudinary_api_secret: ""
+
+# ── Quant MCP servers ───────────────────────────────────────────────────────────────────────────────────
+# mcp_host: "127.0.0.1"  # Host of the built-in MCP servers. Per server: MCP_<NAME>_URL / _ENABLED / _BIND.
+# mcp_tool_threads: 32  # Threads per MCP server for blocking market-data calls.
+# mcp_stock_info_url: ""  # Stock information server (port 8565).
+# mcp_stock_info_enabled: true
+# mcp_stock_info_bind: "127.0.0.1"
+# mcp_technical_url: ""  # Technical analysis server (port 8566).
+# mcp_technical_enabled: true
+# mcp_technical_bind: "127.0.0.1"
+# mcp_research_url: ""  # Research and ratings server (port 8567).
+# mcp_research_enabled: true
+# mcp_research_bind: "127.0.0.1"
+# mcp_options_url: ""  # Options intelligence server (port 8568).
+# mcp_options_enabled: true
+# mcp_options_bind: "127.0.0.1"
+# mcp_postgres_url: ""  # Postgres query server (port 8570).
+# mcp_postgres_enabled: true
+# mcp_postgres_bind: "127.0.0.1"
+
+# ── Documents and OCR ───────────────────────────────────────────────────────────────────────────────────
+# docproc_data_dir: ""  # Document engine state (uploads, keys, models). Default: <data_dir>/docproc.
+# docproc_models_dir: ""  # Downloaded OCR models. Default: <docproc_data_dir>/models.
+# max_upload_mb: 50  # Deployment default for Settings > Your documents > Largest file.
+# max_pages: 200  # Deployment default for Settings > Your documents > Most pages per file.
+# tesseract_cmd: ""  # Path to the tesseract binary when it is not on PATH.
+# tesseract_lang: "eng"  # Tesseract language(s), e.g. eng+deu.
+# docproc_deskew: true  # Straighten scanned pages before OCR.
+# reading_strategy: "balanced"  # Default reading strategy for a document workspace.
+# local_ocr_engine: "tesseract"  # Default local OCR engine for a document workspace.
+# escalate_below: ""  # OCR confidence below which a page goes to a vision model.
+# token_cap: 0  # Token cap per document (0 = none).
+# extraction_models: ""  # Comma-separated reader pair for structured extraction (default: best two available).
+# adjudication_model: ""  # Model that settles disagreements between the two readers.
+# adjudicate: true  # Settle reader disagreements with a third model.
+# discover_long_doc_pages: 25  # Pages above which discovery samples instead of reading everything.
+# figure_read_max: 12  # Most figures read per document.
+# discover_digital_model: "auto"  # When a model reads digital pages with no template: auto (only pages code could not parse), never, always.
+# classify_unknown_streak: 3  # Consecutive unknown pages before classification stops trying.
+# handwriting_ocr_enabled: true  # Read handwritten notes with a vision model.
+# handwriting_ocr_models: ""  # Comma-separated vision models for handwriting (default: built-in pair).
+# image_min_ocr_words: 3  # Images in filings with fewer OCR words are treated as decoration.
+
+# ── Defaults for the Settings screen ──────────────────────────────────────────────────────────────────
+# What every user starts from, before an admin, the user or a portfolio changes it in the app. Any section/key of
+# GET /settings/schema. Also settable as SETTINGS__<SECTION>__<KEY> environment variables. Validated at startup.
+# settings_defaults:
+#   models:
+#     generator_model: gpt-4o
+#   answers:
+#     style: concise
+#   documents:
+#     reading_strategy: economy

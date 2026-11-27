@@ -1,8 +1,8 @@
-import os
 import json
 import logging
 from cryptography.fernet import Fernet, InvalidToken
 from typing import Dict, Any, Optional
+from app.core.config import get_settings
 
 logger = logging.getLogger("core.security")
 
@@ -13,7 +13,7 @@ def _get_fernet() -> Fernet:
     if _fernet is not None:
         return _fernet
     
-    secret_key = os.getenv("INTEGRATION_SECRET_KEY")
+    secret_key = get_settings().integration_secret_key
     
     if not secret_key:
         logger.error("INTEGRATION_SECRET_KEY is not set in the environment. Credentials cannot be encrypted securely.")

@@ -1,0 +1,98 @@
+{
+  "template_id": "PT-InitialExam",
+  "doc_type": "pt_initial_exam",
+  "title": "Physical therapy initial examination",
+  "single_page": false,
+  "sections": [
+    {
+      "id": "main",
+      "header": null,
+      "fields": [
+        {
+          "key": "patient.name",
+          "label": "Patient Name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "patient.dob",
+          "label": "Date of Birth",
+          "type": "date",
+          "required": true
+        },
+        {
+          "key": "exam_date",
+          "label": "Date of Initial Examination",
+          "type": "date"
+        },
+        {
+          "key": "onset_date",
+          "label": "Injury/Onset/Change of Status Date",
+          "type": "date"
+        },
+        {
+          "key": "referring_physician",
+          "label": "Referring Physician/NPP",
+          "type": "text"
+        },
+        {
+          "key": "surgery",
+          "label": "Surgery (date and type)",
+          "type": "text"
+        },
+        {
+          "key": "visit_no",
+          "label": "Visit No.",
+          "type": "text"
+        },
+        {
+          "key": "diagnosis",
+          "label": "Diagnosis",
+          "type": "text"
+        },
+        {
+          "key": "treatment_side",
+          "label": "Treatment Side",
+          "type": "text"
+        },
+        {
+          "key": "pain_location",
+          "label": "Pain Location",
+          "type": "text"
+        },
+        {
+          "key": "plan.frequency",
+          "label": "Plan Frequency",
+          "type": "text"
+        },
+        {
+          "key": "plan.duration",
+          "label": "Plan Duration",
+          "type": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Electronically signed by (name, credentials, date)",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tables": [],
+  "canonical": {
+    "person.name": {
+      "kind": "name",
+      "label": "Name",
+      "fields": [
+        "patient.name"
+      ]
+    },
+    "person.dob": {
+      "kind": "date",
+      "label": "Date of birth",
+      "fields": [
+        "patient.dob"
+      ]
+    }
+  }
+}

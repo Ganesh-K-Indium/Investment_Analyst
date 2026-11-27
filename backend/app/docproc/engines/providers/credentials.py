@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.docproc import config
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.docproc.engines.providers.credentials")
 
@@ -61,7 +62,7 @@ _cache: Dict[str, Any] = {"stamp": None, "at": 0.0, "values": {}}
 
 
 def locked() -> bool:
-    return os.getenv("LOCK_SETTINGS", "0").lower() in ("1", "true", "yes")
+    return get_settings().lock_settings
 
 
 class StorageError(Exception):
@@ -77,7 +78,7 @@ def _fernet():
         from cryptography.fernet import Fernet
     except ImportError as e:
         raise StorageError("Saving keys needs the 'cryptography' package on the server. Set the key as an environment variable instead.") from e
-    secret = os.getenv("APP_SECRET_KEY", "").strip()
+    secret = get_settings().app_secret_key.strip()
     if secret:
         return Fernet(base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest()))
     path = config.data_dir() / "secret.key"
@@ -117,7 +118,7 @@ def _db_ready() -> bool:
 
 def _saved() -> Dict[str, str]:
     """All saved values, decrypted, cached briefly (model calls ask for credentials constantly)."""
-    stamp = (config.DB_URL, os.getenv("DOCPROC_DATA_DIR"))
+    stamp = (get_settings().database_url, str(config.data_dir()))
     now = time.monotonic()
     with _lock:
         if _cache["stamp"] == stamp and now - _cache["at"] < CACHE_SECONDS:
@@ -153,10 +154,7 @@ def get(name: str) -> str:
     mine = request_creds.get(name)
     if mine:
         return mine
-    env = (os.getenv(name) or "").strip()
-    if not env and name == "GEMINI_API_KEY":
-        env = (os.getenv(GEMINI_ALIAS) or "").strip()
-    return env
+    return get_settings().secret(name)
 
 
 def source(name: str) -> Optional[str]:

@@ -1,6 +1,5 @@
 """User documents: native readers, chunking, review-gated indexing."""
 import asyncio
-import csv
 import json
 from pathlib import Path
 

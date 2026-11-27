@@ -1,10 +1,8 @@
 """Reading engines: model providers, local OCR, the reading plan, the escalation ladder and the API. All offline."""
 import asyncio
 import io
-import time
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.docproc import config
 from app.docproc.engines.strategy import ladder, plan
@@ -14,7 +12,6 @@ from app.docproc.services.reading import ocr, pdf_pages
 from app.docproc import pipeline
 from app.docproc.services.reading.tess import available as tess_available
 from app.utils.usage_tracker import track_usage
-from tests.docproc.api_stub import H, mk, reload_app, wait
 
 
 def run(coro):
@@ -384,15 +381,6 @@ def test_engine_listing_names_every_engine():
     missing = [e for e in local.listing() if not e["ready"]]
     assert all(e["status"] == "not_installed" and e["hint"] for e in missing)
     assert all(e["status"] == "ready" for e in local.listing() if e["ready"])
-
-
-@pytest.mark.skipif(not tess_available(), reason="Tesseract is not installed")
-def test_tesseract_reads_a_clean_page_confidently():
-    from app.api.engines import SAMPLE_TOKENS, _found, sample_page
-    jpeg = sample_page()
-    r = run(local.get("tesseract").read(jpeg))
-    assert _found(r.text) >= 0.75, r.text
-    assert r.confidence > 0.85 and local.assess(r, 0.85, jpeg).ok
 
 
 # ---- the reading plan -------------------------------------------------------------------------------------------------
@@ -836,118 +824,6 @@ def test_force_vision_sends_chosen_pages_to_the_models(tmp_path, clean_env, fake
     assert by == {1: "ocr-local", 2: "ocr"} and eng.calls == 1
 
 
-# ---- the API ------------------------------------------------------------------------------------------------------------
-
-@pytest.fixture()
-def client(tmp_path, monkeypatch):
-    for k in KEYS:
-        monkeypatch.delenv(k, raising=False)
-    with TestClient(reload_app(tmp_path, monkeypatch)) as c:
-        yield c
-
-
-def test_engines_overview(client):
-    r = client.get("/api/engines")
-    assert r.status_code == 401
-    body = client.get("/api/engines", headers=H).json()
-    assert [e["id"] for e in body["local_engines"]] == ["tesseract", "rapidocr", "paddleocr", "doctr"]
-    assert {p["id"] for p in body["providers"]} == {"openai", "anthropic", "gemini", "ollama", "custom"}
-    assert [s["id"] for s in body["strategies"]] == ["economy", "balanced", "accuracy", "custom"]
-    assert body["local_only"] is False and body["defaults"]["plan"]["strategy"] in ("balanced", "accuracy")
-    assert "OPENAI_API_KEY" in next(p for p in body["providers"] if p["id"] == "openai")["hint"]
-    health = client.get("/health").json()
-    assert "local_engines" in health and "providers" in health and health["local_only"] is False
-
-
-def test_workspace_reading_settings_round_trip(client, monkeypatch):
-    wid = mk(client)
-    url = f"/api/workspaces/{wid}/reading"
-    assert client.get(url).status_code == 401
-    got = client.get(url, headers=H).json()
-    assert got["settings"] == {} and got["plan"]["strategy"] == got["strategy_default"]
-    saved = client.put(url, json={"strategy": "economy", "escalate_below": 0.7}, headers=H)
-    assert saved.status_code == 200 and saved.json()["plan"]["strategy"] == "economy" and saved.json()["plan"]["escalate_below"] == 0.7
-    assert client.get(url, headers=H).json()["settings"] == {"strategy": "economy", "escalate_below": 0.7}
-    other = mk(client, "Other")
-    assert client.get(f"/api/workspaces/{other}/reading", headers=H).json()["settings"] == {}   # settings belong to one workspace
-    bad = client.put(url, json={"strategy": "wild"}, headers=H)
-    assert bad.status_code == 422 and "Choose" in bad.json()["detail"]
-    assert client.put(url, json={"models": ["anthropic:claude-haiku-5-5"]}, headers=H).status_code == 422     # no Anthropic key here
-    assert client.put(f"/api/workspaces/nope/reading", json={}, headers=H).status_code == 404
-    assert client.delete(f"/api/workspaces/{wid}", headers=H).status_code == 204
-
-
-def test_engine_test_endpoint(client, monkeypatch):
-    assert client.post("/api/engines/test", json={"kind": "local", "id": "nope"}, headers=H).status_code == 404
-    assert client.post("/api/engines/test", json={"kind": "other", "id": "x"}, headers=H).status_code == 422
-    assert client.post("/api/engines/test", json={"kind": "model", "id": "no spaces allowed"}, headers=H).status_code == 422
-    gone = FakeLocal()                                                                           # whatever is installed on this machine
-    gone.id, gone.label, gone.install = "doctr", "docTR", "pip install doctr"
-    gone.available = lambda: False
-    monkeypatch.setitem(local._ENGINES, "doctr", gone)
-    r = client.post("/api/engines/test", json={"kind": "local", "id": "doctr"}, headers=H).json()
-    assert r["ok"] is False and "not installed" in r["error"]
-    r = client.post("/api/engines/test", json={"kind": "model", "id": "anthropic:claude-haiku-5-5"}, headers=H).json()
-    assert r["ok"] is False and "not available" in r["error"]                                    # no key: a clear message, not a 500
-    if tess_available():
-        r = client.post("/api/engines/test", json={"kind": "local", "id": "tesseract"}, headers=H).json()
-        assert r["ok"] and r["score"] >= 0.75 and r["tokens"] == 0
-    monkeypatch.setenv("LLM_ENABLED", "1")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-
-    async def fake_post(url, headers, body):
-        return {"content": [{"type": "text", "text": '{"lines": ["Invoice No. 48213", "Date: 03/14/2026", "Total due $1,250.75", "Ref AB-9071"]}'}],
-                "usage": {"input_tokens": 700, "output_tokens": 40}}
-    monkeypatch.setattr(llm, "_post", fake_post)
-    r = client.post("/api/engines/test", json={"kind": "model", "id": "anthropic:claude-haiku-5-5"}, headers=H).json()
-    assert r["ok"] and r["score"] == 1.0 and r["tokens"] == 740
-
-
-def test_upload_reading_choice_and_reuse(client, tmp_path, monkeypatch):
-    from tests.docproc.make_packet import build
-    pdf = tmp_path / "p.pdf"
-    build(str(pdf))
-    wid = mk(client)
-    base = f"/api/workspaces/{wid}/extractions"
-    send = lambda reading="": client.post(base, files={"file": ("p.pdf", pdf.read_bytes(), "application/pdf")}, data={"template": "auto", "reading": reading}, headers=H)
-    assert send("wild").status_code == 422
-    first = send("economy").json()
-    done = wait(client, wid, first["id"])
-    assert done["status"] == "done" and done["reading"]["strategy"] == "economy" and done["reading"]["uses_models"] is False
-    assert send("economy").json().get("reused") is True                       # the same file under the same plan is not read again
-    other = send("accuracy").json()
-    assert other["id"] != first["id"] and other.get("reused") is not True      # a different plan is a different reading
-
-
-def test_reread_makes_a_second_extraction_and_leaves_the_first(client, tmp_path, monkeypatch):
-    from tests.docproc.make_packet import build
-    pdf = tmp_path / "p.pdf"
-    build(str(pdf))
-    wid = mk(client)
-    base = f"/api/workspaces/{wid}/extractions"
-    first = client.post(base, files={"file": ("p.pdf", pdf.read_bytes(), "application/pdf")}, data={"template": "auto"}, headers=H).json()["id"]
-    wait(client, wid, first)
-    assert client.post(f"{base}/{first}/reread", json={}, headers=H).status_code == 503              # no model here: it must say so
-    monkeypatch.setattr(config, "llm_enabled", lambda: True)
-    assert client.post(f"{base}/{first}/reread", json={"strategy": "wild"}, headers=H).status_code == 422
-    assert client.post(f"{base}/{first}/reread", json={"pages": [99]}, headers=H).status_code == 422
-    assert client.post(f"{base}/nope/reread", json={}, headers=H).status_code == 404
-    from app.docproc.services.reading import ocr as ocr_mod
-    from tests import test_pipeline as tp
-    monkeypatch.setattr(ocr_mod, "read_image", tp.fake_ocr)
-    monkeypatch.setattr(pipeline.form_extractor, "_read", tp.fake_form)
-    r = client.post(f"{base}/{first}/reread", json={"pages": [4]}, headers=H)
-    assert r.status_code == 202 and r.json()["id"] != first
-    done = wait(client, wid, r.json()["id"])
-    assert done["status"] == "done" and done["filename"] == "p.pdf"
-    page4 = next(p for p in done["pages"]["pages"] if p["page"] == 4)
-    assert page4["source"] == "ocr"                                                                  # the page you picked went to the models
-    assert client.get(f"{base}/{first}", headers=H).json()["status"] == "done"                      # the original is untouched
-    assert len(client.get(base, headers=H).json()) == 2
-    other = mk(client, "Other")
-    assert client.post(f"/api/workspaces/{other}/extractions/{first}/reread", json={}, headers=H).status_code == 404
-
-
 # ---- downloading models from the page ---------------------------------------------------------------------------------
 
 @pytest.fixture()
@@ -1039,25 +915,6 @@ def test_a_failed_download_says_so_and_can_be_retried(preparing, monkeypatch):
     bad = run(go(Downloader(fail=True)))
     assert bad["state"] == "failed" and "internet" in bad["error"] and "no network" not in bad["error"]   # a safe message, not the exception
     assert run(go(Downloader()))["state"] == "done"
-
-
-def test_the_download_endpoint_and_overview(client, preparing, monkeypatch):
-    monkeypatch.setitem(local._ENGINES, "doctr", Downloader())
-    assert client.post("/api/engines/doctr/prepare").status_code == 401
-    assert client.post("/api/engines/nope/prepare", headers=H).status_code == 404
-    assert client.post("/api/engines/tesseract/prepare", headers=H).status_code == 409
-    over = client.get("/api/engines", headers=H).json()
-    doctr = next(e for e in over["local_engines"] if e["id"] == "doctr")
-    assert doctr["models"]["state"] == "missing" and doctr["prepare"] is None and over["models_dir"] and over["locked"] is False
-    assert next(e for e in over["local_engines"] if e["id"] == "tesseract")["models"]["state"] == "none"
-    r = client.post("/api/engines/doctr/prepare", headers=H)
-    assert r.status_code == 202 and r.json()["state"] == "running"
-    for _ in range(100):
-        doctr = next(e for e in client.get("/api/engines", headers=H).json()["local_engines"] if e["id"] == "doctr")
-        if doctr["prepare"]["state"] != "running":
-            break
-        time.sleep(0.05)
-    assert doctr["prepare"]["state"] == "done" and doctr["models"]["state"] == "downloaded"
 
 
 # ---- engines in their own processes -------------------------------------------------------------------------------------

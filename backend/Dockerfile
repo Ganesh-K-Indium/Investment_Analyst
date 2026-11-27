@@ -33,7 +33,7 @@ ENV PYTHONUNBUFFERED=1
 # The MCP servers run from their own folders and import the `app` package, so put the code root on the path.
 ENV PYTHONPATH=/app
 
-# Explicit Tesseract binary path - overridable via ECS task definition env vars
+# Explicit Tesseract binary path (TESSERACT_CMD, overridable at runtime)
 # Debian slim puts tesseract at /usr/bin/tesseract
 ENV TESSERACT_CMD=/usr/bin/tesseract
 
@@ -56,16 +56,15 @@ COPY schemas/    ./schemas/
 COPY alembic/    ./alembic/
 COPY alembic.ini .
 
-# Create data directories so the app starts cleanly before EFS mounts
-# EFS will overlay these at runtime — files written here persist on EFS
+# Create the data directory so the app starts cleanly; mount a persistent volume here (docker-compose mounts ./data)
 RUN mkdir -p /app/data/macro /app/data
 
 # Copy entrypoint script and make it executable
 COPY docker/ ./docker/
 RUN chmod +x docker/*.sh
 
-# Expose main API + MCP server ports
-EXPOSE 8000 8565 8566 8567 8568
+# The API. MCP servers (8565-8568, 8570) listen on loopback inside the container; the workers share its network.
+EXPOSE 8000
 
-# Start MCP servers (background) then the main FastAPI app
+# Start MCP servers (background), run migrations, then the FastAPI app
 ENTRYPOINT ["./docker/entrypoint.sh"]

@@ -7,14 +7,14 @@ worker processes (consuming). Two logical queues share one Redis instance:
 - "batch": multi-ticker /alpha runs, deep quant dives, anything a user would
   kick off and walk away from. Larger pool, no latency guarantee.
 """
-import os
 import logging
 from arq import create_pool
 from arq.connections import RedisSettings, ArqRedis
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.jobs.queue")
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = get_settings().redis_url
 
 QUEUE_INTERACTIVE = "interactive"
 QUEUE_BATCH = "batch"

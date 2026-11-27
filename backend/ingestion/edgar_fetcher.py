@@ -26,17 +26,16 @@ from datetime import date, datetime
 from typing import Dict, List, Optional, Sequence
 
 import httpx
-from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
 from app.utils.filing_types import MIN_PLAUSIBLE_PAGES, VALID_FILING_TYPES
 from app.core.paths import SEC_FILINGS_DIR
+from app.core.config import get_settings
 
-load_dotenv()
 
 logger = logging.getLogger("ingestion.edgar_fetcher")
 
-SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "Indium Capital contact@indium.com")
+SEC_USER_AGENT = get_settings().sec_user_agent
 SEC_REQUEST_RATE_LIMIT = 10  # max 10 requests/sec (SEC guideline) — enforced per-IP, not per-instance
 
 VALID_FORM_TYPES = VALID_FILING_TYPES

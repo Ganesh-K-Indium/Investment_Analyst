@@ -5,7 +5,8 @@ One declaration drives four things: the defaults, the validation of what a user 
 settings forms from (GET /settings/schema), and the documentation. Add an option here and it appears everywhere.
 
 Precedence when settings are resolved (last wins):
-    SYSTEM_DEFAULTS -> system overrides (admin) -> user -> portfolio -> per-request override
+    SYSTEM_DEFAULTS -> deployment defaults (config.yaml / SETTINGS__* env) -> system overrides (admin) -> user -> portfolio
+    -> per-request override
 """
 import copy
 from typing import Any, Dict, List, Optional, Tuple
@@ -235,14 +236,16 @@ def validate(patch: Dict[str, Any], allowed_models: Optional[List[str]] = None) 
 
 
 def ui_schema(allowed_models: Optional[List[str]] = None) -> Dict[str, Any]:
-    """What the settings page renders its forms from."""
+    """What the settings page renders its forms from. Each field's "default" is this deployment's default."""
+    from .resolver import defaults
+    effective = defaults()
     sections = []
     for sid, sec in SECTIONS.items():
         fields = []
         for key, f in sec["fields"].items():
-            item = {"key": key, **{k: v for k, v in f.items()}}
+            item = {"key": key, **{k: v for k, v in f.items()}, "default": effective[sid][key]}
             if f["type"] == "model" and allowed_models:
                 item["options"] = allowed_models                # administrator restriction: the UI offers only these
             fields.append(item)
         sections.append({"id": sid, "label": sec["label"], "help": sec["help"], "fields": fields})
-    return {"sections": sections, "defaults": SYSTEM_DEFAULTS, "model_roles": {r: {"label": l, "default": d} for r, (l, d) in MODEL_ROLES.items()}}
+    return {"sections": sections, "defaults": effective, "model_roles": {r: {"label": l, "default": d} for r, (l, d) in MODEL_ROLES.items()}}

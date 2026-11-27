@@ -1,11 +1,9 @@
 
 import pandas as pd
-import os
 from openai import OpenAI
 import yfinance as yf
-from dotenv import load_dotenv
+from app.core.config import get_settings
 
-load_dotenv()  # Load OPENAI_API_KEY from .env
 
 def analyze_transactions(all_data):
     """
@@ -96,7 +94,7 @@ def analyze_transactions(all_data):
     # --- Generate Recommendations ---
     report = {}
     
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = get_settings().openai_api_key
     client = OpenAI(api_key=api_key) if api_key else None
     
     # Group by Issuer

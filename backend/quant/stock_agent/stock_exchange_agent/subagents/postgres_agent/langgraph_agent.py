@@ -12,9 +12,7 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain.agents import create_agent
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
-from dotenv import load_dotenv
 
-load_dotenv()
 
 logger = logging.getLogger("quant.stock_agent.stock_exchange_agent.subagents.postgres_agent")
 

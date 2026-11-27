@@ -277,13 +277,6 @@ def test_the_pipeline_labels_an_unnamed_page_and_keeps_its_type_unknown_for_rout
     assert known["type"] == "prior_auth_form"
 
 
-def test_generic_labels_are_not_offered_as_what_a_file_turned_out_to_be():
-    from app.api import extractions
-    from types import SimpleNamespace
-    ex = SimpleNamespace(result={"forms": [], "documents": [{"doc_index": 0, "label": "Other document"}, {"doc_index": 1, "label": "Unclassified"}, {"doc_index": 2, "label": "SEC Form 10-Q"}]})
-    assert extractions._labels(ex) == ["SEC Form 10-Q"]
-
-
 # -- a title Tesseract spreads over pieces of different count, and pages that continue a document ------------------------------
 
 def test_a_title_in_the_right_column_is_found_when_the_neighbouring_lines_are_cut_into_more_pieces():

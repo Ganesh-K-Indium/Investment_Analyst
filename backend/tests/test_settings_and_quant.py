@@ -1,6 +1,5 @@
 """Settings schema/resolution, model registry, and the quant security + runtime pieces."""
 import asyncio
-import time
 
 import pytest
 

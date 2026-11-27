@@ -18,7 +18,6 @@ Digital pages are not affected by any of this: PDFs with real text are read by c
 """
 import hashlib
 import json
-import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -27,6 +26,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from app.docproc import config
 from app.docproc.engines.providers import llm
 from app.docproc.engines.ocr import local
+from app.core.config import get_settings
 
 STRATEGIES: List[Dict[str, Any]] = [
     {"id": "economy", "label": "Economy", "mode": "local",
@@ -93,13 +93,13 @@ def resolve(stored: Optional[Dict[str, Any]] = None, override: Optional[Dict[str
     """The plan in force for the given saved settings and optional per-upload override."""
     stored, override = stored or {}, override or {}
     notes: List[str] = []
-    strategy = override.get("strategy") or stored.get("strategy") or os.getenv("READING_STRATEGY", "balanced")
+    strategy = override.get("strategy") or stored.get("strategy") or get_settings().reading_strategy
     if strategy not in _BY_ID:
         strategy = "balanced"
     mode = stored.get("mode") if strategy == "custom" and stored.get("mode") in MODES else _BY_ID[strategy]["mode"]
 
     ready = [e.id for e in local.ready()]
-    wanted = stored.get("local_engine") or os.getenv("LOCAL_OCR_ENGINE", "tesseract")
+    wanted = stored.get("local_engine") or get_settings().local_ocr_engine
     engine = wanted if wanted in ready else (ready[0] if ready else None)
     if engine != wanted and wanted:
         notes.append(f"{wanted} is not installed, so {engine or 'no local engine'} is used")
@@ -114,8 +114,8 @@ def resolve(stored: Optional[Dict[str, Any]] = None, override: Optional[Dict[str
     has_llm = config.llm_enabled() and mode != "local"
     if mode != "local" and not config.llm_enabled():
         notes.append("no model is configured on this server, so pages are read locally")
-    threshold = min(0.99, max(0.3, _float(stored.get("escalate_below", os.getenv("ESCALATE_BELOW")), DEFAULT_THRESHOLD)))
-    cap = _int(stored.get("token_cap", os.getenv("TOKEN_CAP")), 0)
+    threshold = min(0.99, max(0.3, _float(stored.get("escalate_below", get_settings().escalate_below), DEFAULT_THRESHOLD)))
+    cap = _int(stored.get("token_cap", get_settings().token_cap), 0)
     return Plan(strategy, mode, engine, models, threshold, cap, has_llm, tuple(notes))
 
 

@@ -20,11 +20,11 @@ import os
 import base64
 from google import genai
 import datetime
-from cloud_storage import upload_chart_to_cloudinary
-from dotenv import load_dotenv
-load_dotenv()
+from app.cloudinary import upload_chart_to_cloudinary_async as upload_chart_to_cloudinary
+from app.core.config import get_settings  # noqa: E402  (importing config loads .env once; real environment variables win)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s", datefmt="%H:%M:%S")
+from app.core.logging_setup import configure_logging  # noqa: E402
+configure_logging()
 logger = logging.getLogger("quant.technical_mcp.server_mcp")
 
 # Initialize FastMCP server
@@ -828,7 +828,7 @@ async def get_chart_summary(file_path:str) -> dict:
                         "5) Give confidence level and one-sentence non-technical takeaway."
                 )
 
-                api_key = os.getenv("GOOGLE_API_KEY")
+                api_key = get_settings().google_api_key
                 if not api_key:
                         return {
                                 "success": False,
@@ -1416,4 +1416,6 @@ if __name__ == "__main__":
                 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
         logger.info("Launching TradingView MCP Server...")
-        technicalanalysis_server.run(transport="streamable-http", port=8566)
+        from app.services import mcp_registry
+        _srv = mcp_registry.server("technical")    # address and port from configuration (MCP_TECHNICAL_*)
+        technicalanalysis_server.run(transport="streamable-http", host=_srv["bind"], port=_srv["port"])

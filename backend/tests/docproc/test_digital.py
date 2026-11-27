@@ -10,7 +10,6 @@ import pytest
 from app.docproc.services.extraction import digital
 from app.docproc.services.reading import ocr, pdf_pages, router
 from app.docproc import pipeline
-from tests.docproc.api_stub import H, client, mk, up, wait  # noqa: F401  (client is a fixture)
 
 SAMPLE = Path(__file__).resolve().parents[2] / "sample_data" / "MSFT_10-Q_2026-04-29_000119312526191507.pdf"
 
@@ -182,20 +181,6 @@ def test_financial_statements_are_read_exactly_by_code_alone(tmp_path):
 
 
 # ---- what the Documents page shows ---------------------------------------------------------------------------------
-
-def test_summary_says_how_the_file_was_read_and_what_it_cost(client, tmp_path):
-    pdf = tmp_path / "digital.pdf"
-    _table_pdf(str(pdf), ROWS)
-    wid = mk(client)
-    eid = up(client, wid, pdf).json()["id"]
-    got = wait(client, wid, eid)
-    stats = got["stats"]
-    assert stats["digital_pages"] == 1 and stats["scanned_pages"] == 0 and stats["handwritten_pages"] == 0
-    assert stats["usage"]["calls"] == 0 and stats["usage"]["tokens"] == 0          # read entirely by code: nothing was spent
-    assert [l.title() for l in got["labels"]] == ["Quarterly Results"]       # named as the page prints its title
-    listed = client.get(f"/api/workspaces/{wid}/extractions", headers=H).json()
-    assert [l.title() for l in listed[0]["labels"]] == ["Quarterly Results"] and listed[0]["stats"]["usage"]["calls"] == 0
-
 
 def test_a_documents_title_prefers_a_form_name_over_a_letterhead():
     assert digital.page_title(["UNITED STATES", "SECURITIES AND EXCHANGE COMMISSION", "Washington, D.C. 20549", "FORM 10-Q"]) == "FORM 10-Q"

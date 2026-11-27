@@ -12,12 +12,11 @@ so the browser sees the identical stream either way. If the browser disconnects,
 is cancelled.
 
 When no interactive worker is running (e.g. a local dev run of the API alone), the routes keep running the chat in-process,
-exactly as before. CHAT_STREAM_MODE = auto (default) | worker | inline overrides that choice.
+exactly as before. CHAT_STREAM_MODE = auto (default) | worker | inline overrides that choice (app/core/config.py).
 """
 import asyncio
 import json
 import logging
-import os
 import uuid
 from typing import Optional
 
@@ -29,12 +28,10 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.jobs.queue import QUEUE_INTERACTIVE, get_pool_if_ready
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.jobs.chat_stream")
 
-CHAT_STREAM_MODE = os.getenv("CHAT_STREAM_MODE", "auto").strip().lower()
-# Longest a single streamed chat may run on the worker before it is stopped.
-CHAT_STREAM_TIMEOUT = int(os.getenv("CHAT_STREAM_TIMEOUT_SECONDS", "1800"))
 # How long the relay waits without any event before sending a keepalive and checking the job is still alive.
 _IDLE_SECONDS = 15
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
@@ -87,19 +84,20 @@ async def _run_chat_stream(ctx, stream_id: str, kind: str, payload_dict: dict, u
 
 
 # Registered on the workers: never retried (a retry would save the user's message twice), result not kept (it was streamed).
-run_chat_stream = func(_run_chat_stream, name="run_chat_stream", timeout=CHAT_STREAM_TIMEOUT, max_tries=1, keep_result=0)
+run_chat_stream = func(_run_chat_stream, name="run_chat_stream", timeout=get_settings().chat_stream_timeout_seconds, max_tries=1, keep_result=0)
 
 
 # ── API side ─────────────────────────────────────────────────────────────────
 
 async def _worker_pool():
     """The Redis pool to hand the chat to, or None to run it in-process."""
-    if CHAT_STREAM_MODE == "inline":
+    mode = get_settings().chat_stream_mode
+    if mode == "inline":
         return None
     pool = get_pool_if_ready()
     if pool is None:
         return None
-    if CHAT_STREAM_MODE == "worker":
+    if mode == "worker":
         return pool
     try:
         # Workers refresh this key every few seconds (WorkerSettings.health_check_interval); it expires if none is running.

@@ -1,166 +1,24 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/alex2yang97-yahoo-finance-mcp-badge.png)](https://mseep.ai/app/alex2yang97-yahoo-finance-mcp)
+# Stock information MCP server (Yahoo Finance)
 
-# Yahoo Finance MCP Server
+The tools behind the quant system's **stock information** agent: prices, history, news, statements, holders, options, recommendations, targets and projections from Yahoo Finance (via `yfinance`, about 15 minutes delayed).
 
-<div align="right">
-  <a href="README.md">English</a> | <a href="README.zh.md">中文</a>
-</div>
+Based on [Alex2Yang97/yahoo-finance-mcp](https://github.com/Alex2Yang97/yahoo-finance-mcp) (MIT, see `LICENSE`), extended for this app: P/E ratios, target price, news sentiment and five-year projection tools; the app's logging and configuration; and every tool runs in a thread pool so one slow Yahoo request never holds up other users.
 
-This is a Model Context Protocol (MCP) server that provides comprehensive financial data from Yahoo Finance. It allows you to retrieve detailed information about stocks, including historical prices, company information, financial statements, options data, and market news.
+## Running
 
-[![smithery badge](https://smithery.ai/badge/@Alex2Yang97/yahoo-finance-mcp)](https://smithery.ai/server/@Alex2Yang97/yahoo-finance-mcp)
-
-## Demo
-
-![MCP Demo](assets/demo.gif)
-
-## MCP Tools
-
-The server exposes the following tools through the Model Context Protocol:
-
-### Stock Information
-
-| Tool | Description |
-|------|-------------|
-| `get_historical_stock_prices` | Get historical OHLCV data for a stock with customizable period and interval |
-| `get_stock_info` | Get comprehensive stock data including price, metrics, and company details |
-| `get_yahoo_finance_news` | Get latest news articles for a stock |
-| `get_stock_actions` | Get stock dividends and splits history |
-
-### Financial Statements
-
-| Tool | Description |
-|------|-------------|
-| `get_financial_statement` | Get income statement, balance sheet, or cash flow statement (annual/quarterly) |
-| `get_holder_info` | Get major holders, institutional holders, mutual funds, or insider transactions |
-
-### Options Data
-
-| Tool | Description |
-|------|-------------|
-| `get_option_expiration_dates` | Get available options expiration dates |
-| `get_option_chain` | Get options chain for a specific expiration date and type (calls/puts) |
-
-### Analyst Information
-
-| Tool | Description |
-|------|-------------|
-| `get_recommendations` | Get analyst recommendations or upgrades/downgrades history |
-
-## Real-World Use Cases
-
-With this MCP server, you can use Claude to:
-
-### Stock Analysis
-
-- **Price Analysis**: "Show me the historical stock prices for AAPL over the last 6 months with daily intervals."
-- **Financial Health**: "Get the quarterly balance sheet for Microsoft."
-- **Performance Metrics**: "What are the key financial metrics for Tesla from the stock info?"
-- **Trend Analysis**: "Compare the quarterly income statements of Amazon and Google."
-- **Cash Flow Analysis**: "Show me the annual cash flow statement for NVIDIA."
-
-### Market Research
-
-- **News Analysis**: "Get the latest news articles about Meta Platforms."
-- **Institutional Activity**: "Show me the institutional holders of Apple stock."
-- **Insider Trading**: "What are the recent insider transactions for Tesla?"
-- **Options Analysis**: "Get the options chain for SPY with expiration date 2024-06-21 for calls."
-- **Analyst Coverage**: "What are the analyst recommendations for Amazon over the last 3 months?"
-
-### Investment Research
-
-- "Create a comprehensive analysis of Microsoft's financial health using their latest quarterly financial statements."
-- "Compare the dividend history and stock splits of Coca-Cola and PepsiCo."
-- "Analyze the institutional ownership changes in Tesla over the past year."
-- "Generate a report on the options market activity for Apple stock with expiration in 30 days."
-- "Summarize the latest analyst upgrades and downgrades in the tech sector over the last 6 months."
-
-## Requirements
-
-- Python 3.11 or higher
-- Dependencies as listed in `pyproject.toml`, including:
-  - mcp
-  - yfinance
-  - pandas
-  - pydantic
-  - and other packages for data processing
-
-## Setup
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/Alex2Yang97/yahoo-finance-mcp.git
-   cd yahoo-finance-mcp
-   ```
-
-2. Create and activate a virtual environment and install dependencies:
-   ```bash
-   uv venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   uv pip install -e .
-   ```
-
-## Usage
-
-### Development Mode
-
-You can test the server with MCP Inspector by running:
+Started with the other MCP servers by `scripts/start_mcp_servers.sh` or, in Docker, by the API container. By hand, from this folder with `PYTHONPATH` pointing at `backend/`:
 
 ```bash
-uv run server.py
+PYTHONPATH=../.. python server.py        # streamable HTTP on 127.0.0.1:8565, path /mcp
 ```
 
-This will start the server and allow you to test the available tools.
+| Setting | Default | Meaning |
+|---|---|---|
+| `MCP_STOCK_INFO_URL` | `http://127.0.0.1:8565/mcp` | Where the agents find this server |
+| `MCP_STOCK_INFO_BIND` | `127.0.0.1` | Address it listens on (it has no login of its own; keep it on loopback or a private network) |
+| `MCP_STOCK_INFO_ENABLED` | `true` | Whether the agents use it |
+| `MCP_TOOL_THREADS` | `32` | Concurrent Yahoo calls |
 
-### Integration with Claude for Desktop
+## Tools
 
-To integrate this server with Claude for Desktop:
-
-1. Install Claude for Desktop to your local machine.
-2. Install VS Code to your local machine. Then run the following command to open the `claude_desktop_config.json` file:
-   - MacOS: `code ~/Library/Application\ Support/Claude/claude_desktop_config.json`
-   - Windows: `code $env:AppData\Claude\claude_desktop_config.json`
-
-3. Edit the Claude for Desktop config file, located at:
-   - macOS: 
-     ```json
-     {
-       "mcpServers": {
-         "yfinance": {
-           "command": "uv",
-           "args": [
-             "--directory",
-             "/ABSOLUTE/PATH/TO/PARENT/FOLDER/yahoo-finance-mcp",
-             "run",
-             "server.py"
-           ]
-         }
-       }
-     }
-     ```
-   - Windows:
-     ```json
-     {
-       "mcpServers": {
-         "yfinance": {
-           "command": "uv",
-           "args": [
-             "--directory",
-             "C:\\ABSOLUTE\\PATH\\TO\\PARENT\\FOLDER\\yahoo-finance-mcp",
-             "run",
-             "server.py"
-           ]
-         }
-       }
-     }
-     ```
-
-   - **Note**: You may need to put the full path to the uv executable in the command field. You can get this by running `which uv` on MacOS/Linux or `where uv` on Windows.
-
-4. Restart Claude for Desktop
-
-## License
-
-MIT
-
-
+`get_historical_stock_prices` · `get_stock_info` · `get_yahoo_finance_news` · `get_stock_actions` · `get_financial_statement` · `get_holder_info` · `get_option_expiration_dates` · `get_option_chain` · `get_recommendations` · `get_target_price` · `get_news_sentiment_and_price_prediction` · `get_stock_5_year_projection` · `get_pe_ratios`

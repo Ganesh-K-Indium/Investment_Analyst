@@ -1,5 +1,3 @@
-import sys
-from pathlib import Path
 
 from langchain_core.documents import Document  # noqa: E402
 

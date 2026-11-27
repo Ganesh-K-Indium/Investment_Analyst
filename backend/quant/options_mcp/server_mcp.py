@@ -8,13 +8,12 @@ import asyncio
 import traceback
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastmcp import FastMCP
 
 from analytics import OptionsAnalytics
 from visualization import build_oi_chart
+import app.core.config  # noqa: F401,E402  (loads .env once; real environment variables win)
 
-load_dotenv()
 
 options_server = FastMCP(
     "options_intelligence",

@@ -1,7 +1,6 @@
 import asyncio
 import functools
 import inspect
-import os
 from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
@@ -11,8 +10,10 @@ import yfinance as yf
 from textblob import TextBlob
 from datetime import datetime
 from fastmcp import FastMCP
+from app.core.config import get_settings
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s", datefmt="%H:%M:%S")
+from app.core.logging_setup import configure_logging  # noqa: E402
+configure_logging()
 logger = logging.getLogger("quant.yahoo_finance_mcp.server")
 
 # Define an enum for the type of financial statement
@@ -83,7 +84,7 @@ def _off_loop(fn):
 
 
 # Own pool, sized for many concurrent users: the loop's default pool is only CPUs + 4 threads.
-_TOOL_THREADS = ThreadPoolExecutor(max_workers=int(os.getenv("MCP_TOOL_THREADS", "32")), thread_name_prefix="yfinance-tool")
+_TOOL_THREADS = ThreadPoolExecutor(max_workers=get_settings().mcp_tool_threads, thread_name_prefix="yfinance-tool")
 
 @yfinance_server.tool(
     name="get_historical_stock_prices",
@@ -664,4 +665,6 @@ async def get_pe_ratios(
 
 if __name__ == "__main__":
     logger.info("Starting Yahoo Finance MCP server...")
-    yfinance_server.run(transport="streamable-http", port=8565)
+    from app.services import mcp_registry
+    _srv = mcp_registry.server("stock_info")       # address and port from configuration (MCP_STOCK_INFO_*)
+    yfinance_server.run(transport="streamable-http", host=_srv["bind"], port=_srv["port"])

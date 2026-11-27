@@ -13,6 +13,7 @@ import os
 import re
 import time
 from typing import Tuple
+from app.core.config import get_settings
 
 
 class AuthError(ValueError):
@@ -23,10 +24,11 @@ def _secret() -> bytes:
     """Shared by the API and the MCP server processes. Set MCP_SHARED_SECRET (or JWT_SECRET_KEY) for any real deployment; for local
     development a random secret is created once in data/.mcp_secret, because the API's own JWT secret is random per process and
     the MCP servers are separate processes that must agree with it."""
-    s = os.getenv("MCP_SHARED_SECRET") or os.getenv("JWT_SECRET_KEY")
+    cfg = get_settings()
+    s = cfg.mcp_shared_secret or cfg.jwt_secret_key
     if s:
         return s.encode()
-    if os.getenv("APP_ENV", "development") == "production":
+    if cfg.is_production:
         raise RuntimeError("MCP_SHARED_SECRET (or JWT_SECRET_KEY) must be set when APP_ENV=production.")
     from app.core.paths import DATA_DIR as root
     f = root / ".mcp_secret"

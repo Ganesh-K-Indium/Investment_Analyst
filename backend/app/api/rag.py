@@ -31,6 +31,7 @@ import uuid
 import json
 import datetime
 import os
+from app.core.config import get_settings
 
 logger = logging.getLogger("api.rag")
 router = APIRouter(tags=["RAG"])
@@ -38,7 +39,7 @@ router = APIRouter(tags=["RAG"])
 # Debug-only: dump full response payloads to output/json/ on every /ask or
 # /compare call. Off by default — was previously unconditional, growing
 # output/json/ without bound on every request in any environment.
-_SAVE_DEBUG_RESPONSES = os.getenv("SAVE_DEBUG_RESPONSES", "false").lower() == "true"
+_SAVE_DEBUG_RESPONSES = get_settings().save_debug_responses
 
 
 def _maybe_save_debug_response(response_data: dict, prefix: str) -> None:
@@ -885,7 +886,7 @@ async def alpha_core(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/health", response_model=HealthStatusResponse)
+@router.get("/rag/health", response_model=HealthStatusResponse)
 async def health_check():
     """
     Health check for RAG system.

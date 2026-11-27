@@ -13,19 +13,14 @@ supervisor once per worker process, via the same AgentBundle the API process
 uses) and the same job functions — only queue_name and max_jobs differ.
 """
 import logging
-import os
 
-from dotenv import load_dotenv
-load_dotenv(override=True)
+from app.core.config import get_settings, validate_on_startup
+from app.core.logging_setup import configure_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
+configure_logging()
 logger = logging.getLogger("app.worker")
 
-from app.database.connection import init_db
+from app.database.connection import init_db  # noqa: E402  (after logging is configured)
 from app.core.agents_init import AgentBundle
 from app.jobs.queue import redis_settings, QUEUE_INTERACTIVE, QUEUE_BATCH
 from app.jobs.rag_jobs import run_rag_ask, run_rag_compare, run_rag_alpha
@@ -38,6 +33,7 @@ import app.api.quant as quant_router_module
 
 async def startup(ctx):
     logger.info("Worker starting up — initializing database + agents...")
+    validate_on_startup()
     configure_default_executor()
     init_db()
     bundle = await AgentBundle().build()
@@ -66,8 +62,8 @@ class InteractiveWorkerSettings:
     on_shutdown = shutdown
     # Concurrent jobs per worker process — includes streamed chats (app/jobs/chat_stream.py). Run more worker processes
     # (docker compose up --scale worker-interactive=N) to go beyond what one process handles comfortably.
-    max_jobs = int(os.getenv("WORKER_INTERACTIVE_MAX_JOBS", "30"))  # reserved concurrency — never queued behind batch work
-    job_timeout = int(os.getenv("WORKER_INTERACTIVE_JOB_TIMEOUT", "1800"))  # arq's default of 5 min cuts off long answers
+    max_jobs = get_settings().worker_interactive_max_jobs  # reserved concurrency — never queued behind batch work
+    job_timeout = get_settings().worker_interactive_job_timeout  # arq's default of 5 min cuts off long answers
     # The API checks this key to decide whether to hand streamed chats to a worker; refreshed every few seconds so it
     # disappears quickly when no worker is running (the API then runs chats in-process).
     health_check_interval = 5
@@ -80,6 +76,6 @@ class BatchWorkerSettings:
     redis_settings = redis_settings()
     on_startup = startup
     on_shutdown = shutdown
-    max_jobs = int(os.getenv("WORKER_BATCH_MAX_JOBS", "5"))
-    job_timeout = int(os.getenv("WORKER_BATCH_JOB_TIMEOUT", "7200"))  # multi-ticker alpha runs can take well over 5 min
+    max_jobs = get_settings().worker_batch_max_jobs
+    job_timeout = get_settings().worker_batch_job_timeout  # multi-ticker alpha runs can take well over 5 min
     health_check_interval = 30

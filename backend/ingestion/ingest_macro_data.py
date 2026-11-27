@@ -4,7 +4,6 @@ Fetches macroeconomic indicators from the FRED API and stores them as local CSVs
 Designed to run standalone (cron/manual) or be imported by the FastAPI startup hook.
 """
 import asyncio
-import os
 import json
 import logging
 import datetime
@@ -17,6 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 from app.core.paths import MACRO_DIR
+from app.core.config import get_settings
 
 DATA_DIR = MACRO_DIR
 METADATA_FILE = DATA_DIR / "metadata.json"
@@ -58,11 +58,7 @@ BLS_SERIES = {
 
 def _get_api_key() -> str:
     """Resolve the FRED API key at call time (not import time)."""
-    key = os.getenv("FRED_API_KEY")
-    if not key:
-        from dotenv import load_dotenv
-        load_dotenv(override=True)
-        key = os.getenv("FRED_API_KEY")
+    key = get_settings().fred_api_key
     if not key:
         raise ValueError(
             "FRED_API_KEY is not set. Add it to your .env file or environment."
@@ -138,12 +134,7 @@ def _save_indicator_csv(indicator: str, df: pd.DataFrame) -> None:
 def _get_bls_api_key() -> Optional[str]:
     """Resolve the BLS API registration key, if configured. BLS works unregistered too
     (lower daily query limit and 10-year lookback cap), so this is optional."""
-    key = os.getenv("BLS_API_KEY")
-    if not key:
-        from dotenv import load_dotenv
-        load_dotenv(override=True)
-        key = os.getenv("BLS_API_KEY")
-    return key or None
+    return get_settings().bls_api_key or None
 
 
 async def fetch_bls_series_batch(client: httpx.AsyncClient, series_ids: list, api_key: Optional[str] = None, years: int = 5) -> dict:

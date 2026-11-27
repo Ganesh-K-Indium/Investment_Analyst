@@ -4,9 +4,9 @@ Resolution, last wins:  environment  <  workspace-saved (admin)  <  the user's o
 values for the user once per request and makes them current here; code that builds a model asks `get(name)`.
 """
 import contextvars
-import os
 from contextlib import contextmanager
 from typing import Dict, Iterator, Optional
+from app.core.config import get_settings
 
 _current: contextvars.ContextVar[Optional[Dict[str, str]]] = contextvars.ContextVar("llm_credentials", default=None)
 
@@ -15,10 +15,7 @@ def get(name: str) -> str:
     saved = (_current.get() or {}).get(name)
     if saved:
         return saved.strip()
-    env = (os.getenv(name) or "").strip()
-    if not env and name == "GEMINI_API_KEY":
-        env = (os.getenv("GOOGLE_API_KEY") or "").strip()
-    return env
+    return get_settings().secret(name)
 
 
 @contextmanager

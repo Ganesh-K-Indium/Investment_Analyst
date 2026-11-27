@@ -26,7 +26,7 @@ asyncpg>=0.29.0
 
 # Background job queue (async analysis runs)
 arq>=0.26.0
-redis>=5.0.0
+redis[hiredis]>=5.0.0                 # hiredis: faster Redis protocol parsing for queues and live updates
 
 # LangChain Core & Extensions
 langchain>=0.3.0

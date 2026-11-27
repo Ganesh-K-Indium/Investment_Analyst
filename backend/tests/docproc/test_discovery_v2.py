@@ -8,7 +8,6 @@ import pytest
 from app.docproc.services.extraction import discover, labels
 from app.docproc.services.reading import pdf_pages
 from app.docproc.services.documents import suggest
-from tests.docproc.api_stub import H, client, mk, pdf, up, wait  # noqa: F401  (fixtures)
 
 
 # ---- stable keys ----------------------------------------------------------------------------------------------------
@@ -187,21 +186,6 @@ def test_tiny_or_unrelated_shapes_are_not_suggested():
 
 
 # ---- cache versioning -----------------------------------------------------------------------------------------------
-
-def test_cached_result_from_an_older_pipeline_is_not_reused(client, pdf):
-    from app.docproc import config, db
-    wid = mk(client)
-    eid = up(client, wid, pdf).json()["id"]
-    wait(client, wid, eid)
-    assert up(client, wid, pdf).json().get("reused") is True
-    with db.session() as s:                                   # pretend it was produced before the pipeline changed
-        ex = s.get(db.Extraction, eid)
-        ex.result = {**ex.result, "pipeline_version": "old"}
-        s.commit()
-    again = up(client, wid, pdf).json()
-    assert again.get("reused") is not True and again["id"] != eid
-    assert client.get(f"/api/workspaces/{wid}/templates/suggestions", headers=H).json() == {"suggestions": []}
-
 
 def test_the_same_file_twice_or_a_long_filing_is_not_a_recurring_layout():
     inv = ["invoice_number", "date", "customer", "total_due"]

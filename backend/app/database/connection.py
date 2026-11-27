@@ -8,10 +8,11 @@ from contextlib import asynccontextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from .models import Base
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.database.connection")
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://investment_analyst:investment_analyst@localhost:5432/investment_analyst")
+DATABASE_URL = get_settings().database_url
 
 
 def _to_async_url(url: str) -> str:
@@ -31,17 +32,14 @@ def _to_sync_url(url: str) -> str:
 
 
 # Runtime engine — async, used by every route/service via get_db_session().
-# Pool sized per process. The API and each worker process get their own pool, so with the defaults (10 + 20 overflow = up to 30
-# connections each) the API plus two workers stay under Postgres's default max_connections of 100. Raise DB_POOL_SIZE /
-# DB_MAX_OVERFLOW together with Postgres's max_connections when adding worker processes. pool_recycle drops connections that
-# idled long enough for a firewall/NAT to have silently cut them.
+# Pool sized per process (see DB_POOL_* in app/core/config.py): the API and each worker process get their own pool.
 engine = create_async_engine(
     _to_async_url(DATABASE_URL),
     pool_pre_ping=True,
-    pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
-    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
-    pool_timeout=int(os.getenv("DB_POOL_TIMEOUT", "30")),
-    pool_recycle=int(os.getenv("DB_POOL_RECYCLE", "1800")),
+    pool_size=get_settings().db_pool_size,
+    max_overflow=get_settings().db_max_overflow,
+    pool_timeout=get_settings().db_pool_timeout,
+    pool_recycle=get_settings().db_pool_recycle,
 )
 
 # Session factory

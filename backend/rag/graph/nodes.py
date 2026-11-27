@@ -6,7 +6,6 @@ import re
 from functools import lru_cache
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from dotenv import load_dotenv
 from langchain_core.documents import Document
 from rag.graph.doc_kinds import is_analyst_note, split_notes
 from langchain_openai import ChatOpenAI
@@ -28,10 +27,8 @@ from app.utils.filing_types import (
     ANNUAL_FILING_TYPES, EVENT_FILING_TYPES, group_filing_types,
     order_filing_types, web_search_form_label,
 )
-
 logger = logging.getLogger("rag.graph.nodes")
 
-load_dotenv()
 
 # Trusted financial data domains for web search
 # Only these domains will be used for financial queries to ensure data quality and reliability
@@ -2377,7 +2374,8 @@ def _save_and_upload_chart(fig, filename_prefix: str, width: int = 800, height: 
         return {"chart_url": None, "chart_filename": filename}
 
     chart_url = None
-    if os.getenv("CLOUDINARY_CLOUD_NAME"):
+    from app.cloudinary import configured as cloudinary_configured
+    if cloudinary_configured():
         try:
             from app.cloudinary import upload_to_cloudinary
             logger.info(f"Uploading {label.lower()} to Cloudinary...")

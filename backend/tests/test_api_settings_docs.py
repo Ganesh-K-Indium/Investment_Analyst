@@ -1,7 +1,6 @@
 """HTTP-level checks of the settings and user-document routers on a throwaway app (sqlite, no Qdrant, no queue)."""
 import asyncio
 import io
-import json
 
 import pytest
 

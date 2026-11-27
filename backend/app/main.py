@@ -1,154 +1,88 @@
 """
-Investment Analyst API - Production-grade FastAPI backend
-Unified platform for portfolio management, document analysis, and stock market analysis
+Investment Analyst API: the FastAPI application.
+
+Process layout (see README "Architecture"):
+    API (this module)        HTTP routes, auth, server-sent events; hands long work to the workers
+    Arq workers              app/worker.py: interactive (chats, quick runs) and batch (multi-ticker ALPHA) queues
+    MCP servers              backend/quant/*_mcp: market-data tools the quant agents call
+    Postgres, Redis, Qdrant  application data and checkpoints, job queues and live updates, vectors
+
+Configuration comes from app/core/config.py (environment, .env, config.yaml); product settings from the Settings screens.
 """
-import os
-import time
+import asyncio
 import logging
-from dotenv import load_dotenv
-load_dotenv(override=True)
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
+from app.core.config import APP_VERSION, get_settings, validate_on_startup
+from app.core.logging_setup import configure_logging
 from app.utils.log_capture import SSELogHandler
-from app.core.paths import MACRO_DIR
 
-# ── Logging setup ────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
-root_logger = logging.getLogger()
-root_logger.addHandler(SSELogHandler())
+configure_logging()
+logging.getLogger().addHandler(SSELogHandler())
 logger = logging.getLogger("api")
 
+from fastapi import FastAPI  # noqa: E402  (logging is configured before the app modules load)
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-class RequestLoggingMiddleware:
-    """
-    Log every request: method, path, status code, and elapsed time.
+import app.api.analysis_tasks as analysis_tasks_module  # noqa: E402
+import app.api.quant as quant_router_module  # noqa: E402
+import app.api.rag as rag_router_module  # noqa: E402
+from app.api.analysis_tasks import router as analysis_tasks_router  # noqa: E402
+from app.api.auth import router as auth_router  # noqa: E402
+from app.api.chats import router as chats_router  # noqa: E402
+from app.api.data_sources import router as data_sources_router  # noqa: E402
+from app.api.documents import router as documents_router  # noqa: E402
+from app.api.edgar import router as edgar_router  # noqa: E402
+from app.api.form4 import router as form4_router  # noqa: E402
+from app.api.integrations import router as integrations_router  # noqa: E402
+from app.api.mcp_servers import router as mcp_servers_router  # noqa: E402
+from app.api.notes import router as notes_router  # noqa: E402
+from app.api.portfolios import router as portfolio_router  # noqa: E402
+from app.api.providers import router as providers_router  # noqa: E402
+from app.api.reading_engines import router as reading_engines_router  # noqa: E402
+from app.api.reports import router as reports_router  # noqa: E402
+from app.api.settings import router as settings_router  # noqa: E402
+from app.api.user_documents import router as user_documents_router  # noqa: E402
+from app.core.agents_init import AgentBundle  # noqa: E402
+from app.core.concurrency import configure_default_executor  # noqa: E402
+from app.core.middleware import RequestLoggingMiddleware  # noqa: E402
+from app.core.paths import MACRO_DIR  # noqa: E402
+from app.database.connection import init_db  # noqa: E402
+from app.jobs.queue import close_arq_pool, get_arq_pool  # noqa: E402
+from app.services.stock_agent import cleanup_stock_agents  # noqa: E402
+from ingestion.ingest_macro_data import run_ingestion  # noqa: E402
 
-    Pure ASGI middleware, deliberately NOT a BaseHTTPMiddleware subclass —
-    BaseHTTPMiddleware relays the response through an internal buffered
-    stream, which silently stalls long-lived StreamingResponse endpoints
-    (the analysis-task SSE streams) until the connection closes instead of
-    flushing each event as it's published. A pure ASGI middleware passes
-    `send` straight through, so streamed chunks reach the client immediately.
-    """
+ROUTERS = [
+    auth_router, reports_router, portfolio_router, rag_router_module.router, integrations_router, quant_router_module.router,
+    chats_router, form4_router, edgar_router, analysis_tasks_router, settings_router, user_documents_router, providers_router,
+    mcp_servers_router, data_sources_router, reading_engines_router, documents_router, notes_router,
+]
 
-    def __init__(self, app):
-        self.app = app
+MACRO_SYNC_SECONDS = 24 * 3600
 
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
 
-        start = time.perf_counter()
-        status_code = 500
+class _State:
+    """Objects built at startup, kept for the health check and shutdown."""
+    agent_bundle: AgentBundle | None = None
+    background: list = []
 
-        async def send_wrapper(message):
-            nonlocal status_code
-            if message["type"] == "http.response.start":
-                status_code = message["status"]
-            await send(message)
 
-        await self.app(scope, receive, send_wrapper)
+state = _State()
 
-        ms = (time.perf_counter() - start) * 1000
-        logger.info(
-            "%-6s %-45s %s  %.0fms",
-            scope.get("method", "?"),
-            scope.get("path", "?"),
-            status_code,
-            ms,
-        )
 
-from app.database.connection import init_db
-from app.core.agents_init import AgentBundle
-from app.api.portfolios import router as portfolio_router
-from app.api.rag import router as rag_router
-from app.api.integrations import router as integrations_router
-from app.api.quant import router as quant_router
-from app.api.chats import router as chats_router
-from app.api.form4 import router as form4_router
-from app.api.edgar import router as edgar_router
-from app.api.auth import router as auth_router
-from app.api.reports import router as reports_router
-from app.api.analysis_tasks import router as analysis_tasks_router
-from app.api.settings import router as settings_router
-from app.api.user_documents import router as user_documents_router
-from app.api.providers import router as providers_router
-from app.api.reading_engines import router as reading_engines_router
-from app.api.documents import router as documents_router
-from app.api.notes import router as notes_router
-import app.api.rag as rag_router_module
-import app.api.quant as quant_router_module
-import app.api.analysis_tasks as analysis_tasks_module
-from app.services.stock_agent import cleanup_stock_agents
-from app.jobs.queue import get_arq_pool, close_arq_pool
-from app.core.concurrency import configure_default_executor
-import asyncio
-from ingestion.ingest_macro_data import run_ingestion
-from pathlib import Path
-
-async def macro_sync_loop():
+async def _macro_sync_loop():
     while True:
-        await asyncio.sleep(86400) # Wait 24 hours
+        await asyncio.sleep(MACRO_SYNC_SECONDS)
         try:
             logger.info("Running scheduled macro data sync...")
             await run_ingestion()
-        except Exception as e:
-            logger.error(f"Scheduled macro sync failed: {e}")
-
-# Initialize FastAPI
-app = FastAPI(
-    title="Investment Analyst API",
-    description="Unified AI-powered investment analysis platform with document Q&A, stock market analysis, portfolio management, and data integrations",
-    version="2.1.0",
-    redirect_slashes=False,
-)
-
-# CORS configuration — locked to explicit origins, required for
-# allow_credentials=True to work at all (browsers reject "*" + credentials
-# together, and refresh-token auth now relies on a credentialed cookie).
-# Set CORS_ALLOWED_ORIGINS as a comma-separated list in production, e.g.
-# "https://app.example.com,https://staging.example.com".
-_default_origins = "http://localhost:5173,http://127.0.0.1:5173"
-_cors_origins = [
-    o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()
-]
-# Vite bumps to 5174, 5175... when 5173 is busy, so by default also accept
-# localhost/127.0.0.1 on ANY port (dev convenience). In production set
-# CORS_ALLOWED_ORIGIN_REGEX="" (empty) to rely on the explicit list only.
-_cors_origin_regex = os.getenv(
-    "CORS_ALLOWED_ORIGIN_REGEX", r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
-) or None
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_origin_regex=_cors_origin_regex,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.add_middleware(RequestLoggingMiddleware)
-
-# Global instances
-agent_bundle: AgentBundle | None = None
-agent = None
-checkpointer = None
-stock_supervisor = None
+        except Exception as e:  # noqa: BLE001 - a failed sync must not stop the loop
+            logger.error("Scheduled macro sync failed: %s", e)
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database, graph, cache, and stock agents on startup"""
-    global agent_bundle, agent, checkpointer, stock_supervisor
-
-    logger.info("=" * 70)
-    logger.info("Starting Investment Analyst API v2.1...")
-    logger.info("=" * 70)
+async def _startup() -> None:
+    cfg = validate_on_startup()
+    logger.info("Starting Investment Analyst API %s (APP_ENV=%s)", APP_VERSION, cfg.app_env)
     configure_default_executor()
 
     logger.info("Initializing database...")
@@ -156,154 +90,143 @@ async def startup_event():
     try:
         from app.database.connection import SessionLocal
         from app.services.user_docs import manager as user_docs_manager
-        async with SessionLocal() as _db:
-            await user_docs_manager.recover_interrupted(_db)
+        async with SessionLocal() as db:
+            await user_docs_manager.recover_interrupted(db)
     except Exception:
         logger.exception("Could not check for interrupted document reads")
 
-    agent_bundle = await AgentBundle().build()
-    agent = agent_bundle.rag_agent
-    checkpointer = agent_bundle.checkpointer
-    stock_supervisor = agent_bundle.stock_supervisor
-
-    rag_router_module.set_agent(agent)
-    quant_router_module.set_stock_supervisor(stock_supervisor)
-    quant_router_module.set_agents_status(agent_bundle.stock_agents_ready)
-    if agent_bundle.stock_agents_ready and stock_supervisor:
+    bundle = await AgentBundle().build()
+    state.agent_bundle = bundle
+    rag_router_module.set_agent(bundle.rag_agent)
+    quant_router_module.set_stock_supervisor(bundle.stock_supervisor)
+    quant_router_module.set_agents_status(bundle.stock_agents_ready)
+    if bundle.stock_agents_ready and bundle.stock_supervisor:
         logger.info("Stock Analysis System ready!")
 
     logger.info("Connecting to job queue (Redis/Arq)...")
-    arq_pool = await get_arq_pool()
-    analysis_tasks_module.set_arq_pool(arq_pool)
+    analysis_tasks_module.set_arq_pool(await get_arq_pool())
 
-    logger.info("Checking Macro Data Initialization...")
-    macro_metadata = MACRO_DIR / "metadata.json"
-    if not macro_metadata.exists():
+    if not (MACRO_DIR / "metadata.json").exists():
         logger.info("Macro data missing. Scheduling background ingestion (non-blocking)...")
-        asyncio.create_task(run_ingestion())
-    else:
-        logger.info("Macro data found.")
-        
-    logger.info("Starting background macro sync task...")
-    asyncio.create_task(macro_sync_loop())
-
-    logger.info("=" * 70)
-    logger.info("Investment Analyst API v2.1 Ready!")
-    logger.info("  Server : http://localhost:8000")
-    logger.info("  Docs   : http://localhost:8000/docs")
-    logger.info("  Routes : /portfolios  /ask  /quant/query  /chats  /integrations  /form4")
-    logger.info("=" * 70)
+        state.background.append(asyncio.create_task(run_ingestion()))
+    state.background.append(asyncio.create_task(_macro_sync_loop()))
+    logger.info("Investment Analyst API %s ready. Docs at /docs", APP_VERSION)
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup resources on shutdown"""
-    global agent_bundle
-
+async def _shutdown() -> None:
     logger.info("Shutting down...")
+    for task in state.background:
+        task.cancel()
     await cleanup_stock_agents()
     await close_arq_pool()
-
-    if agent_bundle:
-        await agent_bundle.close()
-        logger.info("Agent bundle cleaned up")
-
+    if state.agent_bundle:
+        await state.agent_bundle.close()
     logger.info("Shutdown complete")
 
 
-# Include routers FIRST before defining other routes
-app.include_router(auth_router)
-app.include_router(reports_router)
-app.include_router(portfolio_router)
-app.include_router(rag_router)
-app.include_router(integrations_router)
-app.include_router(quant_router)
-app.include_router(chats_router)
-app.include_router(form4_router)
-app.include_router(edgar_router)
-app.include_router(analysis_tasks_router)
-app.include_router(settings_router)
-app.include_router(user_documents_router)
-app.include_router(providers_router)
-from app.api.mcp_servers import router as mcp_servers_router
-app.include_router(mcp_servers_router)
-from app.api.data_sources import router as data_sources_router
-app.include_router(data_sources_router)
-app.include_router(reading_engines_router)
-app.include_router(documents_router)
-app.include_router(notes_router)
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await _startup()
+    try:
+        yield
+    finally:
+        await _shutdown()
 
 
-@app.get("/")
+def create_app() -> FastAPI:
+    cfg = get_settings()
+    application = FastAPI(
+        title="Investment Analyst API",
+        description="AI research for investment teams: SEC filings and your documents, quant agents, traceable answers.",
+        version=APP_VERSION,
+        redirect_slashes=False,
+        lifespan=lifespan,
+    )
+    # Explicit origins (required for allow_credentials: the refresh token is a credentialed cookie). The regex adds localhost
+    # on any port for development; set CORS_ALLOWED_ORIGIN_REGEX empty in production.
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=cfg.cors_origins,
+        allow_origin_regex=cfg.cors_origin_regex,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    application.add_middleware(RequestLoggingMiddleware)
+    for router in ROUTERS:
+        application.include_router(router)
+    application.add_api_route("/", root, methods=["GET"], tags=["Meta"])
+    application.add_api_route("/health", health_check, methods=["GET"], tags=["Meta"])
+    return application
+
+
 async def root():
-    """API root endpoint - returns API information"""
+    """API name, version and where to look next."""
     return {
         "name": "Investment Analyst API",
-        "version": "2.1.0",
-        "description": "Unified AI-powered investment analysis platform",
+        "version": APP_VERSION,
+        "docs": "/docs",
+        "health": "/health",
         "services": {
-            "document_analysis": {
-                "description": "AI-powered document Q&A from financial reports, 10-Ks, earnings calls",
-                "endpoints": ["/ask", "/compare"]
-            },
-            "stock_analysis": {
-                "description": "Real-time stock market data, technical analysis, and research",
-                "endpoints": ["/quant/query", "/quant/health", "/quant/capabilities"]
-            },
-            "portfolio_management": {
-                "description": "Create and manage investment portfolios with session tracking",
-                "endpoints": ["/portfolios", "/portfolios/sessions"]
-            },
-            "chat_history": {
-                "description": "Manage chat history across all agents, export conversations, and clear history",
-                "endpoints": ["/chats/user/{user_id}/sessions", "/chats/session/{session_id}", "/chats/session/{session_id}/export"]
-            },
-            "data_integrations": {
-                "description": "Connect to external data sources (S3, SharePoint, Google Drive, etc.)",
-                "endpoints": ["/integrations"]
-            }
+            "document_analysis": ["/ask", "/ask/stream", "/compare", "/alpha"],
+            "stock_analysis": ["/quant/query", "/quant/query/stream", "/quant/health", "/quant/capabilities"],
+            "background_runs": ["/analysis-tasks"],
+            "portfolios": ["/portfolios"],
+            "chat_history": ["/chats"],
+            "your_documents": ["/user-documents", "/notes", "/documents"],
+            "integrations": ["/integrations", "/data-sources", "/mcp-servers", "/providers"],
+            "settings": ["/settings"],
         },
-        "quick_start": {
-            "api_docs": "http://localhost:8000/docs",
-            "health_check": "http://localhost:8000/health",
-            "docs": "/docs"
-        }
     }
 
 
-@app.get("/health")
+async def _check(coro, timeout: float = 2.0) -> str:
+    try:
+        await asyncio.wait_for(coro, timeout)
+        return "connected"
+    except Exception as e:  # noqa: BLE001 - reported, not raised
+        return f"unavailable: {type(e).__name__}"
+
+
+async def _ping_db():
+    from sqlalchemy import text
+    from app.database.connection import engine
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
+
+async def _ping_redis():
+    pool = analysis_tasks_module.get_arq_pool_if_ready()
+    if pool is None:
+        raise RuntimeError("not connected")
+    await pool.ping()
+
+
 async def health_check():
-    """Health check endpoint for all services"""
+    """Liveness and dependencies: the database and Redis are actually contacted. `status` is "healthy" only when everything is up."""
+    bundle = state.agent_bundle
+    agent = bundle.rag_agent if bundle else None
+    supervisor = bundle.stock_supervisor if bundle else None
+    database, redis = await asyncio.gather(_check(_ping_db()), _check(_ping_redis()))
+    healthy = database == "connected" and redis == "connected" and agent is not None
     return {
-        "status": "healthy",
+        "status": "healthy" if healthy else "degraded",
         "api": "Investment Analyst API",
-        "version": "2.1.0",
+        "version": APP_VERSION,
         "services": {
-            "document_analysis": {
-                "status": "operational" if agent is not None else "unavailable",
-                "graph_initialized": agent is not None
-            },
+            "document_analysis": {"status": "operational" if agent is not None else "unavailable", "graph_initialized": agent is not None},
             "stock_analysis": {
-                "status": "operational" if stock_supervisor is not None else "unavailable",
-                "supervisor_initialized": stock_supervisor is not None,
-                "details": "See /quant/health for detailed MCP server status"
+                "status": "operational" if supervisor is not None else "unavailable",
+                "supervisor_initialized": supervisor is not None,
+                "details": "See /quant/health for detailed MCP server status",
             },
-            "portfolio_management": {
-                "status": "operational",
-                "database": "connected"
-            },
-            "chat_history": {
-                "status": "operational",
-                "database": "connected",
-                "supports_rag": True,
-                "supports_quant": True
-            },
-            "data_integrations": {
-                "status": "operational"
-            }
         },
         "infrastructure": {
-            "database": "connected",
-            "checkpointer": "active" if checkpointer is not None else "unavailable"
-        }
+            "database": database,
+            "redis": redis,
+            "checkpointer": "active" if bundle and bundle.checkpointer is not None else "unavailable",
+        },
     }
+
+
+app = create_app()

@@ -12,14 +12,14 @@ Any failure (model not downloadable, network down) keeps the retrieval order and
 break an answer.
 """
 import logging
-import os
 import threading
 from typing import Any, List, Optional, Sequence, Tuple
+from app.core.config import get_settings
 
 logger = logging.getLogger("rag.retrieval.rerank")
 
-LOCAL_MODEL = os.getenv("RERANK_LOCAL_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2")
-COHERE_MODEL = os.getenv("RERANK_COHERE_MODEL", "rerank-english-v3.0")
+LOCAL_MODEL = get_settings().rerank_local_model
+COHERE_MODEL = get_settings().rerank_cohere_model
 MAX_CHARS = 2000                                    # a cross-encoder reads a few hundred tokens; the rest of a chunk adds cost, not signal
 
 _local = None
@@ -51,7 +51,7 @@ def _scores_local(query: str, texts: Sequence[str]) -> Optional[List[float]]:
 
 
 def _scores_cohere(query: str, texts: Sequence[str]) -> Optional[List[float]]:
-    key = os.getenv("COHERE_API_KEY")
+    key = get_settings().cohere_api_key
     if not key:
         logger.warning("COHERE_API_KEY not set; keeping retrieval order")
         return None

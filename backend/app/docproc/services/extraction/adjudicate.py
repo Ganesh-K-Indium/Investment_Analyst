@@ -17,12 +17,12 @@ Never run without a model: with an injected reader (tests) or no model configure
 """
 import json
 import logging
-import os
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.docproc import config
 from app.docproc.services.extraction import normalize as N
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.services.adjudicate")
 
@@ -46,7 +46,7 @@ Item = Tuple[str, Cell, str]  # (id, cell, comparison type)
 
 
 def enabled() -> bool:
-    return os.getenv("ADJUDICATE", "1").lower() not in ("0", "false", "no")
+    return get_settings().adjudicate
 
 
 def candidates(cell: Cell) -> List[str]:

@@ -1,19 +1,16 @@
-import os
 import logging
-from dotenv import load_dotenv
+from app.core.config import get_settings
 
-# Load environment variables
-load_dotenv()
 
 # General Settings
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_LEVEL = get_settings().log_level
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 # SEC EDGAR Settings
-SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "Indium Capital contact@indium.com")
+SEC_USER_AGENT = get_settings().sec_user_agent
 SEC_REQUEST_RATE_LIMIT = 10  # Requests per second
 
 # SEC Configuration

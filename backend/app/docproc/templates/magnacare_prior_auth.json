@@ -1,0 +1,371 @@
+{
+  "template_id": "MC-ProviderPriorAuthForm-06.2025",
+  "doc_type": "prior_auth_form",
+  "title": "MagnaCare Provider Prior Authorization Request Form",
+  "sections": [
+    {
+      "id": "review",
+      "header": null,
+      "fields": [
+        {
+          "key": "review_type",
+          "label": "Review type",
+          "type": "enum",
+          "required": true,
+          "options": [
+            "ROUTINE",
+            "URGENT",
+            "TRANSPLANT"
+          ]
+        },
+        {
+          "key": "transition_of_care",
+          "label": "Check here if this request is related to Transition of Care or Continuity of Care.",
+          "type": "checkbox"
+        }
+      ]
+    },
+    {
+      "id": "member",
+      "header": "MEMBER INFORMATION",
+      "fields": [
+        {
+          "key": "member.request_date",
+          "label": "Request Date",
+          "type": "date"
+        },
+        {
+          "key": "member.member_id",
+          "label": "Member ID #",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "member.last_name",
+          "label": "Last Name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "member.first_name",
+          "label": "First Name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "member.dob",
+          "label": "Date of Birth",
+          "type": "date",
+          "required": true
+        },
+        {
+          "key": "member.phone",
+          "label": "Phone #",
+          "type": "phone"
+        },
+        {
+          "key": "member.street",
+          "label": "Street Address",
+          "type": "text"
+        },
+        {
+          "key": "member.city",
+          "label": "City",
+          "type": "text"
+        },
+        {
+          "key": "member.state",
+          "label": "State",
+          "type": "state"
+        },
+        {
+          "key": "member.zip",
+          "label": "Zip",
+          "type": "zip"
+        },
+        {
+          "key": "member.setting",
+          "label": "Inpatient / Outpatient",
+          "type": "enum",
+          "required": true,
+          "options": [
+            "Inpatient",
+            "Outpatient"
+          ]
+        },
+        {
+          "key": "member.place_of_service",
+          "label": "Place of Service",
+          "type": "multi_enum",
+          "options": [
+            "Office",
+            "Home",
+            "Inpatient Hospital",
+            "Outpatient Hospital",
+            "ASC",
+            "SNF",
+            "IP Rehab",
+            "Infusion Center",
+            "Free Standing Radiology Facility",
+            "Residential BH Treatment Facility",
+            "LTAC"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ordering_provider",
+      "header": "ORDERING/SERVICE PROVIDER INFORMATION",
+      "fields": [
+        {
+          "key": "ordering_provider.first_name",
+          "label": "First Name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "ordering_provider.last_name",
+          "label": "Last Name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "ordering_provider.tax_id",
+          "label": "Tax ID",
+          "type": "tax_id",
+          "required": true
+        },
+        {
+          "key": "ordering_provider.npi",
+          "label": "NPI",
+          "type": "npi",
+          "required": true
+        },
+        {
+          "key": "ordering_provider.phone",
+          "label": "Phone #",
+          "type": "phone"
+        },
+        {
+          "key": "ordering_provider.fax",
+          "label": "Fax #",
+          "type": "phone",
+          "required": true
+        },
+        {
+          "key": "ordering_provider.street",
+          "label": "Street Address",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "ordering_provider.city",
+          "label": "City",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "ordering_provider.state",
+          "label": "State",
+          "type": "state",
+          "required": true
+        },
+        {
+          "key": "ordering_provider.zip",
+          "label": "Zip",
+          "type": "zip",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "facility",
+      "header": "FACILITY INFORMATION",
+      "fields": [
+        {
+          "key": "facility.name",
+          "label": "Facility Name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "facility.tax_id",
+          "label": "Tax ID",
+          "type": "tax_id",
+          "required": true
+        },
+        {
+          "key": "facility.npi",
+          "label": "NPI",
+          "type": "npi",
+          "required": true
+        },
+        {
+          "key": "facility.phone",
+          "label": "Phone #",
+          "type": "phone"
+        },
+        {
+          "key": "facility.fax",
+          "label": "Fax #",
+          "type": "phone",
+          "required": true
+        },
+        {
+          "key": "facility.street",
+          "label": "Street Address",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "facility.city",
+          "label": "City",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "facility.state",
+          "label": "State",
+          "type": "state",
+          "required": true
+        },
+        {
+          "key": "facility.zip",
+          "label": "Zip",
+          "type": "zip",
+          "required": true
+        },
+        {
+          "key": "clinical.dx_code_1",
+          "label": "DX Code (1)",
+          "type": "icd10"
+        },
+        {
+          "key": "clinical.dx_code_2",
+          "label": "DX Code (2)",
+          "type": "icd10"
+        },
+        {
+          "key": "clinical.dx_code_3",
+          "label": "DX Code (3)",
+          "type": "icd10"
+        },
+        {
+          "key": "clinical.additional_information",
+          "label": "Additional Information",
+          "type": "text"
+        },
+        {
+          "key": "clinical.start_date_of_service",
+          "label": "Start Date of Service (mm/dd/yyyy)",
+          "type": "date"
+        },
+        {
+          "key": "clinical.end_date_of_service",
+          "label": "End Date of Service (mm/dd/yyyy)",
+          "type": "date"
+        }
+      ]
+    },
+    {
+      "id": "cpt",
+      "header": "CPT/HCPCS",
+      "fields": []
+    },
+    {
+      "id": "other",
+      "header": null,
+      "fields": [
+        {
+          "key": "other.update_to_current_auth",
+          "label": "Update to Current Auth #",
+          "type": "text"
+        },
+        {
+          "key": "other.number_of_visits",
+          "label": "# of Visits",
+          "type": "text"
+        },
+        {
+          "key": "other.requested_extension_date",
+          "label": "Requested Extension Date",
+          "type": "date"
+        },
+        {
+          "key": "other.work_auto_other_insurance",
+          "label": "Work/Auto/Other Insurance",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "key": "cpt",
+      "header": "CPT/HCPCS",
+      "max_rows": 4,
+      "columns": [
+        {
+          "key": "qty",
+          "label": "QTY",
+          "required": true
+        },
+        {
+          "key": "code",
+          "label": "CPT/HCPCS",
+          "required": true,
+          "pattern": "[0-9]{4}[0-9A-Z]|[A-V][0-9]{4}"
+        },
+        {
+          "key": "description",
+          "label": "Description of Service"
+        },
+        {
+          "key": "charge",
+          "label": "U&C Charge"
+        }
+      ],
+      "required": true
+    }
+  ],
+  "single_page": true,
+  "canonical": {
+    "person.name": {
+      "kind": "name",
+      "label": "Name",
+      "fields": [
+        "member.first_name",
+        "member.last_name"
+      ]
+    },
+    "person.dob": {
+      "kind": "date",
+      "label": "Date of birth",
+      "fields": [
+        "member.dob"
+      ]
+    },
+    "primary_code": {
+      "kind": "mentioned",
+      "label": "Primary diagnosis code",
+      "fields": [
+        "clinical.dx_code_1"
+      ]
+    },
+    "line_codes": {
+      "kind": "set",
+      "label": "Service codes",
+      "table": "cpt",
+      "column": "code",
+      "pattern": "[A-Z]?\\d{4}[0-9A-Z]?"
+    }
+  },
+  "rules": [
+    {
+      "type": "date_order",
+      "start": "clinical.start_date_of_service",
+      "end": "clinical.end_date_of_service",
+      "label": "Dates of service"
+    }
+  ]
+}

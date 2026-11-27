@@ -8,17 +8,14 @@ threads would only be waiting on I/O. A larger pool lets I/O-bound steps from ma
 """
 import asyncio
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.core.concurrency")
 
-DEFAULT_THREADPOOL_WORKERS = 64
-
-
 def configure_default_executor() -> int:
     """Install a larger default thread pool on the running event loop (call once at startup). Returns its size."""
-    workers = int(os.getenv("THREADPOOL_WORKERS", str(DEFAULT_THREADPOOL_WORKERS)))
+    workers = get_settings().threadpool_workers
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=workers, thread_name_prefix="io"))
     logger.info("Default thread pool: %d workers", workers)
     return workers

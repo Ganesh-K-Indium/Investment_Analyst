@@ -1,12 +1,12 @@
 """
 Every MCP server the quant agents use, in one place: URL, port, enabled flag, auth.
 
-Override per server with env vars (MCP_<KEY>_URL, MCP_<KEY>_ENABLED, MCP_<KEY>_BIND) or the shared MCP_HOST for all of them.
+Override per server with MCP_<KEY>_URL, MCP_<KEY>_ENABLED, MCP_<KEY>_BIND, or MCP_HOST for all of them (app/core/config.py).
 Nothing else in the app hardcodes a port: stock_agent.py, the health check, the agents and the start script all read this.
 """
-import os
 from typing import Any, Dict, List
 from urllib.parse import urlparse
+from app.core.config import get_settings
 
 # key: (label, port, agent that needs it)
 _DEFAULTS = {
@@ -20,13 +20,12 @@ _DEFAULTS = {
 
 def server(key: str) -> Dict[str, Any]:
     label, port, agent = _DEFAULTS[key]
-    env = f"MCP_{key.upper()}"
-    host = os.getenv("MCP_HOST", "127.0.0.1")
-    url = os.getenv(f"{env}_URL") or f"http://{host}:{port}/mcp"
+    cfg = get_settings()
+    url = getattr(cfg, f"mcp_{key}_url") or f"http://{cfg.mcp_host}:{port}/mcp"
     return {"key": key, "label": label, "agent": agent, "url": url, "port": urlparse(url).port or port,
-            "enabled": os.getenv(f"{env}_ENABLED", "1").lower() not in ("0", "false", "no"),
+            "enabled": getattr(cfg, f"mcp_{key}_enabled"),
             # servers listen on loopback unless told otherwise: they have no login of their own
-            "bind": os.getenv(f"{env}_BIND", "127.0.0.1")}
+            "bind": getattr(cfg, f"mcp_{key}_bind")}
 
 
 def all_servers() -> List[Dict[str, Any]]:

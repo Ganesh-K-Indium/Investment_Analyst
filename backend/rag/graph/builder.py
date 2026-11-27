@@ -1,9 +1,7 @@
 "This module is useful for building the graph which will create an agentic workflow."
-import os
 import time
 import asyncio
 import logging
-from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage
 from rag.graph.state import GraphState
@@ -24,11 +22,6 @@ from rag.graph.benchmark import time_node, node_timer
 
 logger = logging.getLogger("rag.graph.builder")
 
-load_dotenv()
-# Provider keys are optional: set them only when present, so a missing key fails where it is used instead of crashing at import.
-for _key in ("GROQ_API_KEY", "TAVILY_API_KEY"):
-    if os.getenv(_key):
-        os.environ[_key] = os.getenv(_key)
 
 class BuildingGraph:
     """

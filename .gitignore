@@ -93,9 +93,9 @@ output/
 /build
 
 # Project-specific
-*.png
 *.tmp
 *.temp
+*.png
 
 # AWS & Infrastructure
 *.pem
@@ -111,9 +111,14 @@ terraform.tfvars
 node_modules/
 
 
-# Generated / noise files (tracked files are unaffected)
+# Generated / noise files
 *.json
-*.md
+# Exceptions the app needs in git: the document engine's built-in templates, and the diagram in docs/ARCHITECTURE.md
+!backend/app/docproc/templates/*.json
+!docs/ocr_pipeline.png
 *.ttf
 # Fonts used by app/services/pdf_render.py must stay visible
-!app/assets/fonts/*.ttf
+!backend/app/assets/fonts/*.ttf
+
+# Deployment configuration (copy config.example.yaml); may hold deployment-specific values
+/config.yaml

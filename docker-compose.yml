@@ -2,6 +2,24 @@
 # older branch's: the demo branch keeps its database untouched, and this one migrates its own copy. Override with COMPOSE_PROJECT_NAME.
 name: ${COMPOSE_PROJECT_NAME:-investment_analyst_new}
 
+# Settings shared by the api and both workers (one image, built once).
+# The app reads the rest of its configuration from .env (and config.yaml, if you mount one and set APP_CONFIG_FILE).
+# Inside these containers the services are reached by name, so the URLs below replace the localhost ones in .env.
+# To use managed services instead (RDS, ElastiCache, Qdrant Cloud...), set COMPOSE_DATABASE_URL / COMPOSE_REDIS_URL /
+# COMPOSE_QDRANT_URL in .env.
+x-backend: &backend
+  image: investment-analyst-backend
+  build: ./backend
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://${POSTGRES_USER:-investment_analyst}:${POSTGRES_PASSWORD:-investment_analyst}@postgres:5432/${POSTGRES_DB:-investment_analyst}}
+    REDIS_URL: ${COMPOSE_REDIS_URL:-redis://redis:6379/0}
+    QDRANT_URL: ${COMPOSE_QDRANT_URL:-http://qdrant:6333}
+  volumes:
+    - ./data:/app/data
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -49,24 +67,11 @@ services:
       retries: 10
 
   api:
-    build: ./backend
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      # Points at the postgres/qdrant/redis services above by default.
-      # Override DATABASE_URL / QDRANT_URL / REDIS_URL in .env (e.g. to an
-      # RDS endpoint, Qdrant Cloud, or a managed Redis) to use those instead
-      # of these local containers.
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://investment_analyst:investment_analyst@postgres:5432/investment_analyst}
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    <<: *backend
     ports:
+      # Only the API is published. The five MCP servers run inside this container on loopback; the workers reach them
+      # because they share this container's network (network_mode: service:api below).
       - "8000:8000"
-      - "8565:8565"
-      - "8566:8566"
-      - "8567:8567"
-      - "8568:8568"
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,56 +79,41 @@ services:
         condition: service_started
       redis:
         condition: service_healthy
-    volumes:
-      - ./data:/app/data
 
   worker-interactive:
-    build: ./backend
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://investment_analyst:investment_analyst@postgres:5432/investment_analyst}
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    <<: *backend
     entrypoint: ["./docker/worker-entrypoint.sh"]
     command: ["app.worker.InteractiveWorkerSettings"]
-    # Shares the api container's network namespace so this worker's
-    # hardcoded http://localhost:856x/mcp calls reach the MCP servers the
-    # api container hosts — see backend/docker/worker-entrypoint.sh. This also means
-    # it inherits api's ports, so it must not declare its own `ports:`.
+    # Shares the api container's network so its http://localhost:85xx/mcp calls reach the MCP servers the api container
+    # hosts. It therefore inherits api's ports and must not declare its own. Scale with --scale worker-interactive=N.
     network_mode: "service:api"
     depends_on:
       api:
         condition: service_started
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./data:/app/data
 
   worker-batch:
-    build: ./backend
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://investment_analyst:investment_analyst@postgres:5432/investment_analyst}
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    <<: *backend
     entrypoint: ["./docker/worker-entrypoint.sh"]
     command: ["app.worker.BatchWorkerSettings"]
     network_mode: "service:api"
     depends_on:
       api:
         condition: service_started
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./data:/app/data
+
+  # Web UI (optional): docker compose --profile ui up -d --build
+  # Builds the sibling investment-analyst-ui repository (override with UI_DIR) and serves it on UI_PORT (default 3000).
+  # VITE_API_BASE_URL is baked in at build time: it is the address the *browser* uses to reach the API.
+  ui:
+    profiles: ["ui"]
+    build:
+      context: ${UI_DIR:-../investment-analyst-ui}
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    restart: unless-stopped
+    ports:
+      - "${UI_PORT:-3000}:80"
+    depends_on:
+      - api
 
 volumes:
   pgdata:

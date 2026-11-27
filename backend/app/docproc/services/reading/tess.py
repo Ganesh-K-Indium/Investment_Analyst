@@ -19,16 +19,17 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pymupdf as fitz
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.services.tess")
 
 DPI = 300
 TIMEOUT_SECONDS = 90
-LANG = os.getenv("TESSERACT_LANG", "eng")
+LANG = get_settings().tesseract_lang
 
 
 def binary() -> Optional[str]:
-    return os.getenv("TESSERACT_CMD") or shutil.which("tesseract")
+    return get_settings().tesseract_cmd or shutil.which("tesseract")
 
 
 def available() -> bool:
@@ -130,9 +131,8 @@ def deskewed(png: bytes) -> bytes:
     """The page image straightened when it is visibly tilted, otherwise unchanged. A tilt of even a degree makes OCR break rows apart, so a
     label and its figures land on different lines."""
     from io import BytesIO
-    import os
     from PIL import Image
-    if os.getenv("DOCPROC_DESKEW", "1").lower() in ("0", "false", "no"):
+    if not get_settings().docproc_deskew:
         return png
     angle = skew_angle(png)
     if angle is None:

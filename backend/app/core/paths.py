@@ -5,17 +5,14 @@ Layout (repo root = the folder that holds `backend/`, `data/`, `venv/`):
     backend/        all Python code (this package's parent)
     data/           everything the app writes at runtime (git-ignored)
 
-`DATA_DIR` can be moved with the DATA_DIR environment variable (the Docker image sets it to /app/data).
+`DATA_DIR` can be moved with the DATA_DIR setting (environment, .env or config.yaml; the Docker image sets it to /app/data).
 Nothing here depends on the current working directory.
 """
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from app.core.config import BACKEND_ROOT, REPO_ROOT, get_settings  # noqa: F401  (BACKEND_ROOT re-exported; importing config loads .env first)
 
-BACKEND_ROOT = Path(__file__).resolve().parents[2]
-REPO_ROOT = BACKEND_ROOT.parent
-DATA_DIR = Path(os.getenv("DATA_DIR") or REPO_ROOT / "data").resolve()
+DATA_DIR = (get_settings().data_dir or REPO_ROOT / "data").resolve()
 
 SEC_FILINGS_DIR = DATA_DIR / "sec_filings"        # downloaded 10-K/10-Q/... PDFs, one folder per ticker
 XML_FILINGS_DIR = DATA_DIR / "xml_filings"        # Form 4 XML kept for verification

@@ -15,10 +15,10 @@ import difflib
 import io
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional
+from app.core.config import get_settings
 
 
 logger = logging.getLogger("app.services.ocr")
@@ -248,7 +248,7 @@ def fitz_rect_area(bbox, page_rect) -> float:
 # ---------------------------------------------------------------------------
 
 def configured_models() -> List[str]:
-    raw = os.getenv("HANDWRITING_OCR_MODELS", "").strip()
+    raw = get_settings().handwriting_ocr_models.strip()
     if raw:
         return [m.strip() for m in raw.split(",") if m.strip()][:2]
     from app.docproc.engines.providers import llm

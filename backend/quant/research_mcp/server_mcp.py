@@ -5,7 +5,6 @@ Provides tools for researching stocks via web search, scraping analyst ratings,
 generating bull/bear scenarios, sentiment analysis, and summarization.
 """
 
-import os
 import json
 import asyncio
 import logging
@@ -17,17 +16,17 @@ from dataclasses import dataclass, asdict
 from collections import defaultdict
 
 from fastmcp import FastMCP
-from dotenv import load_dotenv
 
 # External APIs
 from tavily import TavilyClient
 from openai import AsyncOpenAI
 import aiohttp
 from textblob import TextBlob
+from app.core.config import get_settings  # noqa: E402  (importing config loads .env once; real environment variables win)
 
-load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s", datefmt="%H:%M:%S")
+from app.core.logging_setup import configure_logging  # noqa: E402
+configure_logging()
 logger = logging.getLogger("quant.research_mcp.server_mcp")
 
 # Initialize FastMCP server
@@ -230,7 +229,7 @@ async def web_search(
             return {**cached, "from_cache": True}
         
         # Initialize Tavily client
-        api_key = os.getenv("TAVILY_API_KEY")
+        api_key = get_settings().tavily_api_key
         if not api_key:
             return {
                 "error": "TAVILY_API_KEY not found in environment variables",
@@ -334,7 +333,7 @@ async def _search_analyst_ratings_impl(
         ]
         
         all_results = []
-        api_key = os.getenv("TAVILY_API_KEY")
+        api_key = get_settings().tavily_api_key
         
         if not api_key:
             return {
@@ -445,7 +444,7 @@ async def _aggregate_ratings_impl(
             search_results = search_data.get("results", [])
         
         # Use LLM to extract structured ratings from content
-        openai_key = os.getenv("OPENAI_API_KEY")
+        openai_key = get_settings().openai_api_key
         if not openai_key:
             return {
                 "error": "OPENAI_API_KEY not found",
@@ -698,7 +697,7 @@ async def _summarize_content_impl(
 ) -> Dict[str, Any]:
     """Summarize content about a stock."""
     try:
-        openai_key = os.getenv("OPENAI_API_KEY")
+        openai_key = get_settings().openai_api_key
         if not openai_key:
             return {"error": "OPENAI_API_KEY not found", "success": False}
         
@@ -795,7 +794,7 @@ async def _generate_scenarios_impl(
 ) -> Dict[str, Any]:
     """Generate bull and bear scenarios for a stock."""
     try:
-        openai_key = os.getenv("OPENAI_API_KEY")
+        openai_key = get_settings().openai_api_key
         if not openai_key:
             return {"error": "OPENAI_API_KEY not found", "success": False}
         
@@ -1108,7 +1107,7 @@ async def _extract_mda_from_web(symbol: str, quarter_hint: str = "latest") -> Di
     """
     try:
         # Get Tavily API key and create client
-        tavily_key = os.getenv("TAVILY_API_KEY")
+        tavily_key = get_settings().tavily_api_key
         if not tavily_key:
             return {"error": "TAVILY_API_KEY not found", "success": False}
         
@@ -1140,7 +1139,7 @@ async def _extract_mda_from_web(symbol: str, quarter_hint: str = "latest") -> Di
         ])
         
         # Use ChatOpenAI to extract MD&A
-        openai_key = os.getenv("OPENAI_API_KEY")
+        openai_key = get_settings().openai_api_key
         if not openai_key:
             return {"error": "OPENAI_API_KEY not found", "success": False}
         
@@ -1213,7 +1212,7 @@ async def _analyze_mda_sentiment_impl(
     extract MD&A from web using Tavily search.
     """
     try:
-        openai_key = os.getenv("OPENAI_API_KEY")
+        openai_key = get_settings().openai_api_key
         if not openai_key:
             return {"error": "OPENAI_API_KEY not found", "success": False}
         
@@ -1619,4 +1618,6 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     
     # Run the MCP server
-    research_server.run(transport="streamable-http", host="0.0.0.0", port=8567)
+    from app.services import mcp_registry
+    _srv = mcp_registry.server("research")         # loopback unless MCP_RESEARCH_BIND says otherwise: no login of its own
+    research_server.run(transport="streamable-http", host=_srv["bind"], port=_srv["port"])

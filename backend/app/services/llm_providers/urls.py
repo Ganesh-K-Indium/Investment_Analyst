@@ -4,9 +4,9 @@ Always refused: anything that is not http(s), and cloud metadata / link-local ad
 Private networks and localhost are allowed by default, because a self-hosted model is usually exactly there; set
 LLM_ALLOW_PRIVATE_URLS=0 on a shared deployment to refuse those too."""
 import ipaddress
-import os
 import socket
 from urllib.parse import urlparse
+from app.core.config import get_settings
 
 
 class UnsafeURL(ValueError):
@@ -17,7 +17,7 @@ def check(url: str) -> str:
     u = urlparse((url or "").strip())
     if u.scheme not in ("http", "https") or not u.hostname:
         raise UnsafeURL("The address must start with http:// or https://.")
-    allow_private = os.getenv("LLM_ALLOW_PRIVATE_URLS", "1").lower() not in ("0", "false", "no")
+    allow_private = get_settings().llm_allow_private_urls
     try:
         infos = socket.getaddrinfo(u.hostname, u.port or (443 if u.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
     except socket.gaierror:

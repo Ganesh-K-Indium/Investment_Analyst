@@ -30,7 +30,9 @@ API_PORT=8000
 
 # Parse arguments
 WITH_MCP=false
+WITH_WORKERS=false
 DEV_MODE=false
+WORKER_PIDS=""
 
 for arg in "$@"; do
     case $arg in
@@ -38,27 +40,36 @@ for arg in "$@"; do
             WITH_MCP=true
             shift
             ;;
+        --with-workers)
+            WITH_WORKERS=true
+            shift
+            ;;
+        --all)
+            WITH_MCP=true
+            WITH_WORKERS=true
+            shift
+            ;;
         --dev)
             DEV_MODE=true
             shift
             ;;
         --help|-h)
-            cat << EOF
+            HELP_TEXT=$(cat << EOF
 ${BLUE}Investment Analyst API Startup Script${NC}
 
 ${YELLOW}Usage:${NC}
   ./start_api.sh [options]
 
 ${YELLOW}Options:${NC}
-  --with-mcp    Start MCP servers before starting API
-  --dev         Development mode (auto-reload on code changes)
-  --help        Show this help message
+  --with-mcp      Start the five MCP servers before the API
+  --with-workers  Start the two background workers (interactive + batch) next to the API
+  --all           Both of the above
+  --dev           Development mode (auto-reload on code changes)
+  --help          Show this help message
 
 ${YELLOW}Examples:${NC}
-  ./start_api.sh                    # Start API only
-  ./start_api.sh --with-mcp         # Start MCP + API
-  ./start_api.sh --dev              # Dev mode with reload
-  ./start_api.sh --with-mcp --dev   # Full dev environment
+  ./start_api.sh                    # API only (chats run in the API; background runs wait for workers)
+  ./start_api.sh --all --dev        # Everything, with auto-reload: the usual local setup
 
 ${YELLOW}Services:${NC}
   Main API:      http://localhost:8000
@@ -70,8 +81,13 @@ ${YELLOW}MCP Servers (optional):${NC}
   Technical:     http://localhost:8566
   Research:      http://localhost:8567
   Options:       http://localhost:8568
+  Postgres:      http://localhost:8570
+
+${YELLOW}Workers:${NC} logs in data/logs/workers/, stopped together with the API.
 
 EOF
+)
+            echo -e "$HELP_TEXT"
             exit 0
             ;;
     esac
@@ -179,14 +195,34 @@ check_mcp_status() {
     check_port 8566 && technical_running=true
     check_port 8567 && research_running=true
     check_port 8568 && options_running=true
+    local postgres_running=false
+    check_port 8570 && postgres_running=true
 
-    if $stock_info_running && $technical_running && $research_running && $options_running; then
-        print_success "All MCP servers are running (8565, 8566, 8567, 8568)"
+    if $stock_info_running && $technical_running && $research_running && $options_running && $postgres_running; then
+        print_success "All MCP servers are running (8565, 8566, 8567, 8568, 8570)"
         print_info "Full stock analysis + options intelligence features available"
     else
         print_warning "Some or all MCP servers are not running"
         print_info "Stock analysis will work with limited functionality"
         print_info "To start MCP servers: ./scripts/start_mcp_servers.sh"
+    fi
+}
+
+# Start the background workers if requested (they run the queued and streamed analyses)
+start_workers() {
+    if [ "$WITH_WORKERS" = true ]; then
+        print_header "Starting Background Workers"
+        local log_dir="$PROJECT_ROOT/data/logs/workers"
+        mkdir -p "$log_dir"
+        source "$VENV_PATH/bin/activate"
+        (cd "$BACKEND_DIR" && exec arq app.worker.InteractiveWorkerSettings >> "$log_dir/interactive.log" 2>&1) &
+        WORKER_PIDS="$!"
+        (cd "$BACKEND_DIR" && exec arq app.worker.BatchWorkerSettings >> "$log_dir/batch.log" 2>&1) &
+        WORKER_PIDS="$WORKER_PIDS $!"
+        trap 'kill $WORKER_PIDS 2>/dev/null' EXIT INT TERM
+        print_success "Interactive and batch workers started (logs: data/logs/workers/)"
+    else
+        print_info "Workers not started: background runs will wait in the queue. Use --with-workers or --all."
     fi
 }
 
@@ -220,7 +256,7 @@ start_api() {
         echo ""
         python -m uvicorn app.main:app --reload --reload-dir app --reload-dir rag --reload-dir quant --reload-dir schemas --reload-dir ingestion --port $API_PORT --host 0.0.0.0
     else
-        print_info "Production mode"
+        print_info "Auto-reload off"
         echo ""
         python -m uvicorn app.main:app --port $API_PORT --host 0.0.0.0
     fi
@@ -242,7 +278,10 @@ main() {
     
     # Check MCP server status
     check_mcp_status
-    
+
+    # Start workers if requested
+    start_workers
+
     echo ""
     
     # Start API server

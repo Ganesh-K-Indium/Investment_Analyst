@@ -1,0 +1,102 @@
+{
+  "template_id": "PT-DailyNote",
+  "doc_type": "daily_note",
+  "title": "Daily note / billing sheet",
+  "single_page": false,
+  "sections": [
+    {
+      "id": "main",
+      "header": null,
+      "fields": [
+        {
+          "key": "patient.name",
+          "label": "Patient Name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "key": "patient.dob",
+          "label": "Date of Birth",
+          "type": "date",
+          "required": true
+        },
+        {
+          "key": "note_date",
+          "label": "Date of Daily Note",
+          "type": "date"
+        },
+        {
+          "key": "original_eval_date",
+          "label": "Date of Original Eval",
+          "type": "date"
+        },
+        {
+          "key": "visit_no",
+          "label": "Visit No.",
+          "type": "text"
+        },
+        {
+          "key": "diagnosis",
+          "label": "Diagnosis",
+          "type": "text"
+        },
+        {
+          "key": "insurance.name",
+          "label": "Insurance Name",
+          "type": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Electronically signed by (name, credentials, date)",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "key": "billing",
+      "header": null,
+      "columns": [
+        {
+          "key": "code",
+          "label": "CPT Code (for example GP:97110)",
+          "required": true,
+          "pattern": "([A-Z0-9]{2}:)?([0-9]{4}[0-9A-Z]|[A-V][0-9]{4})"
+        },
+        {
+          "key": "description",
+          "label": "Service description"
+        },
+        {
+          "key": "units",
+          "label": "Units"
+        }
+      ],
+      "required": true
+    }
+  ],
+  "canonical": {
+    "person.name": {
+      "kind": "name",
+      "label": "Name",
+      "fields": [
+        "patient.name"
+      ]
+    },
+    "person.dob": {
+      "kind": "date",
+      "label": "Date of birth",
+      "fields": [
+        "patient.dob"
+      ]
+    },
+    "line_codes": {
+      "kind": "set",
+      "label": "Service codes",
+      "table": "billing",
+      "column": "code",
+      "pattern": "[A-Z]?\\d{4}[0-9A-Z]?"
+    }
+  }
+}

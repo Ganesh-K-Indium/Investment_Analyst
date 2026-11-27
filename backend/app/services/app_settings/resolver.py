@@ -1,4 +1,9 @@
-"""Resolve the effective settings for a request, and make them available to the graph without threading a parameter through every node."""
+"""Resolve the effective settings for a request, and make them available to the graph without threading a parameter through every node.
+
+Layers, last wins:
+    code defaults (schema.SYSTEM_DEFAULTS) -> deployment defaults (config.yaml / SETTINGS__* env, app/core/config.py)
+    -> admin (system scope, UI) -> user (UI) -> portfolio (UI) -> per-request override
+"""
 import contextvars
 import copy
 from contextlib import contextmanager
@@ -18,18 +23,34 @@ def merge(base: Dict[str, Dict[str, Any]], *layers: Optional[Dict[str, Dict[str,
     return out
 
 
+def defaults() -> Dict[str, Dict[str, Any]]:
+    """What a user starts from: the code defaults with this deployment's defaults applied."""
+    from app.core.config import settings_defaults_layer
+    layer = settings_defaults_layer()
+    if not layer:
+        return SYSTEM_DEFAULTS
+    cached = _defaults_cache.get("value")
+    if _defaults_cache.get("layer") is not layer:
+        cached = merge(SYSTEM_DEFAULTS, layer)
+        _defaults_cache.update(layer=layer, value=cached)
+    return cached
+
+
+_defaults_cache: Dict[str, Any] = {}
+
+
 def resolve(*layers: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
-    return merge(SYSTEM_DEFAULTS, *layers)
+    return merge(defaults(), *layers)
 
 
 def current() -> Dict[str, Dict[str, Any]]:
     """The settings in force for this request, or the defaults outside one (scripts, tests, ingestion)."""
-    return _current.get() or SYSTEM_DEFAULTS
+    return _current.get() or defaults()
 
 
 @contextmanager
 def use(settings: Optional[Dict[str, Dict[str, Any]]]) -> Iterator[Dict[str, Dict[str, Any]]]:
-    s = settings or SYSTEM_DEFAULTS
+    s = settings or defaults()
     token = _current.set(s)
     try:
         yield s

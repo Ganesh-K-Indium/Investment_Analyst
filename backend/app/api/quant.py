@@ -23,6 +23,7 @@ from app.services.graph_stream import stream_graph
 from datetime import datetime
 import json
 import os
+from app.core.config import get_settings
 
 logger = logging.getLogger("api.quant")
 router = APIRouter(prefix="/quant", tags=["Quant Analysis"])
@@ -30,7 +31,7 @@ router = APIRouter(prefix="/quant", tags=["Quant Analysis"])
 # Debug-only: dump full multi-agent response payloads to output/json/quant/ on
 # every query. Off by default — was previously unconditional, growing that
 # directory without bound on every request in any environment.
-_SAVE_DEBUG_RESPONSES = os.getenv("SAVE_DEBUG_RESPONSES", "false").lower() == "true"
+_SAVE_DEBUG_RESPONSES = get_settings().save_debug_responses
 
 
 # Pydantic Models

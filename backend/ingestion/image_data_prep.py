@@ -13,12 +13,11 @@ from tqdm import tqdm
 from PIL import Image, ImageEnhance
 from langchain_core.documents import Document
 from pathlib import Path
-from dotenv import load_dotenv
 import pytesseract
 
 from app.utils.usage_tracker import record_usage
+from app.core.config import get_settings
 
-load_dotenv()
 
 logger = logging.getLogger("ingestion.image_data_prep")
 
@@ -35,7 +34,7 @@ MIN_INK_FRACTION = 0.005     # < 0.5% of pixels differ from the background -> bl
 # (measured 30-57 per image on real 10-K charts); photos and ornaments have 0-1
 # (garbage characters, low confidence). Raw character counts do NOT separate
 # them — Tesseract emits noise on photos. 0 disables the gate.
-MIN_OCR_WORDS = int(os.getenv("IMAGE_MIN_OCR_WORDS", "3"))
+MIN_OCR_WORDS = get_settings().image_min_ocr_words
 OCR_WORD_CONFIDENCE = 70
 
 # Refusals the vision model returns for photos/blank images. They are not
@@ -47,7 +46,7 @@ _REFUSAL_MARKERS = (
 )
 
 # Use the explicit binary path if set (required for Docker/ECS environments)
-_tesseract_cmd = os.environ.get("TESSERACT_CMD")
+_tesseract_cmd = get_settings().tesseract_cmd or None
 if _tesseract_cmd:
     pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
 
@@ -63,7 +62,7 @@ class ImageDescription:
         """
         self.pdf_path = pdf_path
         self.filing_type = filing_type
-        self.openai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.openai_client = openai.AsyncOpenAI(api_key=get_settings().openai_api_key or None)
         # Why images were dropped before/after analysis, logged as a summary.
         self.filter_stats = Counter()
     

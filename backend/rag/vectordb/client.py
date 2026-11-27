@@ -8,7 +8,6 @@ import time
 from typing import Any, Dict, List, Sequence, Union
 import httpx
 import tiktoken
-from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient, AsyncQdrantClient
@@ -16,9 +15,9 @@ from qdrant_client import models
 from qdrant_client.http.exceptions import ResponseHandlingException
 from qdrant_client.http.models import PayloadSchemaType
 from tqdm import tqdm
-import os
 
 from app.utils.usage_tracker import record_usage
+from app.core.config import get_settings
 
 logger = logging.getLogger("rag.vectordb.client")
 
@@ -29,7 +28,6 @@ logger = logging.getLogger("rag.vectordb.client")
 # not an estimate, just not read back from the response itself.
 _EMBEDDING_ENCODING = tiktoken.get_encoding("cl100k_base")
 
-load_dotenv()
 
 # Try to import FastEmbed for sparse embeddings
 try:
@@ -58,8 +56,8 @@ class load_vector_database():
         
         # text-embedding-3-large for financial phrase directionality (3072-dim vectors)
         self.embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
-        self.qdrant_url = os.getenv("QDRANT_URL", "")
-        self.qdrant_api_key = os.getenv("QDRANT_API_KEY", '')
+        self.qdrant_url = get_settings().qdrant_url
+        self.qdrant_api_key = get_settings().qdrant_api_key
         
         # Initialize sparse embeddings for BM25 if available
         self.sparse_model = None

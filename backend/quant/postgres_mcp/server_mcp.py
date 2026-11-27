@@ -14,14 +14,14 @@ from typing import Dict, Any, Optional
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from fastmcp import FastMCP
-from dotenv import load_dotenv
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import app.core.config  # noqa: F401,E402  (loads .env once; real environment variables win)
 
-load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s", datefmt="%H:%M:%S")
+from app.core.logging_setup import configure_logging  # noqa: E402
+configure_logging()
 logger = logging.getLogger("quant.postgres_mcp.server_mcp")
 
 # Initialize FastMCP server

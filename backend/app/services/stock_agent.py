@@ -12,9 +12,6 @@ from typing import Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
-import os
-from dotenv import load_dotenv
-load_dotenv()
 
 logger = logging.getLogger("app.services.stock_agent")
 
@@ -201,15 +198,23 @@ async def initialize_stock_agents(checkpointer: Optional[BaseCheckpointSaver] = 
             logger.info("   Skipping options_intelligence_agent (MCP server not ready)")
             options_agent = None
 
-        # Postgres Agent
-        try:
-            logger.info("   Creating postgres_agent...")
-            postgres_agent = await create_postgres_agent(checkpointer=_stock_saver)
-            agents_created.append("postgres")
-            logger.info("   postgres_agent created")
-        except Exception as e:
-            logger.warning(f"   WARNING: Failed to create postgres_agent: {e}")
-            postgres_agent = None
+        # Postgres Agent: only when its MCP server answers. Connecting to a server that is down fails inside the MCP client's
+        # task group as a cancellation, which would otherwise abort the whole startup instead of just leaving this agent out.
+        postgres_server = mcp_registry.server("postgres")
+        postgres_agent = None
+        if not postgres_server["enabled"]:
+            logger.info("   Skipping postgres_agent (disabled)")
+        elif not await wait_for_server(postgres_server["url"], timeout=3):
+            logger.info("   Skipping postgres_agent (MCP server not ready at %s)", postgres_server["url"])
+        else:
+            try:
+                logger.info("   Creating postgres_agent...")
+                postgres_agent = await create_postgres_agent(checkpointer=_stock_saver)
+                agents_created.append("postgres")
+                logger.info("   postgres_agent created")
+            except Exception as e:
+                logger.warning(f"   WARNING: Failed to create postgres_agent: {e}")
+                postgres_agent = None
 
         # Documents Agent (the user's uploaded files; runs in this process, no MCP server)
         try:

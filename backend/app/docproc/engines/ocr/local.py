@@ -32,6 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.docproc import config
 from app.docproc.services.reading import ocr, tess
+from app.core.config import get_settings
 
 logger = logging.getLogger("app.docproc.engines.ocr.local")
 
@@ -364,7 +365,7 @@ APPROX_MB = {"paddleocr": 130, "doctr": 125}
 
 
 def models_dir() -> Path:
-    return Path(os.getenv("DOCPROC_MODELS_DIR") or config.data_dir() / "models")
+    return Path(get_settings().docproc_models_dir or config.data_dir() / "models")
 
 
 def model_folders() -> Dict[str, Path]:
