@@ -25,6 +25,7 @@ import { FontSize } from './FontSize';
 import { ResizableSidebar, EmptyState, Tooltip, TooltipTrigger, TooltipContent } from '../../ui';
 import { useResizableSidebar } from '../../../hooks/useResizableSidebar';
 import './Creation.css';
+import { cssVar } from '../../../lib/cssVar';
 
 const SANITIZE_CONFIG = {
     ADD_TAGS: ['iframe'] as string[],
@@ -35,8 +36,9 @@ function sanitizeHtml(html: string): string {
     return DOMPurify.sanitize(html, SANITIZE_CONFIG);
 }
 
-const FONT_COLORS = ['#1a1a1a', '#c0392b', '#e67e22', '#f1c40f', '#27ae60', '#2980b9', '#8e44ad', '#7f8c8d'];
-const HIGHLIGHT_COLORS = ['#fff3a0', '#ffd6d6', '#d6f5d6', '#d6e8ff', '#f0d6ff', '#ffe4b3'];
+// Swatches of the report editor. The picked value is written into the report, so they are fixed document tokens
+// (--color-doc-ink-*, --color-doc-mark-* in index.css), not theme colours.
+const docColors = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => cssVar(`${prefix}${i + 1}`));
 const FONT_SIZES = ['12px', '14px', '16px', '18px', '20px', '24px', '28px', '32px', '40px'];
 
 interface ColorPopoverProps {
@@ -955,14 +957,14 @@ const Creation: React.FC<CreationProps> = ({ projectId, projectName, companies =
                         <div className="creation__toolbar-divider" />
                         <ColorPopover
                             label="Font Color"
-                            colors={FONT_COLORS}
+                            colors={docColors('--color-doc-ink-', 8)}
                             onPick={(c) => editor?.chain().focus().setColor(c).run()}
                             onClear={() => editor?.chain().focus().unsetColor().run()}
                             icon={<span style={{ fontWeight: 700 }}>A</span>}
                         />
                         <ColorPopover
                             label="Highlight"
-                            colors={HIGHLIGHT_COLORS}
+                            colors={docColors('--color-doc-mark-', 6)}
                             onPick={(c) => editor?.chain().focus().toggleHighlight({ color: c }).run()}
                             onClear={() => editor?.chain().focus().unsetHighlight().run()}
                             icon={

@@ -509,7 +509,7 @@ export const FileSourcesSection: React.FC<Props> = ({ addSignal }) => {
 
                     {/* Test Connection (view mode only) */}
                     {modalMode === 'view' && editingIntegration && (
-                        <div className="modal-form__test-section" style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '15px' }}>
+                        <div className="modal-form__test-section" style={{ marginTop: '20px', borderTop: '1px solid var(--color-border-light)', paddingTop: '15px' }}>
                             <Button
                                 type="button"
                                 variant="outline"

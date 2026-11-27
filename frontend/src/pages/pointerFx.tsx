@@ -91,13 +91,21 @@ export const DotField: React.FC = () => {
         let w = 0, h = 0, dpr = 1;
         let mx = -9999, my = -9999;
         let raf = 0;
-        let dotRGB = '148,163,184';
-        const accent = '255,107,53';
-
+        // Both colours come from the theme: the dots use the canvas's CSS colour (var(--color-text-placeholder)), the
+        // highlight the accent (var(--color-primary)), read through a probe element so any colour format resolves to rgb.
+        let dotRGB = '';
+        let accent = '';
+        const rgbOf = (css: string) => {
+            const m = css.match(/\d+(\.\d+)?/g);
+            return m && m.length >= 3 ? `${m[0]},${m[1]},${m[2]}` : '';
+        };
+        const probeEl = document.createElement('span');
         const readColour = () => {
-            const probe = getComputedStyle(canvas).color;      // set via CSS: color: var(--color-text-placeholder)
-            const m = probe.match(/\d+(\.\d+)?/g);
-            if (m && m.length >= 3) dotRGB = `${m[0]},${m[1]},${m[2]}`;
+            dotRGB = rgbOf(getComputedStyle(canvas).color) || dotRGB;
+            probeEl.style.color = 'var(--color-primary)';
+            canvas.parentElement?.appendChild(probeEl);
+            accent = rgbOf(getComputedStyle(probeEl).color) || accent;
+            probeEl.remove();
         };
 
         const build = () => {

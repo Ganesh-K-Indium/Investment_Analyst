@@ -616,7 +616,7 @@ export const Home: React.FC = () => {
                                             >
                                                 Cancel
                                             </Button>
-                                            {error && <span className="error-message" style={{ color: 'red', marginLeft: '1rem' }}>{error}</span>}
+                                            {error && <span className="error-message" style={{ color: 'var(--color-error-dark)', marginLeft: '1rem' }}>{error}</span>}
                                         </div>
                                     </form>
                                 )}

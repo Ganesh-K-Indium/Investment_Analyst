@@ -58,7 +58,7 @@
     cursor: pointer;
     transition: all 0.2s ease;
     background: var(--color-primary-light);
-    box-shadow: 0 2px 6px rgba(255, 107, 53, 0.12);
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--color-primary) 12%, transparent);
 }
 
 .secondary-research__feature-btn:disabled {
@@ -76,7 +76,7 @@
 .secondary-research__feature-btn--chat:hover:not(:disabled) {
     background: var(--color-primary);
     color: var(--color-text-inverse);
-    box-shadow: 0 4px 12px rgba(255, 107, 53, 0.24);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--color-primary) 24%, transparent);
     transform: translateY(-2px);
 }
 
@@ -86,7 +86,7 @@
 .secondary-research__feature-btn--alpha:hover:not(:disabled) {
     background: var(--color-primary);
     color: var(--color-text-inverse);
-    box-shadow: 0 4px 12px rgba(255, 107, 53, 0.24);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--color-primary) 24%, transparent);
     transform: translateY(-2px);
 }
 
@@ -96,7 +96,7 @@
 .secondary-research__feature-btn--compare:hover:not(:disabled) {
     background: var(--color-primary);
     color: var(--color-text-inverse);
-    box-shadow: 0 4px 12px rgba(255, 107, 53, 0.24);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--color-primary) 24%, transparent);
     transform: translateY(-2px);
 }
 
@@ -962,7 +962,7 @@
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.3px;
-    color: #ffffff;
+    color: var(--color-text-inverse);
     background: var(--color-primary);
     flex-shrink: 0;
 }
@@ -972,11 +972,11 @@
 }
 
 .sec-badge--10q {
-    background: linear-gradient(135deg, var(--color-primary-hover) 0%, #E85A1F 100%);
+    background: var(--gradient-primary-hover);
 }
 
 .sec-badge--8k {
-    background: linear-gradient(135deg, #F07D3D 0%, var(--color-primary) 100%);
+    background: var(--gradient-primary);
 }
 
 /* Foreign private issuer forms share their domestic counterpart's look */
@@ -985,7 +985,7 @@
 }
 
 .sec-badge--6k {
-    background: linear-gradient(135deg, #F07D3D 0%, var(--color-primary) 100%);
+    background: var(--gradient-primary);
 }
 
 .sec-badge--form4 {
@@ -1100,15 +1100,15 @@
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
-    box-shadow: 0 1px 4px rgba(255, 107, 53, 0.1);
+    box-shadow: 0 1px 4px color-mix(in srgb, var(--color-primary) 10%, transparent);
     line-height: 1.2;
     border-left: 2px solid var(--color-primary) !important;
 }
 
 .sec-page-pill:hover {
-    background-color: rgba(255, 107, 53, 0.12) !important;
+    background-color: color-mix(in srgb, var(--color-primary) 12%, transparent) !important;
     color: var(--color-primary) !important;
-    box-shadow: 0 2px 6px rgba(255, 107, 53, 0.2);
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 .sec-citation-card__top {
@@ -1154,17 +1154,17 @@
 }
 
 .sec-page-pill--more {
-    background: #F9FAFB !important;
-    color: #6B7280;
-    border: 1px dashed #D1D5DB !important;
+    background: var(--color-bg-secondary) !important;
+    color: var(--color-text-tertiary);
+    border: 1px dashed var(--color-border) !important;
     border-radius: 6px;
 }
 
 .sec-page-pill--more:hover {
-    background: #FF6B35 !important;
-    color: #FFFFFF !important;
-    border-color: #FF6B35 !important;
-    box-shadow: 0 2px 4px rgba(255, 107, 53, 0.25);
+    background: var(--color-primary) !important;
+    color: var(--color-text-inverse) !important;
+    border-color: var(--color-primary) !important;
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
 
 /* Page pill button in expanded view */
@@ -1187,20 +1187,20 @@
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
-    box-shadow: 0 2px 8px rgba(255, 107, 53, 0.12);
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--color-primary) 12%, transparent);
     line-height: 1.2;
     border-left: 3px solid var(--color-primary) !important;
 }
 
 .sec-page-pill--expanded:hover {
-    background-color: rgba(255, 107, 53, 0.15) !important;
+    background-color: color-mix(in srgb, var(--color-primary) 15%, transparent) !important;
     color: var(--color-primary) !important;
-    box-shadow: 0 3px 8px rgba(255, 107, 53, 0.22);
+    box-shadow: 0 3px 8px color-mix(in srgb, var(--color-primary) 22%, transparent);
 }
 
 .sec-page-pill--expanded:active {
     transform: translateY(0);
-    box-shadow: 0 2px 6px rgba(255, 107, 53, 0.15);
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--color-primary) 15%, transparent);
 }
 
 .sec-citation-details__label {
@@ -1220,7 +1220,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--color-overlay-60);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1236,7 +1236,7 @@
     height: 90vh;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-xl);
     border: 1px solid var(--color-border);
 }
 
@@ -1293,7 +1293,7 @@
     height: 100%;
     border: none;
     border-radius: 6px;
-    background: white;
+    background: var(--color-paper);
 }
 
 .pdf-viewer-error {
@@ -1301,7 +1301,7 @@
     align-items: center;
     justify-content: center;
     height: 100%;
-    color: #d32f2f;
+    color: var(--color-error-dark);
     font-size: 14px;
     padding: 20px;
     text-align: center;

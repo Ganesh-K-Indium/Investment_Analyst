@@ -289,7 +289,7 @@ export const SecIngestSection: React.FC<SecIngestSectionProps> = ({
                     {step === 1 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>1</div>
+                                <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'var(--color-text-inverse)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>1</div>
                                 <h3 style={{ margin: 0, fontSize: '16px' }}>Configure SEC Fetch</h3>
                             </div>
                             
@@ -359,7 +359,7 @@ export const SecIngestSection: React.FC<SecIngestSectionProps> = ({
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>2</div>
+                                    <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'var(--color-text-inverse)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>2</div>
                                     <h3 style={{ margin: 0, fontSize: '16px' }}>Select Filings</h3>
                                 </div>
                                 <Button variant="ghost" onClick={() => setStep(1)}>← Configure</Button>
@@ -445,7 +445,7 @@ export const SecIngestSection: React.FC<SecIngestSectionProps> = ({
                     {step === 3 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>3</div>
+                                <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'var(--color-text-inverse)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>3</div>
                                 <h3 style={{ margin: 0, fontSize: '16px' }}>Ingestion Progress</h3>
                             </div>
                             
@@ -487,7 +487,7 @@ export const SecIngestSection: React.FC<SecIngestSectionProps> = ({
                                             height: '240px',
                                             overflowY: 'auto',
                                             border: '1px solid var(--color-border)',
-                                            boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.05)'
+                                            boxShadow: 'inset 0 1px 3px var(--color-overlay-5)'
                                         }}
                                     >
                                         {ingestLogs.map((log, idx) => (

@@ -137,8 +137,8 @@ export const AlphaRun: React.FC = () => {
                     <svg viewBox="0 0 240 240" className="alpharun__radar">
                         <defs>
                             <linearGradient id="alphaRunFill" x1="0" y1="0" x2="1" y2="1">
-                                <stop offset="0%" stopColor="#FF8A3D" stopOpacity="0.55" />
-                                <stop offset="100%" stopColor="#E8452C" stopOpacity="0.16" />
+                                <stop offset="0%" style={{ stopColor: "var(--color-radar-start)", stopOpacity: 0.55 }} />
+                                <stop offset="100%" style={{ stopColor: "var(--color-radar-end)", stopOpacity: 0.16 }} />
                             </linearGradient>
                         </defs>
 

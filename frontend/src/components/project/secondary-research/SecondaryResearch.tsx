@@ -15,6 +15,7 @@ import { allCompanies } from '../../../data/foreignCompanies';
 import { secondaryAgentApi } from '../../../services/secondaryAgentApi';
 import { getRunProgress, type AnalysisTask, type RunProgress } from '../../../services/analysisTasksApi';
 import { useAnalysisRunsStore } from '../../../store/analysisRunsStore';
+import { cssVar } from '../../../lib/cssVar';
 import { RunProgressPanel } from '../run-progress/RunProgressPanel';
 import { Form4ImportModal } from './Form4ImportModal';
 
@@ -200,13 +201,14 @@ const colorizeValueChildren = (children: React.ReactNode, keyPrefix = 'val'): Re
     );
 };
 
-// Same colors as .value-positive/.value-negative/.value-neutral in SecondaryResearch.css
-// (light-mode values — baked clips aren't theme-aware once they leave this view).
-const SENTIMENT_TAG_COLOR: Record<string, string> = {
-    '+': '#15803d',
-    '-': '#b91c1c',
-    '~': '#a16207',
+// Colours baked into clipped text: the fixed document tokens (--color-doc-*, index.css), so a clip reads the same in any
+// theme once it leaves this view.
+const SENTIMENT_TAG_TOKEN: Record<string, string> = {
+    '+': '--color-doc-positive',
+    '-': '--color-doc-negative',
+    '~': '--color-doc-neutral',
 };
+const sentimentColor = (sign: string) => cssVar(SENTIMENT_TAG_TOKEN[sign]);
 
 // Bakes [[+|...]]/[[-|...]]/[[~|...]] markers into real colored <span>s directly in the
 // Markdown source, so the color survives clipping instead of disappearing (it's otherwise
@@ -215,7 +217,7 @@ const SENTIMENT_TAG_COLOR: Record<string, string> = {
 const sentimentMarkersToHtml = (markdown: string): string => {
     const regex = new RegExp(SENTIMENT_TAG_REGEX.source, 'g');
     return markdown.replace(regex, (_match, sign: string, sentence: string) =>
-        `<span style="color: ${SENTIMENT_TAG_COLOR[sign]}; font-weight: 500">${sentence}</span>`
+        `<span style="color: ${sentimentColor(sign)}; font-weight: 500">${sentence}</span>`
     );
 };
 
@@ -440,7 +442,7 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
             container.querySelectorAll('.value-positive, .value-negative, .value-neutral').forEach(el => {
                 const sign = el.classList.contains('value-positive') ? '+'
                     : el.classList.contains('value-negative') ? '-' : '~';
-                (el as HTMLElement).style.color = SENTIMENT_TAG_COLOR[sign];
+                (el as HTMLElement).style.color = sentimentColor(sign);
                 (el as HTMLElement).style.fontWeight = '500';
             });
             const html = container.innerHTML;
@@ -1434,7 +1436,7 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
                 useCORS: true,
                 allowTaint: true,
                 logging: false,
-                backgroundColor: '#ffffff',
+                backgroundColor: cssVar('--color-paper'),
                 width: messagesContainer.offsetWidth,
                 height: fullHeight,
                 scrollX: 0,

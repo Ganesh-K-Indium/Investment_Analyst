@@ -169,7 +169,7 @@ export const Form4IngestPanel: React.FC<Form4IngestPanelProps> = ({ onBack, onSh
                 {!hasStarted && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>1</div>
+                            <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'var(--color-text-inverse)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>1</div>
                             <h3 style={{ margin: 0, fontSize: '16px' }}>Configure Form 4 Ingestion</h3>
                         </div>
 
@@ -184,17 +184,17 @@ export const Form4IngestPanel: React.FC<Form4IngestPanelProps> = ({ onBack, onSh
                                 Separate multiple tickers with commas or spaces (up to {MAX_TICKERS}). Insider transactions are saved to the database that feeds the ALPHA alignment analysis.
                             </p>
                             {invalidTickers.length > 0 && (
-                                <p style={{ fontSize: '12px', color: 'var(--color-error, #d33)', margin: 0 }}>
+                                <p style={{ fontSize: '12px', color: 'var(--color-error)', margin: 0 }}>
                                     Invalid ticker{invalidTickers.length > 1 ? 's' : ''}: {invalidTickers.join(', ')} — use 1–5 letters.
                                 </p>
                             )}
                             {tooMany && (
-                                <p style={{ fontSize: '12px', color: 'var(--color-error, #d33)', margin: 0 }}>
+                                <p style={{ fontSize: '12px', color: 'var(--color-error)', margin: 0 }}>
                                     Too many tickers — ingest at most {MAX_TICKERS} at a time.
                                 </p>
                             )}
                             {foreignTickers.length > 0 && (
-                                <p style={{ fontSize: '12px', color: 'var(--color-warning-dark, #b26a00)', margin: 0 }}>
+                                <p style={{ fontSize: '12px', color: 'var(--color-warning-dark)', margin: 0 }}>
                                     {foreignTickers.join(', ')} {foreignTickers.length > 1 ? 'are foreign private issuers' : 'is a foreign private issuer'} — exempt from Section 16, so no Form 4 exists. {foreignTickers.length > 1 ? 'They' : 'It'} will be skipped; ownership data is in the 20-F (Items 6 and 7).
                                 </p>
                             )}
@@ -211,7 +211,7 @@ export const Form4IngestPanel: React.FC<Form4IngestPanelProps> = ({ onBack, onSh
                             </div>
                         </div>
                         {dateOrderInvalid && (
-                            <p style={{ fontSize: '12px', color: 'var(--color-error, #d33)', margin: 0 }}>Start date must be on or before the end date.</p>
+                            <p style={{ fontSize: '12px', color: 'var(--color-error)', margin: 0 }}>Start date must be on or before the end date.</p>
                         )}
                         <p style={{ fontSize: '12px', color: 'var(--color-text-secondary)', margin: 0 }}>
                             Leave the dates blank to use the backend defaults (a recent window up to today). Re-running is safe — filings already saved are skipped.
@@ -223,7 +223,7 @@ export const Form4IngestPanel: React.FC<Form4IngestPanelProps> = ({ onBack, onSh
                 {hasStarted && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>2</div>
+                            <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--color-primary)', color: 'var(--color-text-inverse)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>2</div>
                             <h3 style={{ margin: 0, fontSize: '16px' }}>Ingestion Progress</h3>
                         </div>
 
@@ -257,7 +257,7 @@ export const Form4IngestPanel: React.FC<Form4IngestPanelProps> = ({ onBack, onSh
                                         height: '240px',
                                         overflowY: 'auto',
                                         border: '1px solid var(--color-border)',
-                                        boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.05)',
+                                        boxShadow: 'inset 0 1px 3px var(--color-overlay-5)',
                                     }}
                                 >
                                     {logs.map((log, idx) => (

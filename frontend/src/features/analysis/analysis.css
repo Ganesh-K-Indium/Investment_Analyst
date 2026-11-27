@@ -213,7 +213,7 @@
 }
 
 /* ── slide-over ── */
-.ad-slideover { position: fixed; inset: 0; z-index: 1000; background: rgba(9, 12, 21, 0.4); display: flex; justify-content: flex-end; }
+.ad-slideover { position: fixed; inset: 0; z-index: 1000; background: var(--color-overlay-45); display: flex; justify-content: flex-end; }
 .ad-slideover__panel {
     height: 100%; width: min(560px, 100vw); background: var(--color-bg-primary); border-left: 1px solid var(--color-border); box-shadow: var(--shadow-xl);
     display: flex; flex-direction: column; animation: ad-slide-in 200ms ease-out;

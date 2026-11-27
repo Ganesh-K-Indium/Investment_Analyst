@@ -209,7 +209,7 @@
     transform: translateX(-50%);
     padding: 10px var(--space-8);
     background-color: var(--color-toast-bg);
-    color: var(--color-text-inverse);
+    color: var(--color-toast-text);
     border-radius: var(--radius-lg);
     font-size: var(--font-size-sm);
     box-shadow: var(--shadow-xl);

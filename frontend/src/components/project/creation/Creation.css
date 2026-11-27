@@ -333,8 +333,8 @@
     max-height: 160px;
     overflow-y: hidden;
     position: relative;
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
+    mask-image: linear-gradient(to bottom, currentColor calc(100% - 24px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, currentColor calc(100% - 24px), transparent 100%);
 }
 
 .creation__clip-content--html img {
@@ -1487,7 +1487,7 @@
 .creation__toast--action {
     display: flex; align-items: center; gap: 10px;
     bottom: 24px; right: 24px; padding: 10px 14px;
-    background: var(--color-toast-bg); color: var(--color-text-inverse); border-radius: 8px;
+    background: var(--color-toast-bg); color: var(--color-toast-text); border-radius: 8px;
     position: fixed; z-index: 1000; box-shadow: 0 4px 12px var(--color-overlay-20);
 }
 .creation__toast-btn {

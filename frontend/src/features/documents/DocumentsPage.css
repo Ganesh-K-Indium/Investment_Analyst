@@ -114,5 +114,5 @@ body.sidebar-collapsed .docs-page__main { margin-left: var(--sidebar-width-colla
 
 .docs-state { padding: 40px var(--space-6); text-align: center; color: var(--color-text-tertiary); font-size: var(--font-size-sm); }
 .docs-more { display: flex; justify-content: center; padding-bottom: var(--space-5); }
-.docs-btn--primary { background: var(--color-primary); border-color: var(--color-primary); color: #fff; text-decoration: none; }
+.docs-btn--primary { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-text-inverse); text-decoration: none; }
 .docs-btn--primary:hover:not(:disabled) { background: var(--color-primary); border-color: var(--color-primary); filter: brightness(1.08); }

@@ -349,7 +349,7 @@
 }
 
 .xpf-activity-row__agent-icon--rag {
-    background: rgba(139, 92, 246, 0.12);
+    background: color-mix(in srgb, var(--color-badge-secondary-research) 12%, transparent);
     color: var(--color-badge-secondary-research);
 }
 

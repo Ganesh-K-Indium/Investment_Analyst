@@ -154,8 +154,8 @@ const AlphaBody: React.FC<{ lane: ProgressLane | null }> = ({ lane }) => {
             <svg viewBox="0 0 240 240" className="rp__radar" aria-hidden="true">
                 <defs>
                     <linearGradient id="rpFill" x1="0" y1="0" x2="1" y2="1">
-                        <stop offset="0%" stopColor="#FF8A3D" stopOpacity="0.5" />
-                        <stop offset="100%" stopColor="#E8452C" stopOpacity="0.14" />
+                        <stop offset="0%" style={{ stopColor: "var(--color-radar-start)", stopOpacity: 0.5 }} />
+                        <stop offset="100%" style={{ stopColor: "var(--color-radar-end)", stopOpacity: 0.14 }} />
                     </linearGradient>
                 </defs>
                 {[1, 0.75, 0.5, 0.25].map(s => <polygon key={s} points={polygon(ALPHA_DIMS.map(() => s))} className="rp__ring" />)}

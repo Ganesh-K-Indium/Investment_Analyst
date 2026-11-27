@@ -12,6 +12,7 @@ import { useResizableSidebar } from '../../../hooks/useResizableSidebar';
 import { quantAgentApi } from '../../../services/quantAgentApi';
 import type { AnalysisTask } from '../../../services/analysisTasksApi';
 import { useAnalysisRunsStore } from '../../../store/analysisRunsStore';
+import { cssVar } from '../../../lib/cssVar';
 import { portfolioApi } from '../../../services/portfolioApi';
 import { chatApi } from '../../../services/chatApi';
 import { integrationApi } from '../../../services/integrationApi';
@@ -796,7 +797,7 @@ export const QuantitativeResearch: React.FC<QuantitativeResearchProps> = ({ proj
                 useCORS: true,
                 allowTaint: true,
                 logging: false,
-                backgroundColor: '#ffffff',
+                backgroundColor: cssVar('--color-paper'),
                 width: messagesContainer.offsetWidth,
                 height: fullHeight,
                 scrollX: 0,

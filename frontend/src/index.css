@@ -14,36 +14,43 @@
   color-scheme: light;
 
   /* Primary Colors */
-  --color-primary: #FF6B35;
-  --color-primary-hover: #E55A25;
-  --color-primary-light: rgba(255, 107, 53, 0.1);
+  /* Ember orange, deep enough that white text on it and orange links on white both meet WCAG AA (4.5:1).
+     The bright brand orange (#FF6B35) stays in the logo and the decorative radar gradient. */
+  --color-primary: #CF4A14;
+  --color-primary-hover: #B53E0E;
+  --color-primary-light: rgba(207, 74, 20, 0.09);
 
   /* Neutral Colors - Light Theme */
+  /* The same neutral family as the dark theme (zinc), inverted: canvas < cards are one quiet step apart, borders do the
+     separating. */
   --color-bg-primary: #FFFFFF;
-  --color-bg-secondary: #F9FAFB;
-  --color-bg-tertiary: #EDEFF1;
-  --color-bg-sidebar: #F5F6F8;
+  --color-bg-secondary: #FAFAFA;
+  --color-bg-tertiary: #EFEFF1;
+  --color-bg-sidebar: #F6F6F7;
 
   /* Text Colors */
-  --color-text-primary: #1A1D21;
-  --color-text-secondary: #4B5563;
-  --color-text-tertiary: #6B7280;
-  --color-text-placeholder: #9CA3AF;
+  /* AA on every surface: secondary 7.7:1, tertiary 4.8:1 on the canvas; placeholder 3.2:1. */
+  --color-text-primary: #18181B;
+  --color-text-secondary: #52525B;
+  --color-text-tertiary: #6B6B74;
+  --color-text-placeholder: #8E8E96;
+  /* Text on accent and status fills (and on the inverted tooltip): white here, near-black in dark mode. */
   --color-text-inverse: #FFFFFF;
 
   /* Border Colors */
-  --color-border: #E5E7EB;
-  --color-border-light: #F3F4F6;
+  --color-border: #E4E4E7;
+  --color-border-light: #F0F0F2;
 
   /* Status Colors */
-  --color-success: #10B981;
-  --color-warning: #F59E0B;
-  --color-error: #EF4444;
-  --color-info: #3B82F6;
-  --color-success-light: rgba(16, 185, 129, 0.1);
-  --color-warning-light: rgba(245, 158, 11, 0.1);
-  --color-error-light: rgba(239, 68, 68, 0.1);
-  --color-info-light: rgba(59, 130, 246, 0.1);
+  /* Status colours are used as text as well as fills, so each meets AA (4.5:1) on white, and with white text on it. */
+  --color-success: #0E8A5F;
+  --color-warning: #B45309;
+  --color-error: #DC2626;
+  --color-info: #2563EB;
+  --color-success-light: rgba(14, 138, 95, 0.1);
+  --color-warning-light: rgba(180, 83, 9, 0.1);
+  --color-error-light: rgba(220, 38, 38, 0.09);
+  --color-info-light: rgba(37, 99, 235, 0.09);
 
   /* Extended Palette */
   --color-ai-accent: #10A37F;
@@ -53,7 +60,7 @@
   --color-indigo-hover: #4F46E5;
   --color-indigo-light: rgba(99, 102, 241, 0.1);
   --color-indigo-dark: #4338CA;
-  --color-error-dark: #DC2626;
+  --color-error-dark: #B91C1C;
   --color-success-dark: #065F46;
   --color-warning-dark: #92400E;
   --color-info-medium: #1976D2;
@@ -96,7 +103,7 @@
   --color-indigo-glow-medium: rgba(99, 102, 241, 0.15);
   --color-indigo-glow-strong: rgba(99, 102, 241, 0.3);
   --color-info-glow-medium: rgba(59, 130, 246, 0.15);
-  --color-primary-glow: rgba(255, 107, 53, 0.2);
+  --color-primary-glow: rgba(207, 74, 20, 0.16);
 
   /* Subtle card/surface tint — unlike the black-alpha --color-overlay-* tiers
      below (fixed regardless of theme), this deliberately flips direction per
@@ -131,8 +138,39 @@
 
   /* Always-dark surface for floating snackbar/toast chips — these deliberately
      don't invert with the theme (same convention as most OS/Material toasts). */
-  --color-toast-bg: #111827;
+  --color-toast-bg: #18181B;
+  --color-toast-text: #FAFAFA;
   --color-spinner-ring: rgba(255, 255, 255, 0.3);
+
+  /* Fixed colours: the same in both themes on purpose, so components never carry colour literals.
+     - paper: a PDF page and exported images are white documents, whatever the app theme;
+     - doc-*: colours written INTO saved content (clipped report text, the report editor's swatches) — they must not
+       change with the viewer's theme once saved;
+     - highlight: a search hit / cited passage on a document page (highlighter yellow);
+     - radar: the ALPHA radar gradient. */
+  --color-paper: #FFFFFF;
+  --color-paper-ink-muted: #9CA3AF;
+  --color-doc-positive: #15803D;
+  --color-doc-negative: #B91C1C;
+  --color-doc-neutral: #A16207;
+  --color-doc-ink-1: #1A1A1A;
+  --color-doc-ink-2: #C0392B;
+  --color-doc-ink-3: #E67E22;
+  --color-doc-ink-4: #F1C40F;
+  --color-doc-ink-5: #27AE60;
+  --color-doc-ink-6: #2980B9;
+  --color-doc-ink-7: #8E44AD;
+  --color-doc-ink-8: #7F8C8D;
+  --color-doc-mark-1: #FFF3A0;
+  --color-doc-mark-2: #FFD6D6;
+  --color-doc-mark-3: #D6F5D6;
+  --color-doc-mark-4: #D6E8FF;
+  --color-doc-mark-5: #F0D6FF;
+  --color-doc-mark-6: #FFE4B3;
+  --color-highlight: #FACC15;
+  --color-highlight-edge: #D97706;
+  --color-radar-start: #FF8A3D;
+  --color-radar-end: #E8452C;
 
   /* Code blocks stay dark in both themes (standard editor/syntax-highlight
      convention), so this is intentionally not redefined under [data-theme="dark"]. */
@@ -149,17 +187,17 @@
   /* Brand gradient — matches the orange-to-red diagonal used in the Indium/ALPHA
      wordmarks (src/assets/alpha.png, indium-logo.png). Used deliberately on primary
      CTAs so the product visually rhymes with its own brand mark. */
-  --gradient-primary: linear-gradient(135deg, #FF8A3D 0%, #FF6B35 50%, #E8452C 100%);
-  --gradient-primary-hover: linear-gradient(135deg, #FF7A24 0%, #E8452C 50%, #D63A1F 100%);
+  --gradient-primary: linear-gradient(135deg, #D9541C 0%, #CF4A14 50%, #B53E0E 100%);
+  --gradient-primary-hover: linear-gradient(135deg, #C94612 0%, #B53E0E 50%, #9E350B 100%);
 
   /* Shadows - More subtle */
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --shadow-md: 0 2px 6px rgba(16, 24, 40, 0.06);
-  --shadow-lg: 0 8px 24px -6px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.04);
-  --shadow-xl: 0 16px 40px -8px rgba(16, 24, 40, 0.18), 0 4px 10px rgba(16, 24, 40, 0.05);
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04);
-  --shadow-card-hover: 0 10px 28px -8px rgba(16, 24, 40, 0.14);
-  --shadow-primary-glow: 0 1px 2px rgba(200, 60, 20, 0.25), 0 4px 12px rgba(255, 107, 53, 0.16);
+  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.05);
+  --shadow-md: 0 2px 6px rgba(24, 24, 27, 0.06);
+  --shadow-lg: 0 8px 24px -6px rgba(24, 24, 27, 0.07), 0 2px 6px rgba(24, 24, 27, 0.04);
+  --shadow-xl: 0 16px 40px -8px rgba(24, 24, 27, 0.075), 0 4px 10px rgba(24, 24, 27, 0.05);
+  --shadow-card: 0 1px 2px rgba(24, 24, 27, 0.04);
+  --shadow-card-hover: 0 10px 28px -8px rgba(24, 24, 27, 0.07);
+  --shadow-primary-glow: 0 1px 2px rgba(181, 62, 14, 0.07), 0 4px 12px rgba(207, 74, 20, 0.07);
 
   /* Border Radius - Smaller */
   --radius-sm: 4px;
@@ -213,7 +251,7 @@
   --header-height: 60px;
 
   /* Chevron for every <select> (colour is neutral so it reads in both themes). */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238A92A8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238E8E96' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
 
   /* Page rhythm — every top-level page uses the same gutters. */
   --page-pad-x: 32px;
@@ -250,97 +288,116 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* Saturation bumped up from the first pass (was ~20-25%) — at this low a
-     lightness, 20-25% saturation still reads as plain dark grey to the eye;
-     needed to push closer to 30-38% for the indigo tint to actually show. */
-  --color-bg-primary: #131727;
-  --color-bg-secondary: #0C0F1A;
-  --color-bg-tertiary: #1B2034;
-  --color-bg-sidebar: #090C15;
+  /* "Graphite & Ember". Neutral graphite surfaces with the faintest warm undertone (no blue cast), so the ember
+     orange is the only hue that reads as "act here". Elevation is a lightness ladder, each step ~+3-4% L:
+     sidebar < canvas (secondary) < cards (primary) < fills/hover (tertiary); separation comes from hairline borders
+     and a top-edge highlight, not glows. Text pairs meet WCAG AA on every surface (secondary >= 7:1, tertiary >= 4.5:1). */
+  --color-bg-sidebar: #0C0C0D;
+  --color-bg-secondary: #111113;
+  --color-bg-primary: #18181B;
+  --color-bg-tertiary: #222226;
 
-  --color-text-primary: #E8EAF0;
-  --color-text-secondary: #9DA3C4;
-  --color-text-tertiary: #7981AC;
-  --color-text-placeholder: #4B5178;
+  --color-text-primary: #EDEDEF;
+  --color-text-secondary: #A9A9B1;
+  --color-text-tertiary: #8A8A93;
+  --color-text-placeholder: #5E5E66;
+  --color-text-inverse: #141416;   /* on the ember accent and status fills: ~7:1 (white would be ~2.6:1) */
 
-  --color-border: #252A3F;
-  --color-border-light: #1B1F2F;
+  --color-border: #2C2C31;
+  --color-border-light: #222226;
 
-  /* Flips direction vs. the light-mode default above — lightens instead of
-     darkens, so faint card highlights still read as highlights on a dark bg. */
-  --color-surface-tint: rgba(255, 255, 255, 0.05);
-  --color-surface-tint-hover: rgba(255, 255, 255, 0.08);
+  --color-surface-tint: rgba(255, 255, 255, 0.04);
+  --color-surface-tint-hover: rgba(255, 255, 255, 0.07);
 
-  /* Primary accent — dialed back and lightened so it reads as a highlight
-     against the cool ground instead of buzzing like the raw brand hex would. */
-  --color-primary: #FF8552;
-  --color-primary-hover: #FF9E72;
-  --color-primary-light: rgba(255, 133, 82, 0.16);
-  --color-primary-glow: rgba(255, 133, 82, 0.2);
+  /* The one accent: ember orange, a touch lighter than the brand hex so it holds up on graphite without vibrating. */
+  --color-primary: #FF7A45;
+  --color-primary-hover: #FF9466;
+  --color-primary-light: rgba(255, 122, 69, 0.14);
+  --color-primary-glow: rgba(255, 122, 69, 0.18);
 
-  --color-ai-accent: #22D3B8;
-  --color-ai-accent-hover: #3EE2C9;
-  --color-ai-accent-light: rgba(34, 211, 184, 0.16);
-  --color-ai-accent-glow-subtle: rgba(34, 211, 184, 0.08);
-  --color-ai-accent-glow-medium: rgba(34, 211, 184, 0.18);
-  --color-ai-accent-glow-strong: rgba(34, 211, 184, 0.32);
-  --color-ai-accent-glow-intense: rgba(34, 211, 184, 0.42);
+  /* Secondary identity hues, desaturated so they support rather than compete with the accent. */
+  --color-ai-accent: #2CC7AE;
+  --color-ai-accent-hover: #4FD8C1;
+  --color-ai-accent-light: rgba(44, 199, 174, 0.14);
+  --color-ai-accent-glow-subtle: rgba(44, 199, 174, 0.06);
+  --color-ai-accent-glow-medium: rgba(44, 199, 174, 0.14);
+  --color-ai-accent-glow-strong: rgba(44, 199, 174, 0.26);
+  --color-ai-accent-glow-intense: rgba(44, 199, 174, 0.34);
 
-  /* Indigo — a bigger part of the identity here than in light mode. */
-  --color-indigo: #7C86F5;
-  --color-indigo-hover: #949CF7;
-  --color-indigo-light: rgba(124, 134, 245, 0.18);
-  --color-indigo-dark: #C7CBFC;
-  --color-indigo-glow-subtle: rgba(124, 134, 245, 0.08);
-  --color-indigo-glow-medium: rgba(124, 134, 245, 0.18);
-  --color-indigo-glow-strong: rgba(124, 134, 245, 0.32);
-  --color-indigo-surface: #232746;
+  --color-indigo: #8D93F0;
+  --color-indigo-hover: #A3A8F3;
+  --color-indigo-light: rgba(141, 147, 240, 0.14);
+  --color-indigo-dark: #C8CBF8;
+  --color-indigo-glow-subtle: rgba(141, 147, 240, 0.06);
+  --color-indigo-glow-medium: rgba(141, 147, 240, 0.14);
+  --color-indigo-glow-strong: rgba(141, 147, 240, 0.26);
+  --color-indigo-surface: #1F1F2B;
 
-  --color-success: #4ADE80;
-  --color-warning: #FACC57;
-  --color-error: #FB7373;
-  --color-info: #67AAFA;
-  --color-success-light: rgba(74, 222, 128, 0.16);
-  --color-warning-light: rgba(250, 204, 87, 0.16);
-  --color-error-light: rgba(251, 115, 115, 0.16);
-  --color-info-light: rgba(103, 170, 250, 0.16);
-  --color-success-glow-subtle: rgba(74, 222, 128, 0.1);
-  --color-error-glow-subtle: rgba(251, 115, 115, 0.1);
-  --color-error-glow-medium: rgba(251, 115, 115, 0.18);
-  --color-info-glow-subtle: rgba(103, 170, 250, 0.14);
-  --color-info-glow-medium: rgba(103, 170, 250, 0.18);
+  /* Status: calm, equally bright hues; each also has a deeper surface and a brighter "text on tint" shade. */
+  --color-success: #3FCF8E;
+  --color-warning: #F2B544;
+  --color-error: #F0706B;
+  --color-info: #6AA6F6;
+  --color-success-light: rgba(63, 207, 142, 0.13);
+  --color-warning-light: rgba(242, 181, 68, 0.13);
+  --color-error-light: rgba(240, 112, 107, 0.13);
+  --color-info-light: rgba(106, 166, 246, 0.13);
+  --color-success-glow-subtle: rgba(63, 207, 142, 0.08);
+  --color-error-glow-subtle: rgba(240, 112, 107, 0.08);
+  --color-error-glow-medium: rgba(240, 112, 107, 0.16);
+  --color-info-glow-subtle: rgba(106, 166, 246, 0.1);
+  --color-info-glow-medium: rgba(106, 166, 246, 0.16);
+  --color-success-border: rgba(63, 207, 142, 0.32);
 
-  /* Deep-shade "text on a tinted surface" tokens brighten instead of darken
-     in dark mode — the surface they sit on is already dark, so a further-
-     darkened text color would disappear into it. */
-  --color-success-dark: #6EE7B7;
-  --color-warning-dark: #FCD34D;
-  --color-error-dark: #F87171;
-  --color-info-medium: #8AC0FB;
-  --color-info-dark: #ABD3FC;
-  --color-info-deeper: #CFE4FD;
+  --color-success-dark: #7BE0B0;
+  --color-warning-dark: #F7CD73;
+  --color-error-dark: #F59A96;
+  --color-info-medium: #8DBCF8;
+  --color-info-dark: #B3D3FB;
+  --color-info-deeper: #D3E5FD;
 
-  --color-value-positive: #4ADE80;
-  --color-value-negative: #FB7373;
-  --color-value-neutral: #FACC57;
+  --color-value-positive: #3FCF8E;
+  --color-value-negative: #F0706B;
+  --color-value-neutral: #F2B544;
 
-  --color-error-surface: #3A2020;
-  --color-success-surface: #16302A;
-  --color-pink-surface: #2A1F26;
+  --color-error-surface: #2A1817;
+  --color-success-surface: #12261E;
+  --color-pink-surface: #2A1C23;
 
-  --gradient-primary: linear-gradient(135deg, #FF9E72 0%, #FF8552 50%, #E8622F 100%);
-  --gradient-primary-hover: linear-gradient(135deg, #FFB48F 0%, #E8622F 50%, #D14E1D 100%);
+  /* Floating chips sit one step above every surface, so they still read as floating on a dark page. */
+  --color-toast-bg: #2E2E33;
+  --color-toast-text: #EDEDEF;
+  --color-spinner-ring: rgba(0, 0, 0, 0.3);
+  --color-code-bg: #0E0E10;
 
-  /* Elevation reads as a black shadow on a light card in light mode; on a
-     dark card that same shadow all but disappears, so dark mode needs
-     noticeably higher opacity to keep the same sense of depth. */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.45);
-  --shadow-xl: 0 8px 16px rgba(0, 0, 0, 0.5);
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --shadow-card-hover: 0 8px 20px rgba(0, 0, 0, 0.5);
-  --shadow-primary-glow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(255, 133, 82, 0.2);
+  /* Black overlays are shadows and scrims; dark surfaces need more of them to show depth. */
+  --color-overlay-3: rgba(0, 0, 0, 0.12);
+  --color-overlay-4: rgba(0, 0, 0, 0.14);
+  --color-overlay-5: rgba(0, 0, 0, 0.16);
+  --color-overlay-6: rgba(0, 0, 0, 0.18);
+  --color-overlay-8: rgba(0, 0, 0, 0.22);
+  --color-overlay-10: rgba(0, 0, 0, 0.26);
+  --color-overlay-12: rgba(0, 0, 0, 0.3);
+  --color-overlay-15: rgba(0, 0, 0, 0.34);
+  --color-overlay-20: rgba(0, 0, 0, 0.4);
+  --color-overlay-45: rgba(0, 0, 0, 0.6);
+  --color-overlay-50: rgba(0, 0, 0, 0.62);
+  --color-overlay-55: rgba(0, 0, 0, 0.66);
+  --color-overlay-60: rgba(0, 0, 0, 0.7);
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238A8A93' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+
+  --gradient-primary: linear-gradient(135deg, #FF9466 0%, #FF7A45 55%, #E85F2C 100%);
+  --gradient-primary-hover: linear-gradient(135deg, #FFA982 0%, #FF7A45 50%, #D9521F 100%);
+
+  /* Depth: a faint top-edge highlight plus diffuse shadows. No outer glows, no hard edges. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 2px 8px rgba(0, 0, 0, 0.32);
+  --shadow-lg: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 28px -8px rgba(0, 0, 0, 0.55);
+  --shadow-xl: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 44px -10px rgba(0, 0, 0, 0.65);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 26px -10px rgba(0, 0, 0, 0.6);
+  --shadow-primary-glow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(255, 122, 69, 0.18);
 }
 
 /* Reset & Base Styles */
