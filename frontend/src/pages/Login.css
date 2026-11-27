@@ -844,3 +844,7 @@
 @media (prefers-reduced-motion: reduce) {
     .lp-dimlist li, .lp-dimlist__letter { transition: none; }
 }
+
+/* In-page links bring the section heading to just under the sticky header (60px): the section's own top padding is skipped,
+   so as much of the section as possible fits on screen. */
+.lp-sec { scroll-margin-top: calc(84px - clamp(56px, 9vh, 96px)); }

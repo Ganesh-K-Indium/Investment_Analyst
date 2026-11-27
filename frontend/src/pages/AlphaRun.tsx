@@ -36,11 +36,11 @@ const signed = (n: number, digits = 0) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${
 const scale = (score: number) => Math.max(0.08, (score + 2) / 4);
 
 // Timeline (ms)
-const START = 500;       // before first dimension starts reading
-const STEP = 1250;       // gap between dimension starts
-const DUR = 1150;        // time to read one dimension
-const DONE_AT = START + (DIMENSIONS.length - 1) * STEP + DUR;   // 6650
-const HOLD_UNTIL = DONE_AT + 3000;
+const START = 700;       // before first dimension starts reading
+const STEP = 1600;       // gap between dimension starts
+const DUR = 1450;        // time to read one dimension
+const DONE_AT = START + (DIMENSIONS.length - 1) * STEP + DUR;   // 8550
+const HOLD_UNTIL = DONE_AT + 4000;                              // time to read the stance before the next company
 const CYCLE = HOLD_UNTIL + 600;                                  // fade-out tail
 
 // Radar geometry (viewBox 240×240)
