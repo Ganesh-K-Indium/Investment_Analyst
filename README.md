@@ -170,11 +170,12 @@ python3 scripts/dev.py start     # Postgres/Redis/Qdrant (Docker), the 5 MCP ser
 | http://localhost:5173 | Web UI. Create an account on the sign-in page. |
 | http://localhost:8000/docs | API documentation |
 
-`start` prints the API's log in the terminal and writes the others to `data/logs/dev/`; **Ctrl+C stops everything**. Useful options: `--reload` (restart the API, workers and MCP servers when their Python code changes; the web UI always updates live), `--no-ui`, `--no-workers`, `--no-mcp`, `--no-services` (you run Postgres, Redis and Qdrant yourself). The services are published on 5433 (Postgres, so it never clashes with a local one), 6379 and 6333, which is what `.env.example` points at.
+`start` prints the API's log in the terminal and writes the others to `data/logs/dev/`; **Ctrl+C stops everything** within a few seconds (press it again to stop immediately). Useful options: `--reload` (restart the API, workers and MCP servers when their Python code changes; the web UI always updates live), `--no-ui`, `--no-workers`, `--no-mcp`, `--no-services` (you run Postgres, Redis and Qdrant yourself). The services are published on 5433 (Postgres, so it never clashes with a local one), 6379 and 6333, which is what `.env.example` points at.
 
 | Command | Does |
 |---|---|
 | `dev.py status` | What is running, plus the configuration check (values in force, problems) |
+| `dev.py stop` | Stop anything an earlier `start` left running (e.g. after its terminal was closed). `start` does this by itself too. |
 | `dev.py services up` / `down` | Only Postgres, Redis and Qdrant |
 | `dev.py mcp` | Only the five MCP servers (run the API from your IDE's debugger meanwhile) |
 | `dev.py install` | Install the pinned dependencies again, e.g. after a `git pull` changed them |
@@ -348,6 +349,7 @@ Investment_Analyst/
 | The API refuses to start with a configuration error | Read the message: a production secret is missing, or a value in `config.yaml` / a `SETTINGS__` variable is misspelled or invalid. `python -m app.core.config` shows what is in force. |
 | Background runs stay queued | The workers are not running. `dev.py start` runs them; check `dev.py status` and `data/logs/dev/worker-*.log`. |
 | `dev.py setup` says the Python version is wrong | Run it with Python 3.11–3.13: `py -3.12 scripts\dev.py setup` (Windows), `python3.12 scripts/dev.py setup` (macOS/Linux). |
+| Ctrl+C seemed not to stop, or `start` says port 8000 is in use | Run `python scripts/dev.py stop`: it stops whatever an earlier run left behind. |
 | A process stops right after `dev.py start` | Its log in `data/logs/dev/` says why; usually a missing key in `.env` or a service that is not running. |
 | Installing dependencies tries to compile something | You are on an Intel Mac (PyMuPDF has no wheel there) or an unsupported Python. Use Python 3.11–3.13, install Xcode's command-line tools, or use Docker. |
 | Everyone is signed out on each restart | `JWT_SECRET_KEY` is unset, so a new key is generated per start. Set it in `.env`. |

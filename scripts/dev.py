@@ -5,6 +5,7 @@ Investment Analyst developer tool: one command set for Windows, macOS and Linux.
     python scripts/dev.py setup          first-time setup: virtualenv, pinned dependencies, browser, .env, web UI
     python scripts/dev.py start          services + MCP servers + workers + API (+ web UI), Ctrl+C stops everything
     python scripts/dev.py status         what is running, and the configuration check
+    python scripts/dev.py stop           stop anything an earlier start left running (e.g. after closing its terminal)
     python scripts/dev.py mcp            only the MCP servers, in the foreground
     python scripts/dev.py services up    Postgres, Redis and Qdrant in Docker (also: down)
     python scripts/dev.py install        install backend/requirements.txt into the virtualenv (after a pull)
@@ -90,10 +91,17 @@ def run(cmd: list, cwd: Path | None = None, env: dict | None = None, check: bool
     return code
 
 
-def port_open(port: int, host: str = "127.0.0.1") -> bool:
-    with socket.socket() as s:
-        s.settimeout(0.3)
-        return s.connect_ex((host, port)) == 0
+def port_open(port: int) -> bool:
+    """Something is listening on this machine's port, over IPv4 or IPv6 (Vite, for one, may listen on ::1 only)."""
+    for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.settimeout(0.3)
+                if s.connect_ex((host, port)) == 0:
+                    return True
+        except OSError:
+            continue
+    return False
 
 
 def wait_port(port: int, seconds: float) -> bool:
@@ -250,21 +258,102 @@ def spawn_mcp(sup, py, name: str, folder: str, script: str, reload: bool) -> Non
     sup.spawn(f"mcp-{name}", cmd, cwd=cwd)
 
 
+# Text each process's command line contains, checked before cleanup_stale() stops a recorded PID. The API's arguments are
+# relative and the venv's python can show as the system interpreter, so it is recognised by its app path instead.
+MARKERS = {"api": "app.main:app", "ui": "run dev"}
+REGISTRY = LOGS / "processes.json"     # what the current/last `start` launched, so a crashed run can be cleaned up
+
+
+def _command_of(pid: int) -> str:
+    """The command line of a running process ('' if it is gone)."""
+    try:
+        if IS_WINDOWS:
+            out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                  f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"],
+                                 capture_output=True, text=True, timeout=10).stdout
+        else:
+            out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout
+        return out.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def cleanup_stale() -> int:
+    """Stop whatever a previous `start`/`mcp` left running (it crashed, or its terminal was closed). Only processes whose
+    command line still points into this project are touched, so a reused PID is never killed by mistake."""
+    if not REGISTRY.exists():
+        return 0
+    import json
+    try:
+        entries = json.loads(REGISTRY.read_text())
+    except ValueError:
+        entries = []
+    stopped = 0
+    for entry in entries:
+        cmd = _command_of(entry["pid"])
+        if not cmd or entry.get("marker", str(ROOT)) not in cmd:
+            continue
+        say(f"Stopping {entry['name']} left over from an earlier run (pid {entry['pid']})", "warn")
+        try:
+            if IS_WINDOWS:
+                subprocess.call(["taskkill", "/PID", str(entry["pid"]), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.killpg(entry["pid"], signal.SIGTERM)
+                for _ in range(30):
+                    if not _command_of(entry["pid"]):
+                        break
+                    time.sleep(0.2)
+                else:
+                    os.killpg(entry["pid"], signal.SIGKILL)
+            stopped += 1
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    REGISTRY.unlink(missing_ok=True)
+    return stopped
+
+
 class Supervisor:
-    """Starts child processes, sends their output to log files (the API's to this console), stops them all on exit."""
+    """Starts child processes, sends their output to log files (the API's to this console), stops them all on exit.
+
+    Ctrl+C: the first press stops everything gracefully (a few seconds while the API and workers finish cleanly); a
+    second press during that stops them immediately. Never leaves processes behind, and records what it started in
+    REGISTRY so even a crashed run is cleaned up by the next `start` or by `dev.py stop`."""
+
+    GRACE_SECONDS = 8
 
     def __init__(self):
         self.procs: list[tuple[str, subprocess.Popen, object]] = []
+        self.interrupted = False
+        self.force = False
         LOGS.mkdir(parents=True, exist_ok=True)
+
+    def install_signal_handlers(self) -> None:
+        def handler(*_):
+            if self.interrupted:          # pressed again while stopping: stop now, never crash
+                self.force = True
+                say("Stopping immediately", "warn")
+                return
+            self.interrupted = True
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGINT, handler)      # explicit, so Ctrl+C works even where SIGINT was inherited as ignored
+        signal.signal(signal.SIGTERM, handler)
+
+    def _record(self) -> None:
+        import json
+        # marker: text the process's command line must contain for cleanup_stale() to touch it (guards against reused PIDs)
+        REGISTRY.write_text(json.dumps([{"name": n, "pid": p.pid, "marker": MARKERS.get(n, str(ROOT))}
+                                        for n, p, _ in self.procs if p.poll() is None]))
 
     def spawn(self, name: str, cmd: list, cwd: Path, env: dict | None = None, console: bool = False) -> subprocess.Popen:
         log = None if console else open(LOGS / f"{name}.log", "a", buffering=1, encoding="utf-8")
         # Each child gets its own process group, so stopping it also stops what it spawned (npm -> vite,
-        # uvicorn --reload -> server). Ctrl+C reaches only this script, which then stops every group.
+        # uvicorn --reload -> server, watchfiles -> worker). Ctrl+C reaches only this script, which stops every group.
         extra = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WINDOWS else {"start_new_session": True}
         proc = subprocess.Popen([str(c) for c in cmd], cwd=str(cwd), env=env or backend_env(),
                                 stdout=log, stderr=subprocess.STDOUT if log else None, **extra)
         self.procs.append((name, proc, log))
+        self._record()
         return proc
 
     @staticmethod
@@ -279,26 +368,40 @@ class Supervisor:
             pass
 
     def stop(self) -> None:
+        self.interrupted = True                     # any further Ctrl+C now means "force", not "crash"
+        alive = [n for n, p, _ in self.procs if p.poll() is None]
+        if alive:
+            say(f"Stopping {len(alive)} processes… (press Ctrl+C again to stop them immediately)", "info")
         for _, proc, _ in reversed(self.procs):
             self._signal_tree(proc, force=False)
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + self.GRACE_SECONDS
+        while time.monotonic() < deadline and not self.force and any(p.poll() is None for _, p, _ in self.procs):
+            time.sleep(0.2)
         for _, proc, log in self.procs:
+            self._signal_tree(proc, force=True)     # whatever is still alive in the group, including grandchildren
             try:
-                proc.wait(timeout=max(0.1, deadline - time.monotonic()))
+                proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 pass
-            self._signal_tree(proc, force=True)      # anything still alive in the group, including grandchildren
             if log:
                 log.close()
+        REGISTRY.unlink(missing_ok=True)
         say("All processes stopped", "ok")
+
+
+def cmd_stop(args) -> None:
+    n = cleanup_stale()
+    say(f"Stopped {n} leftover process group(s)" if n else "Nothing left running from an earlier start", "ok")
 
 
 def cmd_start(args) -> None:
     py = require_venv()
     if not (ROOT / ".env").exists():
         die("No .env yet. Run: python scripts/dev.py setup  (then fill in the keys)")
+    if cleanup_stale():
+        time.sleep(1)
     if port_open(API_PORT):
-        die(f"Something is already listening on :{API_PORT}. Stop it, or run `python scripts/dev.py status`.")
+        die(f"Something else is already listening on :{API_PORT}. Stop it (`python scripts/dev.py status` shows what is running).")
 
     missing = [n for n, p in SERVICES.items() if not port_open(p)]
     if missing and not args.no_services:
@@ -309,12 +412,7 @@ def cmd_start(args) -> None:
             say(f"{', '.join(missing)} not running and Docker not found: the API will fail to reach them", "warn")
 
     sup = Supervisor()
-
-    def shutdown(*_):
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT, shutdown)     # explicit, so Ctrl+C works even where SIGINT was inherited as ignored
+    sup.install_signal_handlers()
     try:
         if not args.no_mcp:
             for name, folder, script, port in MCP_SERVERS:
@@ -362,13 +460,9 @@ def cmd_start(args) -> None:
 def cmd_mcp(args) -> None:
     """Only the MCP servers, in the foreground (for running the API elsewhere, e.g. in a debugger)."""
     py = require_venv()
+    cleanup_stale()
     sup = Supervisor()
-
-    def shutdown(*_):
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT, shutdown)
+    sup.install_signal_handlers()
     try:
         for name, folder, script, port in MCP_SERVERS:
             if port_open(port):
@@ -406,6 +500,7 @@ def main() -> None:
     p.set_defaults(func=cmd_start)
 
     sub.add_parser("status", help="what is running, and the configuration check").set_defaults(func=cmd_status)
+    sub.add_parser("stop", help="stop anything an earlier start left running").set_defaults(func=cmd_stop)
     p = sub.add_parser("mcp", help="run only the five MCP servers (Ctrl+C stops them)")
     p.add_argument("--reload", action="store_true", help="restart a server when its code changes")
     p.set_defaults(func=cmd_mcp)

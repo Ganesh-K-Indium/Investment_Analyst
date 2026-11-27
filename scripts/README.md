@@ -7,8 +7,9 @@ Needs only Python (3.11–3.13 to create the virtualenv). On Windows write `py s
 | Command | Does |
 |---|---|
 | `python3 scripts/dev.py setup` | First-time setup: `venv/`, pinned dependencies, Chromium for SEC filings, `.env` from `.env.example`, the web UI's packages (if `investment-analyst-ui` is next to this repo). Checks for Docker and Tesseract. |
-| `python3 scripts/dev.py start` | Postgres, Redis and Qdrant in Docker (if not already running), the five MCP servers, both workers, the API and the web UI. The API logs to the terminal, the rest to `data/logs/dev/`. **Ctrl+C stops everything**, including child processes. |
+| `python3 scripts/dev.py start` | Postgres, Redis and Qdrant in Docker (if not already running), the five MCP servers, both workers, the API and the web UI. The API logs to the terminal, the rest to `data/logs/dev/`. **Ctrl+C stops everything**, including child processes, within a few seconds; press it again to stop immediately. |
 | `python3 scripts/dev.py status` | Which ports are serving, and the configuration check (`python -m app.core.config`). |
+| `python3 scripts/dev.py stop` | Stop anything an earlier `start` left running (its terminal was closed, or it crashed). `start` also does this first. |
 | `python3 scripts/dev.py services up` / `down` | Only Postgres, Redis and Qdrant. |
 | `python3 scripts/dev.py mcp [--reload]` | Only the MCP servers, in the foreground. |
 | `python3 scripts/dev.py install` | Install `backend/requirements.txt` (exact versions) into `venv/`. |
