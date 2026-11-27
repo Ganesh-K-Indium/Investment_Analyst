@@ -1,0 +1,9 @@
+# GENERATED from the `ocr-rapidocr` extra in pyproject.toml by `python scripts/dev.py lock`. Do not edit.
+# Optional OCR engine RapidOCR. Install: python scripts/dev.py ocr add rapidocr
+-r ../requirements.txt
+colorlog==6.12.0
+omegaconf==2.4.0
+opencv-python-headless==4.14.0.94
+pyclipper==1.4.0
+rapidocr==3.10.0
+shapely==2.2.0

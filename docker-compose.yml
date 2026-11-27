@@ -9,7 +9,13 @@ name: ${COMPOSE_PROJECT_NAME:-investment_analyst_new}
 # COMPOSE_QDRANT_URL in .env.
 x-backend: &backend
   image: investment-analyst-backend
-  build: ./backend
+  build:
+    context: ./backend
+    # Optional OCR, set in .env, then `docker compose build`: OCR_ENGINES="rapidocr doctr" (also paddleocr) and
+    # TESSERACT_LANGS="deu fra" (Tesseract language packs; English is always included).
+    args:
+      OCR_ENGINES: ${OCR_ENGINES:-}
+      TESSERACT_LANGS: ${TESSERACT_LANGS:-}
   restart: unless-stopped
   env_file:
     - .env

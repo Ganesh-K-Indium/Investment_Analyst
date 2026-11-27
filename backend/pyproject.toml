@@ -110,7 +110,34 @@ dev = [
     "pytest>=8.0",
     "pyflakes>=3.0",
 ]
+# Optional local OCR engines for difficult scans (Tesseract is the default and needs no Python extra). Each one is
+# locked like everything else and exported to requirements-ocr/<engine>.txt. Install with
+# `python scripts/dev.py ocr add <engine>`, or in Docker with the OCR_ENGINES build argument.
+ocr-rapidocr = [
+    "rapidocr>=3.0",  # ~60 MB + ~30 MB models (downloaded on first use). Runs on onnxruntime, already a base dependency
+]
+ocr-paddleocr = [
+    "paddleocr>=3.0",  # ~430 MB + ~130 MB models. Wheels: Linux x86-64, Windows x64, Apple-silicon Macs
+    "paddlepaddle>=3.0",
+]
+ocr-doctr = [
+    "python-doctr[torch]>=0.10",  # ~630 MB + ~125 MB models
+    "torch",  # listed directly so Linux gets the CPU-only build (see tool.uv.sources): no multi-GB CUDA libraries
+    "torchvision",
+]
 
 
 [tool.uv]
 package = false          # an application, not a library: nothing to build or publish
+# OpenCV (OCR extras only): 5.x ships macOS packages for macOS 15+ only; 4.x covers macOS 13+.
+constraint-dependencies = ["opencv-python<5", "opencv-python-headless<5"]
+
+# PyTorch (docTR only) comes from PyTorch's CPU index on Linux; macOS and Windows wheels on PyPI are CPU builds already.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]

@@ -129,7 +129,7 @@ How a request flows, the RAG graph, ingestion, the document pipeline, the quant 
 | **Docker** with Docker Compose | Runs Postgres, Redis and Qdrant, or the whole stack. |
 | **Python 3.11, 3.12 or 3.13** | For running the backend on your machine. Not needed for the all-Docker route. |
 | **Node.js 20.19+** (22 LTS recommended) | For running the web UI on your machine. Not needed for the all-Docker route. |
-| **Tesseract OCR** | Reads scans. `brew install tesseract` · `sudo apt install tesseract-ocr` · Windows: the UB-Mannheim installer, then set `TESSERACT_CMD`. Included in the Docker image. |
+| **Tesseract OCR** | Reads scans. `python scripts/dev.py ocr add tesseract` installs it (winget on Windows, Homebrew on macOS); on Linux, `sudo apt install tesseract-ocr`. Found automatically on Windows, so `TESSERACT_CMD` is only for unusual locations. Included in the Docker image. See [OCR engines](#ocr-engines). |
 | **API keys** | **OpenAI** (required), **FRED** (macro data), **Google** (quant chart summaries). Optional: Tavily (web search), Anthropic, Gemini, Groq, Cohere, BLS, Cloudinary. |
 
 Works the same on **Windows, macOS and Linux**. Every pinned package installs from a pre-built wheel on Windows x64, Linux (x86-64 and ARM) and Apple-silicon Macs, so no compiler is needed. On an Intel Mac, PyMuPDF builds from source (install Xcode's command-line tools first), or use Docker.
@@ -179,6 +179,7 @@ python3 scripts/dev.py start     # Postgres/Redis/Qdrant (Docker), the 5 MCP ser
 | `dev.py mcp` | Only the five MCP servers (run the API from your IDE's debugger meanwhile) |
 | `dev.py install` | Install the pinned dependencies again, e.g. after a `git pull` changed them |
 | `dev.py lock` | Re-pin dependencies after editing `backend/pyproject.toml` (see [Adding or updating a library](#adding-or-updating-a-library)) |
+| `dev.py ocr` / `dev.py ocr add ENGINE` | OCR status, or install an engine: `tesseract`, `rapidocr`, `paddleocr`, `doctr`, `all` (see [OCR engines](#ocr-engines)) |
 | `dev.py test` | Run the test suite; extra arguments go to pytest, e.g. `dev.py test -k config` |
 | `dev.py check` | Everything a change must pass: backend tests, then the web UI's lint, type check and build |
 
@@ -210,20 +211,40 @@ python scripts/ingest_ticker.py AAPL --form-types 10-Q --limit 8
 
 The CLI lists filings with a period column (`FY2024`, `2025Q3`, using the company's own fiscal calendar); select by row (`3`), range (`1-4`), period (`FY2024`) or `all`. Filings can also be fetched from the UI (Data Sources), and users upload their own documents under My documents. For many PDFs at once, `python -m ingestion.batch_ingest --manifest <file>` is resumable and retries failures with `--retry-failed`.
 
-<details>
-<summary><b>Optional OCR engines</b></summary>
+### OCR engines
 
-Tesseract is enough to start. For difficult scans an administrator can add an engine, then restart the API:
+Scanned pages and images are read on your machine first; only pages a local engine reads poorly go to a vision model (see the reading strategy in **Settings → Your documents**). **Tesseract** is the default and is all most setups need. Three stronger engines are optional, pinned like every other library, and installed with one command:
 
-| Engine | Install | Size |
-|---|---|---|
-| RapidOCR | `pip install rapidocr-onnxruntime` | ~100 MB, models included |
-| PaddleOCR | `pip install paddlepaddle paddleocr` | ~430 MB + ~130 MB models |
-| docTR | `pip install "python-doctr[torch]"` | ~630 MB + ~125 MB models |
+```bash
+python scripts/dev.py ocr                    # what is installed, and whether each engine's models are downloaded
+python scripts/dev.py ocr add tesseract      # Tesseract itself (winget on Windows, Homebrew on macOS; prints the command on Linux)
+python scripts/dev.py ocr add rapidocr       # also paddleocr, doctr, or all; can be combined: ocr add rapidocr doctr
+python scripts/dev.py setup --ocr rapidocr   # or choose engines during first-time setup
+```
 
-Then **Settings → Your documents → Reading engines** downloads models, tests an engine on a sample page and selects it. From a terminal: `python -m app.docproc.engines.warmup --status` and `python -m app.docproc.engines.warmup`. Packages are deliberately not installed from the web UI.
+`ocr add` installs the exact versions from `backend/requirements-ocr/<engine>.txt`, downloads the engine's models and checks it on a sample page. Then restart the API and select the engine in **Settings → Your documents → Reading engines** (that screen can also download models and test an engine; packages are deliberately never installed from the web UI).
 
-</details>
+| Engine | Best for | Size | Runs on |
+|---|---|---|---|
+| Tesseract | Clean printed scans | ~30 MB | Everywhere |
+| RapidOCR | A light step up from Tesseract on printed scans | ~60 MB + ~30 MB models | Everywhere |
+| PaddleOCR | Difficult layouts | ~430 MB + ~130 MB models | Linux x86-64, Windows x64, Apple-silicon Macs |
+| docTR | Printed pages and tables; needs more memory | ~630 MB + ~125 MB models | Linux, Windows x64, Apple-silicon Macs on macOS 14+ |
+
+On Linux, docTR uses the CPU-only build of PyTorch, so no multi-gigabyte GPU libraries are downloaded.
+
+**Docker.** Set the engines in `.env` and rebuild: `OCR_ENGINES="rapidocr doctr"` then `docker compose build`. Models download on first use into `data/docproc/models` (the mounted volume), so they survive rebuilds.
+
+**Languages.** Tesseract reads English out of the box. For other languages, install the language data and set `TESSERACT_LANG` (e.g. `eng+deu+fra`):
+
+| Where | How |
+|---|---|
+| macOS | `brew install tesseract-lang` (all languages) |
+| Debian/Ubuntu | `sudo apt install tesseract-ocr-deu tesseract-ocr-fra` (one package per language) |
+| Windows | Re-run the Tesseract installer and tick the languages under *Additional language data* |
+| Docker | `TESSERACT_LANGS="deu fra"` in `.env`, then `docker compose build` |
+
+**Offline servers.** Run `ocr add` on a connected machine, then copy `data/docproc/models` (or the folder `DOCPROC_MODELS_DIR` names) to the server. RapidOCR keeps its models inside its package folder instead; `dev.py ocr` shows each engine's path.
 
 ---
 
@@ -365,7 +386,9 @@ Investment_Analyst/
 | Saved provider keys stop working | `APP_SECRET_KEY` changed. Users re-enter their keys. |
 | A quant answer says an agent is unavailable | Its MCP server is not running. `dev.py status`, the `mcp-*.log` files in `data/logs/dev/`, and `/quant/health`. |
 | The API in Docker cannot reach the database | `COMPOSE_DATABASE_URL` points somewhere unreachable; leave it unset to use the compose Postgres. |
-| Scans are not read | Tesseract is missing. Install it, or set `TESSERACT_CMD`. |
+| Scans are not read | Tesseract is missing: `python scripts/dev.py ocr` says so, and `dev.py ocr add tesseract` installs it. If it is installed somewhere unusual, set `TESSERACT_CMD`. |
+| `Failed loading language` from Tesseract | `TESSERACT_LANG` names a language whose data is not installed. See [OCR engines](#ocr-engines) → Languages. |
+| `ocr add paddleocr` or `doctr` says it cannot be installed | No pre-built package exists for this machine (e.g. an Intel Mac). Use RapidOCR, or Docker on Linux x86-64. |
 | Table extraction tests fail | PyMuPDF 1.x is installed. `pip install "pymupdf>=2.1"`. |
 | The UI build fails in Docker or locally | Node is older than 20.19. Use Node 22. |
 | Database errors after switching branches | The database is migrated past this branch's revision. Use a separate database (`COMPOSE_PROJECT_NAME`) or `alembic downgrade`. |

@@ -1,0 +1,22 @@
+# GENERATED from the `ocr-doctr` extra in pyproject.toml by `python scripts/dev.py lock`. Do not edit.
+# Optional OCR engine docTR. Install: python scripts/dev.py ocr add doctr
+-r ../requirements.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+anyascii==0.3.3
+h5py==3.16.0
+jinja2==3.1.6
+langdetect==1.0.9
+ml-dtypes==0.7.0
+onnx==1.22.0
+opencv-python==4.14.0.94
+pyclipper==1.4.0
+pypdfium2==5.15.2
+python-doctr==1.2.0
+rapidfuzz==3.14.6
+setuptools==84.2.1
+shapely==2.2.0
+torch==2.15.0 ; sys_platform != 'linux'
+torch==2.15.0+cpu ; sys_platform == 'linux'
+torchvision==0.29.2 ; sys_platform != 'linux'
+torchvision==0.29.2+cpu ; sys_platform == 'linux'
+validators==0.36.0

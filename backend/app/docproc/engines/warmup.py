@@ -8,7 +8,8 @@ Check that the local OCR engines work on this machine, and download their models
 For each engine it reads a small built-in page, then prints whether the page's values were found, how long it took, and the
 first-use time (which includes loading, and downloading, the model). Exit status is 1 when a requested engine fails, so it can
 gate a deployment. Run it on a connected machine to fill the model cache, then copy the cache to an air-gapped server (see
-MODELS_DIR in the README). Models are kept in DATA_DIR/models, inside the app's own data folder.
+OCR engines in the README). Models are kept in DATA_DIR/docproc/models (DOCPROC_MODELS_DIR), inside the app's own data folder;
+RapidOCR keeps its own inside its package folder.
 """
 import asyncio
 import sys
@@ -20,18 +21,17 @@ from app.docproc.engines.ocr import local, sample
 def status() -> int:
     """Installed or not, and whether the models are on disk yet. pip installs the code only: a neural engine downloads its
     models the first time it runs, so "already installed" says nothing about them."""
-    folders = local.model_folders()
     for eng in local.engines():
         if not eng.available():
             print(f"  --    {eng.label:10} not installed. {eng.install}")
         elif eng.id == "tesseract":
             print(f"  ready {eng.label:10} installed (language data comes with Tesseract itself)")
-        elif eng.id == "rapidocr":
-            print(f"  ready {eng.label:10} installed; its models are inside the package, nothing to download")
         else:
-            files, size = local.folder_size(folders[eng.id])
-            if files:
-                print(f"  ready {eng.label:10} installed, models downloaded ({files} files, {size / 1e6:.0f} MB) in {folders[eng.id]}")
+            st = local.model_status(eng.id)
+            if st["state"] == "bundled":
+                print(f"  ready {eng.label:10} installed; its models are inside the package, nothing to download")
+            elif st["state"] == "downloaded":
+                print(f"  ready {eng.label:10} installed, models downloaded ({st['files']} files, {st['bytes'] / 1e6:.0f} MB) in {st['path']}")
             else:
                 print(f"  TODO  {eng.label:10} installed, but the models are NOT downloaded yet. They download on first use, or now with:  python -m app.docproc.engines.warmup {eng.id}")
     return 0

@@ -101,8 +101,8 @@
 # docproc_models_dir: ""  # Downloaded OCR models. Default: <docproc_data_dir>/models.
 # max_upload_mb: 50  # Deployment default for Settings > Your documents > Largest file.
 # max_pages: 200  # Deployment default for Settings > Your documents > Most pages per file.
-# tesseract_cmd: ""  # Path to the tesseract binary when it is not on PATH.
-# tesseract_lang: "eng"  # Tesseract language(s), e.g. eng+deu.
+# tesseract_cmd: ""  # Path to the tesseract binary when it is not on PATH (Windows default install folders are found automatically).
+# tesseract_lang: "eng"  # Tesseract language(s), e.g. eng+deu; each needs its language data installed (README: OCR engines).
 # docproc_deskew: true  # Straighten scanned pages before OCR.
 # reading_strategy: "balanced"  # Default reading strategy for a document workspace.
 # local_ocr_engine: "tesseract"  # Default local OCR engine for a document workspace.

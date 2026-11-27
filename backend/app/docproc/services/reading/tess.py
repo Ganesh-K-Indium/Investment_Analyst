@@ -29,7 +29,16 @@ LANG = get_settings().tesseract_lang
 
 
 def binary() -> Optional[str]:
-    return get_settings().tesseract_cmd or shutil.which("tesseract")
+    """TESSERACT_CMD, else PATH, else (Windows) the installer's default folders, so a standard install needs no setting."""
+    found = get_settings().tesseract_cmd or shutil.which("tesseract")
+    if found or os.name != "nt":
+        return found
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
+                 os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
+        exe = Path(base or "") / "Tesseract-OCR" / "tesseract.exe"
+        if base and exe.is_file():
+            return str(exe)
+    return None
 
 
 def available() -> bool:

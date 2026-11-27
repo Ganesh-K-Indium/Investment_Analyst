@@ -6,14 +6,16 @@ Needs only Python (3.11–3.13 to create the virtualenv). On Windows write `py s
 
 | Command | Does |
 |---|---|
-| `python3 scripts/dev.py setup` | First-time setup: `venv/`, pinned dependencies, Chromium for SEC filings, `.env` from `.env.example`, the web UI's packages (`frontend/`, `npm ci`). Checks for Docker and Tesseract. |
+| `python3 scripts/dev.py setup` | First-time setup: `venv/`, pinned dependencies, Chromium for SEC filings, `.env` from `.env.example`, the web UI's packages (`frontend/`, `npm ci`). Checks for Docker and Tesseract. `--ocr ENGINE` also installs an optional OCR engine. |
 | `python3 scripts/dev.py start` | Postgres, Redis and Qdrant in Docker (if not already running), the five MCP servers, both workers, the API and the web UI. The API logs to the terminal, the rest to `data/logs/dev/`. **Ctrl+C stops everything**, including child processes, within a few seconds; press it again to stop immediately. |
 | `python3 scripts/dev.py status` | Which ports are serving, and the configuration check (`python -m app.core.config`). |
 | `python3 scripts/dev.py stop` | Stop anything an earlier `start` left running (its terminal was closed, or it crashed). `start` also does this first. |
 | `python3 scripts/dev.py services up` / `down` | Only Postgres, Redis and Qdrant. |
 | `python3 scripts/dev.py mcp [--reload]` | Only the MCP servers, in the foreground. |
 | `python3 scripts/dev.py install` | Install `backend/requirements.txt` (exact versions) into `venv/`. |
-| `python3 scripts/dev.py lock [--upgrade] [--upgrade-package NAME]` | Re-pin dependencies after editing `backend/pyproject.toml`. |
+| `python3 scripts/dev.py lock [--upgrade] [--upgrade-package NAME]` | Re-pin dependencies after editing `backend/pyproject.toml` (also regenerates `backend/requirements-ocr/`). |
+| `python3 scripts/dev.py ocr` | Which OCR engines are installed and whether their models are downloaded. |
+| `python3 scripts/dev.py ocr add ENGINE...` | Install `tesseract` (winget / Homebrew), `rapidocr`, `paddleocr`, `doctr` or `all` (exact versions from `backend/requirements-ocr/`), download the models and check each on a sample page. |
 | `python3 scripts/dev.py test [pytest args]` | Run the backend tests. |
 | `python3 scripts/dev.py check` | Everything a change must pass: backend tests, then the web UI's lint, type check and production build (what CI runs). |
 

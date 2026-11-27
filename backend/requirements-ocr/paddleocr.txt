@@ -1,0 +1,29 @@
+# GENERATED from the `ocr-paddleocr` extra in pyproject.toml by `python scripts/dev.py lock`. Do not edit.
+# Optional OCR engine PaddleOCR. Install: python scripts/dev.py ocr add paddleocr
+-r ../requirements.txt
+aistudio-sdk==0.3.9
+bce-python-sdk==0.9.79
+chardet==7.7.0
+colorlog==6.12.0
+crc32c==2.9.post0
+future==1.0.0
+imagesize==2.0.1
+modelscope==1.40.3
+modelscope-hub==0.7.2
+opencv-contrib-python==4.10.0.84
+opt-einsum==3.3.0
+paddleocr==3.7.0
+paddlepaddle==3.3.1
+paddlex==3.7.2
+prettytable==3.19.0
+py-cpuinfo==9.0.0
+pyclipper==1.4.0
+pycryptodome==4.6.0
+pypdfium2==5.15.2
+python-bidi==0.6.12
+ruamel-yaml==0.19.1
+safetensors==0.8.0
+setuptools==84.2.1
+shapely==2.2.0
+ujson==6.1.0
+wcwidth==0.9.5

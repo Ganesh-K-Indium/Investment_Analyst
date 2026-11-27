@@ -17,6 +17,7 @@ import pytesseract
 
 from app.utils.usage_tracker import record_usage
 from app.core.config import get_settings
+from app.docproc.services.reading import tess
 
 
 logger = logging.getLogger("ingestion.image_data_prep")
@@ -45,8 +46,8 @@ _REFUSAL_MARKERS = (
     "cannot assist", "can't extract", "cannot extract", "portrait photograph",
 )
 
-# Use the explicit binary path if set (required for Docker/ECS environments)
-_tesseract_cmd = get_settings().tesseract_cmd or None
+# Same lookup as the document engine: TESSERACT_CMD, PATH, then the Windows installer's default folders.
+_tesseract_cmd = tess.binary()
 if _tesseract_cmd:
     pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
 

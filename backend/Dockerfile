@@ -10,7 +10,10 @@ WORKDIR /app
 #     zlib1g-dev               : Image processing libs (Pillow / kaleido)
 #   - chromium, chromium-driver: Headless browser for kaleido chart rendering
 #   - tesseract-ocr            : OCR engine required by pytesseract (ingestion)
+# Extra Tesseract languages as Tesseract codes, e.g. --build-arg TESSERACT_LANGS="deu fra" (then TESSERACT_LANG=eng+deu+fra)
+ARG TESSERACT_LANGS=""
 RUN apt-get update && apt-get install -y \
+    $(for l in $TESSERACT_LANGS; do printf 'tesseract-ocr-%s ' "$l"; done) \
     gcc \
     libpq-dev \
     libjpeg-dev \
@@ -46,6 +49,15 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Optional OCR engines, e.g. --build-arg OCR_ENGINES="rapidocr doctr" (also paddleocr; x86-64 only). Exact versions from
+# requirements-ocr/<engine>.txt. Their models download on first use into DATA_DIR/docproc/models, on the mounted volume.
+COPY requirements-ocr/ ./requirements-ocr/
+ARG OCR_ENGINES=""
+RUN if [ -n "$OCR_ENGINES" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/* && \
+        for e in $(printf '%s\n' $OCR_ENGINES | grep -vx paddleocr) $(printf '%s\n' $OCR_ENGINES | grep -x paddleocr); do pip install --no-cache-dir -r "requirements-ocr/$e.txt" || exit 1; done; \
+    fi
 
 # Copy application source
 COPY app/        ./app/

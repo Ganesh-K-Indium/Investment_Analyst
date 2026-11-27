@@ -227,7 +227,7 @@ upload or import → normalise → read → check → HOLD for approval → inde
 ```
 
 - **Normalise** (`services/user_docs/normalize.py`): images become a PDF; Excel/CSV, Word, PowerPoint, HTML and text are read natively.
-- **Read** (`app/docproc`): digital pages by code; scans with local OCR (Tesseract by default; RapidOCR, PaddleOCR, docTR optional), escalating doubtful pages to a vision model according to the reading strategy (economy, balanced, accuracy).
+- **Read** (`app/docproc`): digital pages by code; scans with local OCR (Tesseract by default; RapidOCR, PaddleOCR, docTR optional, each a pinned `ocr-<engine>` extra installed with `dev.py ocr add`; neural engines run in a child process of their own), escalating doubtful pages to a vision model according to the reading strategy (economy, balanced, accuracy).
 - **Check**: finance arithmetic (totals, subtotals, units, currency) flags doubtful figures for a person to confirm.
 - **Approve**: nothing is indexed until a person approves it (`documents.require_approval`); `documents.index_policy` decides what happens to low-confidence text.
 - **Index** (`services/user_docs/store.py`): chunks go to the `user_documents` collection with owner and visibility, so search only returns what the user may read.

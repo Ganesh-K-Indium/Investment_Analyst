@@ -7,9 +7,12 @@ decide whether the local reading is good enough or the page should be read by a 
 
 Engines
     tesseract  classic OCR; needs the `tesseract` program (the Docker image has it)
-    rapidocr   PaddleOCR models on ONNX: light, fast on CPU, good on printed scans.  pip install rapidocr-onnxruntime
-    paddleocr  PaddleOCR itself.                                                      pip install paddleocr
-    doctr      docTR (PyTorch): strong on printed pages and tables.                    pip install python-doctr[torch]
+    rapidocr   PaddleOCR models on ONNX: light, fast on CPU, good on printed scans.
+    paddleocr  PaddleOCR itself.
+    doctr      docTR (PyTorch): strong on printed pages and tables.
+
+Install one with `python scripts/dev.py ocr add <engine>` (pinned versions from backend/requirements-ocr/), or in Docker
+with the OCR_ENGINES build argument.
 
 Only installed engines are offered. Nothing here sends anything off the machine.
 """
@@ -408,10 +411,22 @@ def folder_size(path: Path) -> Tuple[int, int]:
     return len(files), sum(f.stat().st_size for f in files)
 
 
+def _rapidocr_models() -> Optional[Path]:
+    """RapidOCR 3+ downloads its models (~30 MB) on first use into the package's own `models` folder. The older
+    rapidocr-onnxruntime package ships them inside, so it has no folder to report."""
+    spec = importlib.util.find_spec("rapidocr")
+    return Path(list(spec.submodule_search_locations)[0]) / "models" if spec and spec.submodule_search_locations else None
+
+
 def model_status(engine_id: str) -> Dict[str, Any]:
     """Whether an engine's models are on disk. `state` is "bundled" (inside the package), "downloaded", "missing" or "none"."""
     if engine_id == "rapidocr":
-        return {"state": "bundled"}
+        folder = _rapidocr_models()
+        if folder is None:
+            return {"state": "bundled"}
+        models = list(folder.glob("*.onnx")) if folder.is_dir() else []
+        return {"state": "downloaded" if models else "missing", "files": len(models),
+                "bytes": sum(f.stat().st_size for f in models), "approx_mb": 30, "path": str(folder)}
     if engine_id not in APPROX_MB:
         return {"state": "none"}
     path = model_folders()[engine_id]
@@ -501,7 +516,7 @@ class Tesseract(Engine):
     id = "tesseract"
     label = "Tesseract"
     summary = "Classic OCR. Fast and free; good on clean printed pages, weak on handwriting and poor photos."
-    install = "Install the tesseract program (apt install tesseract-ocr, or brew install tesseract)."
+    install = "Install the tesseract program: python scripts/dev.py ocr add tesseract (or apt install tesseract-ocr, brew install tesseract, winget install UB-Mannheim.TesseractOCR)."
 
     def available(self) -> bool:
         return tess.available()
@@ -561,7 +576,7 @@ class RapidOCR(Engine):
     id = "rapidocr"
     label = "RapidOCR"
     summary = "PaddleOCR models on ONNX. Light and quick on a CPU; a good local step up from Tesseract for printed scans."
-    install = "pip install rapidocr-onnxruntime"
+    install = "python scripts/dev.py ocr add rapidocr"
 
     def __init__(self):
         self._model = _Lazy(self._load)
@@ -598,7 +613,7 @@ class PaddleOCR(Engine):
     id = "paddleocr"
     label = "PaddleOCR"
     summary = "Strong open-source OCR with good layout handling. Heavier to install than RapidOCR."
-    install = "pip install paddleocr paddlepaddle"
+    install = "python scripts/dev.py ocr add paddleocr"
 
     def __init__(self):
         self._model = _Lazy(self._load)
@@ -641,7 +656,7 @@ class DocTR(Engine):
     id = "doctr"
     label = "docTR"
     summary = "Deep-learning OCR (PyTorch) with strong results on printed pages and tables. Needs more memory."
-    install = "pip install 'python-doctr[torch]'"
+    install = "python scripts/dev.py ocr add doctr"
 
     def __init__(self):
         self._model = _Lazy(self._load)
