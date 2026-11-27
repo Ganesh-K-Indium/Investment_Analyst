@@ -376,6 +376,26 @@ def cmd_backfill_insights(args) -> None:
     run([py, "-c", code], cwd=BACKEND, env=backend_env())
 
 
+def cmd_make_admin(args) -> None:
+    """Give an existing account the admin role (system settings, shared provider keys, reading engines). Admin cannot be
+    chosen at sign-up, so this is how a new install gets its first admin."""
+    py = require_venv()
+    code = ("import asyncio, sys\n"
+            "from sqlalchemy import select\n"
+            "from app.database.connection import SessionLocal, init_db\n"
+            "from app.database.models import User\n"
+            "async def main(email):\n"
+            "    async with SessionLocal() as db:\n"
+            "        u = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()\n"
+            "        if not u:\n"
+            "            print(f'No account with email {email}'); return 1\n"
+            "        u.role = 'admin'; u.token_version += 1\n"
+            "        await db.commit(); print(f'{email} is now an admin (sign in again to use it)'); return 0\n"
+            "init_db()\n"
+            "sys.exit(asyncio.run(main(sys.argv[1])))\n")
+    run([py, "-c", code, args.email], cwd=BACKEND, env=backend_env())
+
+
 def cmd_alpha_eval(args) -> None:
     """Live ALPHA evaluation (spends model budget): completeness, fact checks, revenue vs filings, stance stability."""
     py = require_venv()
@@ -679,6 +699,9 @@ def main() -> None:
     p.set_defaults(func=cmd_ocr)
 
     sub.add_parser("check", help="backend tests + web UI lint, type check and build").set_defaults(func=cmd_check)
+    p = sub.add_parser("make-admin", help="give an existing account the admin role")
+    p.add_argument("email")
+    p.set_defaults(func=cmd_make_admin)
     sub.add_parser("backfill-insights", help="fill dashboard fields of older runs and re-price stored usage; no model calls").set_defaults(func=cmd_backfill_insights)
     p = sub.add_parser("alpha-eval", help="live ALPHA evaluation on real tickers (spends model budget); extra arguments go to scripts/alpha_eval.py")
     p.add_argument("rest", nargs=argparse.REMAINDER)

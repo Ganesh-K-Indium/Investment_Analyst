@@ -123,7 +123,7 @@ class Settings(BaseSettings):
     cors_allowed_origin_regex: str = Field(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$", description="Extra origins as a regex (default: localhost on any port, for development). Set empty in production.")
 
     # ── Security ─────────────────────────────────────────────────────────────
-    jwt_secret_key: str = Field("", description="Signs login tokens. Required in production; in development a random key is used per start.")
+    jwt_secret_key: str = Field("", description="Signs login tokens. Required in production; in development a random key is created once in data/.jwt_secret and reused.")
     access_token_expire_minutes: int = Field(30, ge=1, description="Lifetime of an access token.")
     refresh_token_expire_days: int = Field(7, ge=1, description="Lifetime of a refresh token.")
     app_secret_key: str = Field("", description="Encrypts the model-provider keys users save. Changing it makes saved keys unreadable.")

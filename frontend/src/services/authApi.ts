@@ -73,9 +73,7 @@ export const authApi = {
             headers: { Authorization: `Bearer ${token}` },
         }),
 
-    logout: (token: string) =>
-        request<{ message: string }>('/logout', {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-        }),
+    // Ends this browser's sign-in using the refresh cookie alone, so it works even after the access token has expired.
+    logout: () =>
+        request<{ message: string }>('/logout', { method: 'POST' }),
 };

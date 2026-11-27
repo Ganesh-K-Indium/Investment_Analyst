@@ -17,7 +17,7 @@
 # cors_allowed_origin_regex: "^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$"  # Extra origins as a regex (default: localhost on any port, for development). Set empty in production.
 
 # ── Security ────────────────────────────────────────────────────────────────────────────────────────────
-# jwt_secret_key: ""  # Signs login tokens. Required in production; in development a random key is used per start.
+# jwt_secret_key: ""  # Signs login tokens. Required in production; in development a random key is created once in data/.jwt_secret and reused.
 # access_token_expire_minutes: 30  # Lifetime of an access token.
 # refresh_token_expire_days: 7  # Lifetime of a refresh token.
 # app_secret_key: ""  # Encrypts the model-provider keys users save. Changing it makes saved keys unreadable.

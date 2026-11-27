@@ -59,6 +59,22 @@ class User(Base):
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class RefreshToken(Base):
+    """One refresh token. Used once: a refresh marks it used and issues the next token in the same family (one family per
+    sign-in on a device). A used token presented again, outside a short grace window, means it was copied: the whole family
+    is revoked. Logout revokes the family; a password change or "sign out everywhere" revokes every family of the user."""
+    __tablename__ = "refresh_tokens"
+
+    jti        = Column(String(64), primary_key=True)
+    user_id    = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    family     = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at    = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    user_agent = Column(String(255), nullable=True)
+
+
 class AgentType(str, enum.Enum):
     """Enum for different agent types"""
     RAG = "rag"

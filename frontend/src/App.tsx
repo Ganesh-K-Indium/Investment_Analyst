@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Login } from './pages/Login';
 import { Home } from './pages/Home';
 import { DataSources } from './pages/DataSources';
@@ -13,6 +13,7 @@ import { SettingsPage } from './features/settings/SettingsPage';
 import { CrossPortfolioDashboard } from './pages/CrossPortfolioDashboard';
 import { AuthProvider } from './context/AuthContext';
 import { useAuth } from './context/useAuth';
+import { returnPath } from './authRedirect';
 import { ChatCacheProvider } from './context/ChatCacheContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { openUserAnalysisStream } from './store/analysisRunsStore';
@@ -20,12 +21,14 @@ import './index.css';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { isAuthenticated, isLoading } = useAuth();
+    const location = useLocation();
     if (isLoading) return null;
-    return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+    return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />;
 };
 
 function AppRoutes() {
     const { isAuthenticated, isLoading, userId } = useAuth();
+    const location = useLocation();
 
     useEffect(() => {
         if (!isAuthenticated || !userId) return;
@@ -37,7 +40,7 @@ function AppRoutes() {
     return (
         <Routes>
             <Route path="/"      element={isAuthenticated ? <Navigate to="/home" replace /> : <Navigate to="/login" replace />} />
-            <Route path="/login" element={isAuthenticated ? <Navigate to="/home" replace /> : <Login />} />
+            <Route path="/login" element={isAuthenticated ? <Navigate to={returnPath(location.state)} replace /> : <Login />} />
             <Route path="/home"          element={<ProtectedRoute><Home /></ProtectedRoute>} />
             <Route path="/repository"    element={<ProtectedRoute><Repository /></ProtectedRoute>} />
             <Route path="/documents"         element={<ProtectedRoute><DocumentsPage /></ProtectedRoute>} />

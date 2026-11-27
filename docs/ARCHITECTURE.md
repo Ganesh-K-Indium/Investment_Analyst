@@ -297,7 +297,7 @@ frontend/src/
 
 | Concern | How it works |
 |---|---|
-| **Sign-in** | `useAuth()` holds the user and the access token in memory only; the refresh token is an httpOnly cookie the browser sends to `/auth/refresh`. `services/authInterceptor.ts` patches `fetch` once: on a 401 it refreshes silently and retries, and only signs the user out if that fails. |
+| **Sign-in** | `useAuth()` holds the user and the access token in memory only; the refresh token is an httpOnly cookie the browser sends to `/auth/refresh`. `services/authInterceptor.ts` patches `fetch` once: on a 401 it refreshes silently and retries, and only signs the user out if the server ends the session (an unreachable server is retried, not treated as sign-out). The access token is also renewed a minute before it expires and when a tab wakes; refreshes are serialised across tabs with a Web Lock, since each refresh token works once. Tabs share sign-in and sign-out over a `BroadcastChannel`, and after signing in the user returns to the page they were on. |
 | **API calls** | Each `services/*Api.ts` builds URLs from `API_BASE` and adds the bearer header (`authHeader.ts`). Response shapes are typed to match the backend's models. |
 | **Live answers** | `streamPost()` in `http.ts` reads server-sent events over POST (EventSource cannot send a body or a bearer token): `/ask/stream` gives steps, tokens, then the full result. |
 | **Background runs** | `analysisTasksApi` subscribes to `/analysis-tasks/stream/{portfolio}` and `/stream/user/{id}`; `store/analysisRunsStore` keeps the dashboards, the notification bell and the research tabs in step with the workers. A research tab reattaches to a run still in progress on the server (its step panel shows again) and reloads the chat when it ends. |
@@ -326,7 +326,8 @@ The API process is a single process by design: heavy work runs on workers, and a
 
 | Table | Purpose |
 |---|---|
-| `users` | Accounts with a role (analyst, fund manager, admin) and a token version for real logout. |
+| `users` | Accounts with a role (analyst, fund manager, admin) and a token version that signs out every device at once. |
+| `refresh_tokens` | One row per refresh token: single use, rotated on every refresh, grouped by sign-in (one per browser). A used token presented again after a 30-second grace window revokes its whole sign-in. |
 | `portfolios`, `sessions` | Named ticker collections and their conversation sessions. |
 | `chat_sessions`, `chat_messages`, `consolidated_summaries` | Conversation history for RAG and quant, with cached AI summaries. |
 | `analyst_reports`, `report_draft_items` | Published and draft reports (Postgres full-text search) and the clipboard. |
@@ -347,11 +348,11 @@ LangGraph's checkpoint tables live in the same database. Migrations are one line
 
 ## 13. API reference
 
-Interactive documentation is served at `/docs`. Every route needs a JWT except signup, login, refresh, `/`, `/health` (the app, its database and Redis), `/rag/health`, `/quant/health`, `/capabilities` and `/quant/capabilities`. Another user's resource returns 404, not 403.
+Interactive documentation is served at `/docs`. Every route needs a JWT except signup, login, refresh, logout (it uses the refresh cookie, so it works with an expired access token), `/`, `/health` (the app, its database and Redis), `/rag/health`, `/quant/health`, `/capabilities` and `/quant/capabilities`. Another user's resource returns 404, not 403.
 
 | Area | Prefix | Main routes |
 |---|---|---|
-| Auth | `/auth` | `POST /signup`, `/login`, `/refresh`, `/logout` · `GET`/`PUT /me` |
+| Auth | `/auth` | `POST /signup`, `/login`, `/refresh`, `/logout` (this browser), `/logout-all` (every device) · `GET`/`PUT /me` (a password change signs out every other device) |
 | RAG | none | `POST /ask`, `/ask/stream`, `/compare`, `/alpha` · `GET /rag/health`, `/capabilities`, `/sessions/{id}`, `/portfolio/{id}/sessions` |
 | Quant | `/quant` | `POST /query`, `/query/stream` · `GET /health`, `/capabilities`, `/sessions/{id}`, `/portfolio/{id}/sessions` |
 | Background runs | `/analysis-tasks` | `POST /rag/ask`, `/rag/compare`, `/rag/alpha`, `/quant/query`, `/rerun-alpha`, `/reviewed`, `/{id}/retry`, `/{id}/cancel` · `GET /`, `/history` (filters, cursor paging), `/compare`, `/{task_id}`, `/stream/{portfolio_id}`, `/stream/user/{user_id}` · `PATCH`/`DELETE /{task_id}` (deleting a run also deletes its chat when the chat holds no answer) |

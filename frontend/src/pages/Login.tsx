@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { returnPath } from '../authRedirect';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Wordmark } from '../components/ui/Wordmark';
@@ -66,6 +67,7 @@ const EyeIcon: React.FC<{ off?: boolean }> = ({ off }) => (
 
 export const Login: React.FC = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const { login, signup } = useAuth();
     const { theme, toggleTheme } = useTheme();
     const indiumLogo = theme === 'dark' ? indiumLogoDark : indiumLogoLight;
@@ -106,7 +108,7 @@ export const Login: React.FC = () => {
             } else {
                 await signup(email, username, password, fullName, role);
             }
-            navigate('/home');
+            navigate(returnPath(location.state), { replace: true });
         } catch (err: unknown) {
             setError(err instanceof Error ? err.message : 'Something went wrong.');
         } finally {

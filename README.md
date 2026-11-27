@@ -188,6 +188,7 @@ python3 scripts/dev.py start     # Postgres/Redis/Qdrant (Docker), the 5 MCP ser
 | `dev.py ocr` / `dev.py ocr add ENGINE` | OCR status, or install an engine: `tesseract`, `rapidocr`, `paddleocr`, `doctr`, `all` (see [OCR engines](#ocr-engines)) |
 | `dev.py test` | Run the test suite; extra arguments go to pytest, e.g. `dev.py test -k config` |
 | `dev.py check` | Everything a change must pass: backend tests, then the web UI's lint, type check and build |
+| `dev.py make-admin EMAIL` | Give an existing account the admin role. Nobody can pick admin at sign-up, so run this once after creating your own account. |
 | `dev.py backfill-insights` | Fill the dashboard fields of runs made before the Analysis Dashboard existed and re-price stored usage. No model calls; safe to run again. Run once after upgrading. |
 | `dev.py alpha-eval` | Live ALPHA check on real tickers (spends model budget): every pillar written, no unconfirmed figures, revenue matches the filings, stance stable across runs. Choose with `dev.py alpha-eval --tickers NVDA --runs 3`. |
 
