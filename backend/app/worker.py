@@ -27,6 +27,7 @@ from app.jobs.rag_jobs import run_rag_ask, run_rag_compare, run_rag_alpha
 from app.jobs.quant_jobs import run_quant_query
 from app.jobs.chat_stream import run_chat_stream
 from app.core.concurrency import configure_default_executor
+from arq.cron import cron
 import app.api.rag as rag_router_module
 import app.api.quant as quant_router_module
 
@@ -49,6 +50,16 @@ async def shutdown(ctx):
     if bundle:
         await bundle.close()
     logger.info("Worker shut down.")
+
+
+async def run_due_schedules(ctx):
+    """Every minute: start the re-run schedules users switched on that are due (none exist until a user creates one)."""
+    from app.database.connection import SessionLocal
+    from app.services import analysis_runs
+    async with SessionLocal() as db:
+        started = await analysis_runs.run_due_schedules(ctx["redis"], db)
+    if started:
+        logger.info("Scheduled analysis runs started: %s", ", ".join(started))
 
 
 _FUNCTIONS = [run_rag_ask, run_rag_compare, run_rag_alpha, run_quant_query, run_chat_stream]
@@ -78,6 +89,10 @@ class BatchWorkerSettings:
     on_shutdown = shutdown
     max_jobs = get_settings().worker_batch_max_jobs
     job_timeout = get_settings().worker_batch_job_timeout  # multi-ticker alpha runs can take well over 5 min
+    allow_abort_jobs = True  # "Cancel" on the dashboards
+    # One worker pool owns the schedule check (cheap: a query, and nothing more unless a user switched a schedule on).
+    # arq's unique cron jobs keep two batch workers from both starting the same minute.
+    cron_jobs = [cron(run_due_schedules, minute=set(range(60)), run_at_startup=False)]
     health_check_interval = 30
 
 

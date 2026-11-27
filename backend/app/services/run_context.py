@@ -14,6 +14,12 @@ QUANT_ROLES = ("quant_supervisor", "quant_agent")
 
 
 async def load(db: AsyncSession, user_id: Any, portfolio_id: Any = None, override: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str]]:
+    if portfolio_id is not None:      # what this request spends is counted against its portfolio
+        from app.services import usage_ledger
+        try:
+            usage_ledger.current_portfolio_id.set(int(portfolio_id))
+        except (TypeError, ValueError):
+            pass
     return await settings_store.effective(db, user_id, portfolio_id, override), await provider_service.credentials_for(db, user_id)
 
 

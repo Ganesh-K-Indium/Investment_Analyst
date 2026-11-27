@@ -2,11 +2,11 @@
 // runs for a portfolio, and open an SSE stream of live status updates.
 
 import { getAuthHeader } from './authHeader';
-import { API_BASE } from './http';
+import { API_BASE, apiRequest } from './http';
 
 const API_BASE_URL = API_BASE;
 
-export type TaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+export type TaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type AgentType = 'rag' | 'quant';
 
 export interface AnalysisTask {
@@ -20,6 +20,73 @@ export interface AnalysisTask {
     result_metadata: Record<string, unknown> | null;
     created_at: string;
     updated_at: string;
+    // What the run was and what came out of it (backend: app/services/run_insights.py). Optional: absent on runs
+    // made before the dashboard revamp until `python scripts/dev.py backfill-insights` fills them.
+    title?: string | null;
+    tickers?: string[];
+    summary?: string | null;
+    outcome?: RunOutcome | null;
+    started_at?: string | null;
+    finished_at?: string | null;
+    duration_ms?: number | null;
+    cost_usd?: number | null;
+    total_tokens?: number | null;
+    error_kind?: 'timeout' | 'provider' | 'no_documents' | 'cancelled' | 'other' | null;
+    failed_step?: string | null;
+    reviewed_at?: string | null;
+    pinned?: boolean;
+    tags?: string[];
+    parent_task_id?: string | null;
+    schedule_id?: number | null;
+    can_retry?: boolean;
+}
+
+export type Stance = 'Bullish' | 'Cautiously Bullish' | 'Neutral' | 'Cautiously Bearish' | 'Bearish';
+
+export interface RunOutcome {
+    stances?: Record<string, Stance | null>;
+    stance_counts?: Partial<Record<Stance, number>>;
+    sources?: number;
+    web?: boolean;
+    chart?: boolean;
+    agent?: string;
+}
+
+export const TERMINAL_STATUSES: TaskStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
+
+export interface HistoryFilters {
+    portfolio_id?: number;
+    adhoc?: boolean;
+    status?: string;            // comma-separated
+    agent?: 'rag' | 'quant';
+    task_type?: string;
+    ticker?: string;
+    stance?: string;
+    q?: string;
+    from?: string;
+    to?: string;
+    pinned?: boolean;
+    unreviewed?: boolean;
+}
+
+export interface HistoryPage {
+    items: AnalysisTask[];
+    next_cursor: string | null;
+}
+
+export type PillarDirection = 'positive' | 'mixed' | 'negative' | null;
+
+export interface RunComparison {
+    ticker: string;
+    a: AnalysisTask;
+    b: AnalysisTask;
+    stance: { before: Stance | null; after: Stance | null; change: number | null };
+    pillars: Record<string, { before: PillarDirection; after: PillarDirection }>;
+    new_negatives: string[];
+    new_positives: string[];
+    dropped_negatives: string[];
+    sections_before: Record<string, string>;
+    sections_after: Record<string, string>;
 }
 
 // ── Live step-by-step progress ───────────────────────────────────────────────────────────────────────────────────
@@ -214,6 +281,46 @@ export const analysisTasksApi = {
         return response.json();
     },
 
+    async history(filters: HistoryFilters, cursor?: string | null, limit = 30): Promise<HistoryPage> {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(filters)) {
+            if (v === undefined || v === null || v === '' || v === false) continue;
+            params.set(k, String(v));
+        }
+        if (cursor) params.set('cursor', cursor);
+        params.set('limit', String(limit));
+        return apiRequest(`/analysis-tasks/history?${params.toString()}`);
+    },
+
+    async update(taskId: string, patch: { pinned?: boolean; tags?: string[]; reviewed?: boolean }): Promise<AnalysisTask> {
+        return apiRequest(`/analysis-tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(patch) });
+    },
+
+    async markReviewed(body: { task_ids?: string[]; portfolio_id?: number }): Promise<{ updated: number }> {
+        return apiRequest('/analysis-tasks/reviewed', { method: 'POST', body: JSON.stringify(body) });
+    },
+
+    async retry(taskId: string): Promise<AnalysisTask> {
+        return apiRequest(`/analysis-tasks/${taskId}/retry`, { method: 'POST' });
+    },
+
+    async cancel(taskId: string): Promise<AnalysisTask> {
+        return apiRequest(`/analysis-tasks/${taskId}/cancel`, { method: 'POST' });
+    },
+
+    async remove(taskId: string): Promise<void> {
+        return apiRequest(`/analysis-tasks/${taskId}`, { method: 'DELETE' });
+    },
+
+    async rerunAlpha(portfolioId: number, tickers?: string[]): Promise<AnalysisTask> {
+        return apiRequest('/analysis-tasks/rerun-alpha', { method: 'POST', body: JSON.stringify({ portfolio_id: portfolioId, tickers }) });
+    },
+
+    async compare(a: string, b: string, ticker: string): Promise<RunComparison> {
+        const params = new URLSearchParams({ a, b, ticker });
+        return apiRequest(`/analysis-tasks/compare?${params.toString()}`);
+    },
+
     async get(taskId: string): Promise<AnalysisTask> {
         const response = await fetch(`${API_BASE_URL}/analysis-tasks/${taskId}`, {
             headers: { ...getAuthHeader() },
@@ -273,7 +380,7 @@ export const analysisTasksApi = {
         const start = Date.now();
         while (Date.now() - start < timeoutMs) {
             const task = await analysisTasksApi.get(taskId);
-            if (task.status === 'COMPLETED' || task.status === 'FAILED') return task;
+            if (TERMINAL_STATUSES.includes(task.status)) return task;
             onProgress?.(task);
             await new Promise((r) => setTimeout(r, intervalMs));
         }

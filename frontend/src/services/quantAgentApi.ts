@@ -54,7 +54,7 @@ export const quantAgentApi = {
     async chatViaQueue(request: ChatRequest): Promise<ChatResponse> {
         const task: AnalysisTask = await analysisTasksApi.enqueueQuantQuery(request);
         const done = await analysisTasksApi.pollUntilDone(task.id);
-        if (done.status === 'FAILED') {
+        if (done.status === 'FAILED' || done.status === 'CANCELLED') {
             throw new Error(done.progress_message || 'Quant query failed');
         }
         return (done.result_metadata as { response: ChatResponse }).response;

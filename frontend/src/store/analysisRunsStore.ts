@@ -12,7 +12,7 @@ interface AnalysisRunsState {
     // returns a different reference every render, which React 18's
     // useSyncExternalStore treats as "the store changed," causing an
     // infinite re-render loop. Select the raw `runsByPortfolio[id]` map in
-    // components instead and derive with useMemo (see AnalysisDashboard.tsx).
+    // components instead and derive with useMemo (see features/analysis/PortfolioPulse.tsx).
     runsFor: (portfolioId: number) => AnalysisTask[];
 
     /** One-shot fetch of current runs for a portfolio (no stream — see useAnalysisStream). */
@@ -126,7 +126,7 @@ export const useAnalysisRunsStore = create<AnalysisRunsState>((set, get) => ({
  * double-invokes effects in dev, so the second connect() call overwrote the
  * first's reference before its request had even resolved, leaking a
  * dangling stream and leaving state inconsistent. Scoping this to the
- * component's own effect closure (see AnalysisDashboard.tsx) means the
+ * component's own effect closure (see features/analysis/PortfolioPulse.tsx) means the
  * cleanup function always closes exactly the stream it opened, no shared
  * mutable state involved.
  */

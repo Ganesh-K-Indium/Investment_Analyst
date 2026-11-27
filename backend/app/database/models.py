@@ -71,6 +71,7 @@ class TaskStatus(str, enum.Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class MessageRole(str, enum.Enum):
@@ -291,11 +292,73 @@ class AnalysisTask(Base):
     
     progress_message = Column(String, nullable=True)
     result_metadata = Column(JSON, nullable=True)  # {thread_id: "...", etc.}
-    
+
+    # What the run was and what came out of it, for the dashboards (app/services/run_insights.py). All optional:
+    # runs made before these columns existed have them filled by `python scripts/dev.py backfill-insights`.
+    title = Column(String(300), nullable=True)
+    tickers = Column(JSON, nullable=True)             # ["AAPL", "MSFT"]
+    summary = Column(Text, nullable=True)             # one line: the answer's first sentence, or the ALPHA stance sentence
+    outcome = Column(JSON, nullable=True)             # small structured result, e.g. {"stances": {"AAPL": "Bullish"}}
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    cost_usd = Column(Float, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    error_kind = Column(String, nullable=True)        # timeout | provider | no_documents | cancelled | other
+    failed_step = Column(String, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    pinned = Column(Boolean, nullable=False, default=False, server_default="false")
+    tags = Column(JSON, nullable=True)
+    parent_task_id = Column(String, nullable=True, index=True)   # the run this one retried / re-ran
+    schedule_id = Column(Integer, ForeignKey("analysis_schedules.id", ondelete="SET NULL"), nullable=True, index=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     portfolio = relationship("Portfolio", back_populates="analysis_tasks")
+
+    __table_args__ = (Index("idx_analysis_tasks_user_created", "user_id", "created_at"),)
+
+
+class TickerSignal(Base):
+    """One ticker's outcome from one ALPHA run: the overall stance and the direction of each of the five pillars, read from the
+    report's own markers (no extra model call). The signal matrix, the thesis timeline and the alerts read this table."""
+    __tablename__ = "ticker_signals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String, ForeignKey("analysis_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=True, index=True)
+    ticker = Column(String, nullable=False, index=True)
+    stance = Column(String, nullable=True)            # Bullish | Cautiously Bullish | Neutral | Cautiously Bearish | Bearish
+    stance_score = Column(Integer, nullable=True)     # +2 .. -2
+    pillars = Column(JSON, nullable=True)             # {"alignment": "negative", "liquidity": "mixed", ...}
+    fact_counts = Column(JSON, nullable=True)         # {"pos": 14, "neg": 6, "neutral": 9}
+    key_risk = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (Index("idx_ticker_signals_user_ticker", "user_id", "ticker", "created_at"),)
+
+
+class AnalysisSchedule(Base):
+    """A re-run the user asked for: ALPHA on a timetable, or when a new filing for a holding arrives. Every schedule starts
+    switched off (it spends model budget), and nothing runs until the user turns it on."""
+    __tablename__ = "analysis_schedules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
+    task_type = Column(String, nullable=False, default="alpha")
+    tickers = Column(JSON, nullable=True)             # None = every holding of the portfolio
+    trigger = Column(String, nullable=False, default="weekly")   # daily | weekly | monthly | new_filing
+    hour_utc = Column(Integer, nullable=False, default=6)
+    weekday = Column(Integer, nullable=True)          # 0 = Monday (weekly)
+    enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    next_run_at = Column(DateTime, nullable=True, index=True)
+    last_run_at = Column(DateTime, nullable=True)
+    last_task_id = Column(String, nullable=True)
+    last_skip_reason = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class Document(Base):
@@ -379,6 +442,8 @@ class UsageEvent(Base):
     prompt_tokens     = Column(Integer, nullable=False, default=0)
     completion_tokens = Column(Integer, nullable=False, default=0)
     cost_usd    = Column(Float, nullable=False, default=0.0)
+    task_id     = Column(String, nullable=True, index=True)   # the background run that spent it, when there is one
+    portfolio_id = Column(Integer, nullable=True, index=True)  # the portfolio it was spent in (no FK: spend history outlives it)
     created_at  = Column(DateTime, default=datetime.utcnow, index=True)
 
 

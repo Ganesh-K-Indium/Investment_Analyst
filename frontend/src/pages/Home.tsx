@@ -7,7 +7,7 @@ import { Card } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
 import { CompanySelect } from '../components/ui/CompanySelect';
 import { SecondaryResearch, QuantitativeResearch, Creation, BatchRunModal } from '../components/project';
-import { AnalysisDashboard } from '../components/project/analysis-dashboard/AnalysisDashboard';
+import { PortfolioPulse } from '../features/analysis/PortfolioPulse';
 import type { Company } from '../data/fortune500Companies';
 import { allCompanies } from '../data/foreignCompanies';
 import { useChatCache } from '../context/useChatCache';
@@ -285,7 +285,7 @@ export const Home: React.FC = () => {
         handleViewProject(project);
         setActiveDetailTab(pendingNav.tab);
         setMountedTabs(prev => new Set([...prev, pendingNav.tab]));
-        if (pendingNav.sessionId) setFocusSession({ tab: pendingNav.tab, sessionId: pendingNav.sessionId });
+        if (pendingNav.sessionId && pendingNav.tab !== 'Overview') setFocusSession({ tab: pendingNav.tab, sessionId: pendingNav.sessionId });
         clearPendingNav();
     }, [pendingNav, projects, clearPendingNav, handleViewProject]);
 
@@ -481,7 +481,7 @@ export const Home: React.FC = () => {
 
                     {/* Tab Content — Overview uses the same keep-alive pattern as the
                         other three tabs below: hiding with display:none instead of
-                        unmounting keeps its AnalysisDashboard (and SSE stream) alive
+                        unmounting keeps its PortfolioPulse (and SSE stream) alive
                         across tab switches, instead of tearing it down and refetching
                         every time the user glances at another tab and comes back. */}
                     <div style={{ display: activeDetailTab === 'Overview' ? 'contents' : 'none' }}>
@@ -622,7 +622,7 @@ export const Home: React.FC = () => {
                                 )}
                             </div>
 
-                            <AnalysisDashboard
+                            <PortfolioPulse
                                 portfolioId={parseInt(selectedProject.id, 10)}
                                 onNavigateToTab={(tab, focusSessionId) => {
                                     setActiveDetailTab(tab);

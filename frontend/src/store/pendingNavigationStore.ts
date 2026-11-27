@@ -8,7 +8,7 @@ import { create } from 'zustand';
 // and clears it.
 export interface PendingNavigation {
     portfolioId: string;
-    tab: 'Secondary Research' | 'Quantitative Research';
+    tab: 'Overview' | 'Secondary Research' | 'Quantitative Research';
     sessionId?: string;
 }
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, lazy, Suspense, useEffectEvent } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense, useEffectEvent } from 'react';
 import { Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { marked } from 'marked';
@@ -13,7 +13,8 @@ import { useResizableSidebar } from '../../../hooks/useResizableSidebar';
 import type { Company } from '../../../data/fortune500Companies';
 import { allCompanies } from '../../../data/foreignCompanies';
 import { secondaryAgentApi } from '../../../services/secondaryAgentApi';
-import { getRunProgress, type RunProgress } from '../../../services/analysisTasksApi';
+import { getRunProgress, type AnalysisTask, type RunProgress } from '../../../services/analysisTasksApi';
+import { useAnalysisRunsStore } from '../../../store/analysisRunsStore';
 import { RunProgressPanel } from '../run-progress/RunProgressPanel';
 import { Form4ImportModal } from './Form4ImportModal';
 
@@ -614,11 +615,14 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
 
     // Load a saved session's messages when it is opened. An effect event reads the latest activeSession without
     // re-running when it changes (it changes as soon as the loaded history is stored), so this runs once per switch.
-    const fetchMessages = useEffectEvent(async () => {
-            if (activeSession && activeSession.messages.length === 0 && activeSession.threadId && !activeSession.isNew) {
-                setIsLoadingMessages(true);
+    const fetchMessages = useEffectEvent(async (reload?: ChatSession) => {
+            // `reload`: fetch this session's history again even if it has messages (a run on it just finished on the server)
+            const target = reload ?? activeSession;
+            if (target && (reload || target.messages.length === 0) && target.threadId && !target.isNew) {
+                const isActive = activeSession?.id === target.id;
+                if (isActive) setIsLoadingMessages(true);
                 try {
-                    const history = await chatApi.getSessionHistory(activeSession.threadId);
+                    const history = await chatApi.getSessionHistory(target.threadId);
 
                     // ALPHA/Compare aren't a back-and-forth chat — the backend still
                     // stores the request as a real "user" turn (raw text like "Compare
@@ -626,9 +630,9 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
                     // that turn live (see runAlpha/getComparison), so it must also be
                     // dropped here when history is fetched fresh after navigating away
                     // and back. Use the same nicely-formatted label the live run shows
-                    // (activeSession.savedResultLabel, reconstructed in fetchSessions)
+                    // (target.savedResultLabel, reconstructed in fetchSessions)
                     // rather than that raw backend text.
-                    const isSynthesizedTurnSession = activeSession.id.startsWith('alpha-') || activeSession.id.startsWith('compare-');
+                    const isSynthesizedTurnSession = target.id.startsWith('alpha-') || target.id.startsWith('compare-');
 
                     const mappedMessages: ChatMessage[] = [];
                     history.messages.forEach((m, idx) => {
@@ -640,7 +644,7 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
                         const citations: CitationSource[] = buildCitations(m.metadata?.documents, m.content);
 
                         mappedMessages.push({
-                            id: `msg-${activeSession.id}-${idx}`,
+                            id: `msg-${target.id}-${idx}`,
                             role: m.role as 'user' | 'assistant',
                             content: m.content,
                             timestamp: new Date(m.timestamp),
@@ -650,20 +654,19 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
                             chartUrl: m.metadata?.chart_url,
                             verification: m.metadata?.verification && Object.keys(m.metadata.verification).length ? m.metadata.verification : undefined,
                             usage: m.metadata?.usage?.total_tokens ? m.metadata.usage : undefined,
-                            isAlpha: activeSession.id.startsWith('alpha-') && m.role === 'assistant',
-                            resultLabel: isSynthesizedTurnSession && m.role === 'assistant' ? activeSession.savedResultLabel : undefined
+                            isAlpha: target.id.startsWith('alpha-') && m.role === 'assistant',
+                            resultLabel: isSynthesizedTurnSession && m.role === 'assistant' ? target.savedResultLabel : undefined
                         });
                     });
 
-                    const updatedSession = { ...activeSession, messages: mappedMessages };
-                    setActiveSession(updatedSession);
+                    setActiveSession(prev => prev && prev.id === target.id ? { ...prev, messages: mappedMessages } : prev);
                     setChatSessions(prev =>
-                        prev.map(s => s.id === activeSession.id ? updatedSession : s)
+                        prev.map(s => s.id === target.id ? { ...s, messages: mappedMessages } : s)
                     );
                 } catch (err) {
                     console.error('Failed to fetch session history:', err);
                 } finally {
-                    setIsLoadingMessages(false);
+                    if (isActive) setIsLoadingMessages(false);
                 }
             }
     });
@@ -671,6 +674,36 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
     useEffect(() => {
         fetchMessages();
     }, [activeSession?.id]);
+
+    // ALPHA and Compare keep running on the server when this screen is closed. Coming back, the run is picked up from the
+    // live run feed (the portfolio's task stream, kept by the Overview tab): its step-by-step panel shows again, and the
+    // chat reloads from the server once it ends. Runs this screen started itself are tracked by runAlpha/getComparison.
+    const portfolioRuns = useAnalysisRunsStore(s => s.runsByPortfolio[Number(projectId)]);
+    const serverRunByThread = useMemo(() => {
+        const byThread = new Map<string, AnalysisTask>();
+        for (const t of Object.values(portfolioRuns ?? {})) {
+            if (t.status !== 'PENDING' && t.status !== 'RUNNING') continue;
+            const ref = (t.result_metadata as { session_ref?: string } | null)?.session_ref;
+            if (ref) byThread.set(ref, t);
+        }
+        return byThread;
+    }, [portfolioRuns]);
+    const resumedRun = activeSession?.threadId && !busySessionIds.has(activeSession.id)
+        ? serverRunByThread.get(activeSession.threadId) : undefined;
+
+    const onServerRunEnded = useEffectEvent((threadId: string) => {
+        const session = chatSessions.find(x => x.threadId === threadId);
+        if (session && !busySessionIds.has(session.id)) fetchMessages(session);
+    });
+    const runningThreadsRef = useRef<Map<string, string>>(new Map());   // task id -> thread id, as of the last update
+    useEffect(() => {
+        const now = new Map<string, string>();
+        for (const [thread, t] of serverRunByThread) now.set(t.id, thread);
+        for (const [taskId, thread] of runningThreadsRef.current) {
+            if (!now.has(taskId)) onServerRunEnded(thread);
+        }
+        runningThreadsRef.current = now;
+    }, [serverRunByThread]);
 
 
     // Sync state changes to cache
@@ -2423,6 +2456,17 @@ export const SecondaryResearch: React.FC<SecondaryResearchProps> = ({ projectId,
                                         )}
                                     </ChatMessage>
                                 ))
+                            )}
+                            {!busySessionIds.has(activeSession.id) && resumedRun && (
+                                <ChatMessage role="assistant">
+                                    <RunProgressPanel
+                                        kind={resumedRun.task_type === 'alpha' ? 'alpha' : resumedRun.task_type === 'compare' ? 'compare' : 'ask'}
+                                        progress={getRunProgress(resumedRun)}
+                                        receivedAt={getRunProgress(resumedRun)?.updated_at ?? Date.parse(resumedRun.updated_at)}
+                                        startedAt={Date.parse(resumedRun.started_at ?? resumedRun.created_at)}
+                                        chips={resumedRun.task_type === 'compare' ? resumedRun.tickers : undefined}
+                                    />
+                                </ChatMessage>
                             )}
                             {busySessionIds.has(activeSession.id) && (
                                 <ChatMessage role="assistant">

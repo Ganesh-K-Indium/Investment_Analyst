@@ -28,6 +28,7 @@ import app.api.analysis_tasks as analysis_tasks_module  # noqa: E402
 import app.api.quant as quant_router_module  # noqa: E402
 import app.api.rag as rag_router_module  # noqa: E402
 from app.api.analysis_tasks import router as analysis_tasks_router  # noqa: E402
+from app.api.analysis_dashboard import router as analysis_dashboard_router  # noqa: E402
 from app.api.auth import router as auth_router  # noqa: E402
 from app.api.chats import router as chats_router  # noqa: E402
 from app.api.data_sources import router as data_sources_router  # noqa: E402
@@ -55,7 +56,7 @@ from ingestion.ingest_macro_data import run_ingestion  # noqa: E402
 ROUTERS = [
     auth_router, reports_router, portfolio_router, rag_router_module.router, integrations_router, quant_router_module.router,
     chats_router, form4_router, edgar_router, analysis_tasks_router, settings_router, user_documents_router, providers_router,
-    mcp_servers_router, data_sources_router, reading_engines_router, documents_router, notes_router,
+    mcp_servers_router, data_sources_router, reading_engines_router, documents_router, notes_router, analysis_dashboard_router,
 ]
 
 MACRO_SYNC_SECONDS = 24 * 3600

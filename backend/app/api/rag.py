@@ -87,9 +87,14 @@ async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str, 
                 total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - start,
             )
     summary = tracker.summary()
-    if db is not None and user_id is not None:
+    if user_id is not None:
         try:
-            summary["cost"] = await usage_ledger.persist(db, user_id, tracker)
+            if db is not None:
+                summary["cost"] = await usage_ledger.persist(db, user_id, tracker)
+            else:   # concurrent runs (ALPHA tickers) cannot share one session: each stores its usage with its own
+                from app.database.connection import SessionLocal
+                async with SessionLocal() as own_db:
+                    summary["cost"] = await usage_ledger.persist(own_db, user_id, tracker)
         except Exception:
             logger.exception("Could not store usage for %s", run_label)
     return result, summary
@@ -831,7 +836,7 @@ async def alpha_core(
                 }
 
                 result, usage_summary = await _run_agent_tracked(
-                    agent, inputs, config, f"alpha:{thread_id}:{ticker}", alpha_settings, None, None, None, alpha_creds)
+                    agent, inputs, config, f"alpha:{thread_id}:{ticker}", alpha_settings, None, current_user.id, None, alpha_creds)
                 report = result.get("alpha_report") or result["messages"][-1].content
 
                 if on_ticker_done is not None:

@@ -359,6 +359,21 @@ def cmd_status(args) -> None:
         subprocess.call([str(venv_python()), "-m", "app.core.config"], cwd=str(BACKEND), env=backend_env())
 
 
+def cmd_backfill_insights(args) -> None:
+    """Fill the dashboard fields (title, tickers, stance per ticker, cost) of runs made before the dashboard revamp.
+    Reads what each run already stored; no model calls. Safe to run again."""
+    py = require_venv()
+    code = ("import asyncio\n"
+            "from app.database.connection import SessionLocal, init_db\n"
+            "from app.services.analysis_tasks import AnalysisTaskService\n"
+            "async def main():\n"
+            "    async with SessionLocal() as db:\n"
+            "        print(f'{await AnalysisTaskService.backfill(db)} runs updated')\n"
+            "init_db()\n"
+            "asyncio.run(main())\n")
+    run([py, "-c", code], cwd=BACKEND, env=backend_env())
+
+
 def cmd_check(args) -> None:
     """Everything a change should pass before it is committed: backend tests, then the web UI's lint, type check and
     production build. Stops at the first failure."""
@@ -655,6 +670,7 @@ def main() -> None:
     p.set_defaults(func=cmd_ocr)
 
     sub.add_parser("check", help="backend tests + web UI lint, type check and build").set_defaults(func=cmd_check)
+    sub.add_parser("backfill-insights", help="fill dashboard fields (stance, tickers, cost) of runs made before the revamp; no model calls").set_defaults(func=cmd_backfill_insights)
 
     p = sub.add_parser("test", help="run the backend tests (extra arguments go to pytest)")
     p.add_argument("pytest_args", nargs=argparse.REMAINDER)

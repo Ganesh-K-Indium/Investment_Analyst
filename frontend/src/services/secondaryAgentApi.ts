@@ -156,7 +156,7 @@ export interface AlphaResponse {
 const API_TIMEOUT_MS = 5 * 60 * 1000;
 
 function unwrapResponse<T>(task: AnalysisTask): T {
-    if (task.status === 'FAILED') {
+    if (task.status === 'FAILED' || task.status === 'CANCELLED') {
         throw new Error(task.progress_message || 'Analysis run failed');
     }
     return (task.result_metadata as { response: T }).response;

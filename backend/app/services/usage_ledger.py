@@ -1,6 +1,7 @@
 """Persist per-request token use and report it against the user's monthly budget. Costs are ESTIMATES from list prices."""
+import contextvars
 import datetime as dt
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,14 @@ from app.utils.usage_tracker import UsageTracker
 
 # USD per 1M tokens (input, output). Estimates only; update when prices change.
 PRICES = {"gpt-4o": (2.5, 10.0), "gpt-4o-mini": (0.15, 0.6), "gpt-4.1": (2.0, 8.0), "gpt-4.1-mini": (0.4, 1.6), "gpt-4-turbo": (10.0, 30.0)}
+
+
+# The background run (AnalysisTask id) the current request is part of, set by the job runners, so a run's spend can be
+# added up for the dashboards. None for direct requests.
+current_task_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("usage_task_id", default=None)
+# The portfolio the current request works in (set by app/services/run_context.load), so spend adds up per portfolio for
+# everything done in it: chats, comparisons, ALPHA and quant alike.
+current_portfolio_id: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar("usage_portfolio_id", default=None)
 
 
 def cost(model: str, prompt: int, completion: int) -> float:
@@ -33,7 +42,7 @@ async def persist(db: AsyncSession, user_id: str, tracker: UsageTracker) -> Dict
     for (role, model), (p, c) in agg.items():
         usd = cost(model, p, c)
         total_cost += usd
-        db.add(UsageEvent(user_id=str(user_id), run_label=tracker.run_label[:200], role=role, model=model, prompt_tokens=p, completion_tokens=c, cost_usd=usd))
+        db.add(UsageEvent(user_id=str(user_id), run_label=tracker.run_label[:200], role=role, model=model, prompt_tokens=p, completion_tokens=c, cost_usd=usd, task_id=current_task_id.get(), portfolio_id=current_portfolio_id.get()))
     if agg:
         await db.commit()
     p, c = sum(v[0] for v in agg.values()), sum(v[1] for v in agg.values())

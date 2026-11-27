@@ -4,6 +4,7 @@ import logging
 from app.database.connection import SessionLocal
 from app.database.models import TaskStatus
 from app.services.analysis_tasks import AnalysisTaskService
+from app.services import usage_ledger
 from app.jobs.rag_jobs import _load_user
 import app.api.quant as quant_router_module
 
@@ -12,6 +13,7 @@ logger = logging.getLogger("app.jobs.quant_jobs")
 
 async def run_quant_query(ctx, task_id: str, payload_dict: dict):
     redis = ctx["redis"]
+    usage_ledger.current_task_id.set(task_id)   # what this run spends is counted against it
     async with SessionLocal() as db:
         task = await AnalysisTaskService.update_status(db, task_id, TaskStatus.RUNNING, redis_client=redis)
         if task is None:

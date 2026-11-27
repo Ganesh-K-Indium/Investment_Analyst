@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.database.connection import SessionLocal
 from app.database.models import AnalysisTask, AgentType, TaskStatus, User
 from app.services.analysis_tasks import AnalysisTaskService
+from app.services import usage_ledger
 from app.utils import run_progress
 from app.utils.run_progress import RunProgress
 import app.api.rag as rag_router_module
@@ -55,6 +56,7 @@ async def _fail(db, task_id: str, redis, error: Exception, progress):
 
 async def run_rag_ask(ctx, task_id: str, payload_dict: dict):
     redis = ctx["redis"]
+    usage_ledger.current_task_id.set(task_id)   # what this run spends is counted against it
     async with SessionLocal() as db:
         task = await AnalysisTaskService.update_status(db, task_id, TaskStatus.RUNNING, redis_client=redis)
         if task is None:
@@ -85,6 +87,7 @@ async def run_rag_ask(ctx, task_id: str, payload_dict: dict):
 
 async def run_rag_compare(ctx, task_id: str, payload_dict: dict):
     redis = ctx["redis"]
+    usage_ledger.current_task_id.set(task_id)   # what this run spends is counted against it
     async with SessionLocal() as db:
         task = await AnalysisTaskService.update_status(db, task_id, TaskStatus.RUNNING, redis_client=redis)
         if task is None:
@@ -113,6 +116,7 @@ async def run_rag_alpha(ctx, task_id: str, payload_dict: dict):
     """Batch-lane job: runs the ALPHA framework across every ticker, reporting live step-by-step progress
     (see app/utils/run_progress.py) as each ticker works through its five dimensions."""
     redis = ctx["redis"]
+    usage_ledger.current_task_id.set(task_id)   # what this run spends is counted against it
     async with SessionLocal() as db:
         task = await AnalysisTaskService.update_status(db, task_id, TaskStatus.RUNNING, redis_client=redis)
         if task is None:

@@ -53,6 +53,7 @@ function AppRoutes() {
             <Route path="/integrations"        element={<Navigate to="/data-sources" replace />} />
             <Route path="/data-sources"        element={<ProtectedRoute><DataSources /></ProtectedRoute>} />
             <Route path="/dashboard"           element={<ProtectedRoute><CrossPortfolioDashboard /></ProtectedRoute>} />
+            <Route path="/dashboard/ticker/:ticker" element={<ProtectedRoute><CrossPortfolioDashboard /></ProtectedRoute>} />
             <Route path="/terms"   element={<ProtectedRoute><Home /></ProtectedRoute>} />
             <Route path="/privacy" element={<ProtectedRoute><Home /></ProtectedRoute>} />
             <Route path="/support" element={<ProtectedRoute><Home /></ProtectedRoute>} />

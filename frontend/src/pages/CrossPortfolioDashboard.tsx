@@ -1,197 +1,54 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { PageLayout } from '../components/layout/PageLayout';
 import { PageHeader } from '../components/layout/PageHeader';
 import { StatTile, StatGrid } from '../components/ui/StatTile';
 import { useAuth } from '../context/useAuth';
 import { usePendingNavigationStore } from '../store/pendingNavigationStore';
 import { useAnalysisRunsStore, openUserAnalysisStream } from '../store/analysisRunsStore';
-import { portfolioApi, type DashboardPortfolioCard, type DashboardTaskSummary } from '../services/portfolioApi';
-import { extractSessionId, type AnalysisTask } from '../services/analysisTasksApi';
+import { analysisTasksApi, extractSessionId, type AnalysisTask } from '../services/analysisTasksApi';
+import { analysisDashboardApi, type AttentionItem, type DashboardOverview } from '../services/analysisDashboardApi';
+import { AttentionList } from '../features/analysis/AttentionList';
+import { RunHistory } from '../features/analysis/RunHistory';
+import { StanceBadge, StanceMixBar, StatusPill, TickerChips } from '../features/analysis/Badges';
+import { useRunOverlays } from '../features/analysis/useRunOverlays';
+import { attentionKey, money, relativeTime, runTitle, tabForTask } from '../features/analysis/format';
 import '../components/project/analysis-dashboard/AnalysisDashboard.css';
+import '../features/analysis/analysis.css';
 import './CrossPortfolioDashboard.css';
 
-type StatusFilter = 'ALL' | 'RUNNING' | 'READY' | 'FAILED';
-type AgentFilter = 'ALL' | 'rag' | 'quant';
-
-interface PortfolioMeta {
-    id: number;
-    name: string;
-    tickers: string[];
-    description: string | null;
-}
-
-const STATUS_META: Record<string, { label: string; className: string }> = {
-    PENDING: { label: 'Queued', className: 'run-pill--pending' },
-    RUNNING: { label: 'Running', className: 'run-pill--running' },
-    COMPLETED: { label: 'Ready', className: 'run-pill--completed' },
-    FAILED: { label: 'Failed', className: 'run-pill--failed' },
-};
-
-function relativeTime(iso: string | null): string {
-    if (!iso) return '—';
-    const diffMs = Date.now() - new Date(iso).getTime();
-    const mins = Math.round(diffMs / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.round(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    return `${Math.round(hours / 24)}d ago`;
-}
-
-function dateGroupFor(iso: string | null): string {
-    if (!iso) return 'Undated';
-    const d = new Date(iso);
-    const now = new Date();
-    const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-    const diffDays = Math.round((startOf(now) - startOf(d)) / 86400000);
-    if (diffDays <= 0) return 'Today';
-    if (diffDays === 1) return 'Yesterday';
-    if (diffDays < 7) return 'This week';
-    return 'Older';
-}
-
-function tabForTask(task: { agent_type: string }): 'Secondary Research' | 'Quantitative Research' {
-    return task.agent_type === 'quant' ? 'Quantitative Research' : 'Secondary Research';
-}
-
-function matchesStatus(status: string, filter: StatusFilter): boolean {
-    if (filter === 'ALL') return true;
-    if (filter === 'RUNNING') return status === 'PENDING' || status === 'RUNNING';
-    if (filter === 'READY') return status === 'COMPLETED';
-    return status === 'FAILED';
-}
-
-function epoch(iso: string | null | undefined): number {
-    if (!iso) return 0;
-    const t = new Date(iso).getTime();
-    return Number.isNaN(t) ? 0 : t;
-}
-
-function initialsFor(name: string): string {
-    const parts = name.trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) return '?';
-    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-}
-
-const ICONS = {
-    search: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
-    ),
-    quant: (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="20" x2="18" y2="10" />
-            <line x1="12" y1="20" x2="12" y2="4" />
-            <line x1="6" y1="20" x2="6" y2="14" />
-        </svg>
-    ),
-    rag: (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14,2 14,8 20,8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-        </svg>
-    ),
-    inbox: (
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
-            <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-        </svg>
-    ),
-};
-
-// The dashboard REST response and the SSE store use two different shapes
-// (DashboardTaskSummary vs AnalysisTask). Convert once at the boundary so
-// the store becomes the single source of truth for status/timestamps —
-// same pattern the per-portfolio dashboard uses (loadInitial + SSE both
-// write into useAnalysisRunsStore, nothing else tracks task state).
-function toAnalysisTask(t: DashboardTaskSummary, userId: string): AnalysisTask {
-    return {
-        id: t.id,
-        user_id: userId,
-        portfolio_id: t.portfolio_id,
-        agent_type: t.agent_type as AnalysisTask['agent_type'],
-        task_type: t.task_type as AnalysisTask['task_type'],
-        status: t.status as AnalysisTask['status'],
-        progress_message: t.progress_message,
-        result_metadata: t.session_id
-            ? { response: { thread_id: t.session_id, session_id: t.session_id } }
-            : null,
-        created_at: t.created_at ?? '',
-        updated_at: t.updated_at ?? '',
-    };
-}
-
-function fromAnalysisTask(t: AnalysisTask, portfolioName: string | null): DashboardTaskSummary {
-    return {
-        id: t.id,
-        portfolio_id: t.portfolio_id,
-        portfolio_name: portfolioName,
-        agent_type: t.agent_type,
-        task_type: t.task_type,
-        status: t.status,
-        progress_message: t.progress_message,
-        session_id: extractSessionId(t) ?? null,
-        created_at: t.created_at || null,
-        updated_at: t.updated_at || null,
-    };
-}
-
+/** The command centre across every portfolio: what to review, what moved, what needs attention, and all runs. */
 export const CrossPortfolioDashboard: React.FC = () => {
     const { userId } = useAuth();
     const navigate = useNavigate();
+    const { ticker: tickerParam } = useParams<{ ticker?: string }>();
     const setPendingNavigation = usePendingNavigationStore((s) => s.setPending);
-
-    const [portfolios, setPortfolios] = useState<PortfolioMeta[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const [hasActivity, setHasActivity] = useState(false);
-
-    const [selectedPortfolioIds, setSelectedPortfolioIds] = useState<Set<number>>(new Set());
-    const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
-    const [agentFilter, setAgentFilter] = useState<AgentFilter>('ALL');
-    const [search, setSearch] = useState('');
-
-    // The store is the ONLY place task status/timestamps live once hydrated —
-    // both the initial REST snapshot and every SSE event write here, so there
-    // is nothing to reconcile and no "is my copy stale" guard logic needed.
-    const runsByPortfolio = useAnalysisRunsStore((s) => s.runsByPortfolio);
     const hydrateTasks = useAnalysisRunsStore((s) => s.hydrateTasks);
+    const runsByPortfolio = useAnalysisRunsStore((s) => s.runsByPortfolio);
 
-    const fetchDashboard = useCallback(async () => {
-        if (!userId) return;
+    const [overview, setOverview] = useState<DashboardOverview | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [inbox, setInbox] = useState<AnalysisTask[]>([]);
+    const [busyKey, setBusyKey] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
+    const [historyKey, setHistoryKey] = useState(0);
+
+    const load = useCallback(async () => {
         try {
-            const data = await portfolioApi.getCrossPortfolioDashboard(userId);
-            setPortfolios(data.portfolios.map((p: DashboardPortfolioCard) => ({
-                id: p.id,
-                name: p.name,
-                tickers: p.tickers,
-                description: p.description,
-            })));
-            setHasActivity(data.recent_activity.length > 0 || data.portfolios.some((p) => p.latest_task != null));
-
-            const seed: AnalysisTask[] = [
-                ...data.portfolios.flatMap((p) => (p.latest_task ? [toAnalysisTask(p.latest_task, userId)] : [])),
-                ...data.recent_activity.map((t) => toAnalysisTask(t, userId)),
-            ];
-            hydrateTasks(seed);
+            const [ov, unread] = await Promise.all([
+                analysisDashboardApi.overview(),
+                analysisTasksApi.history({ unreviewed: true }, null, 8),
+            ]);
+            setOverview(ov);
+            setInbox(unread.items);
+            hydrateTasks(unread.items);
             setError(null);
-        } catch (err) {
-            console.error('Failed to load cross-portfolio dashboard:', err);
-            setError('Could not load the Analysis Dashboard. Please try again.');
-        } finally {
-            setIsLoading(false);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Could not load the Analysis Dashboard.');
         }
-    }, [userId, hydrateTasks]);
+    }, [hydrateTasks]);
 
-    useEffect(() => {
-        fetchDashboard();
-    }, [fetchDashboard]);
+    useEffect(() => { load(); }, [load]);
 
     useEffect(() => {
         if (!userId) return;
@@ -199,289 +56,194 @@ export const CrossPortfolioDashboard: React.FC = () => {
         return () => close();
     }, [userId]);
 
-    const portfolioNameById = useMemo(() => {
-        const m = new Map<number, string>();
-        for (const p of portfolios) m.set(p.id, p.name);
-        return m;
-    }, [portfolios]);
+    // every run, live, for the history overlay (keyed by id across portfolios)
+    const liveById = useMemo(() => {
+        const out: Record<string, AnalysisTask> = {};
+        for (const tasks of Object.values(runsByPortfolio)) Object.assign(out, tasks);
+        return out;
+    }, [runsByPortfolio]);
 
-    // Derived straight from the store — reacts to every SSE event automatically.
-    const latestTaskByPortfolio = useMemo(() => {
-        const map = new Map<number, DashboardTaskSummary>();
-        for (const p of portfolios) {
-            const runs = runsByPortfolio[p.id];
-            if (!runs) continue;
-            const values = Object.values(runs);
-            if (values.length === 0) continue;
-            const latest = values.reduce((a, b) => (epoch(a.updated_at) >= epoch(b.updated_at) ? a : b));
-            map.set(p.id, fromAnalysisTask(latest, p.name));
-        }
-        return map;
-    }, [portfolios, runsByPortfolio]);
-
-    const allActivity = useMemo(() => {
-        const flat: AnalysisTask[] = [];
-        for (const tasks of Object.values(runsByPortfolio)) flat.push(...Object.values(tasks));
-        return flat
-            .map((t) => fromAnalysisTask(t, t.portfolio_id != null ? portfolioNameById.get(t.portfolio_id) ?? null : null))
-            .sort((a, b) => epoch(b.updated_at) - epoch(a.updated_at))
-            .slice(0, 100);
-    }, [runsByPortfolio, portfolioNameById]);
-
-    const visiblePortfolios = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        if (!q) return portfolios;
-        return portfolios.filter(
-            (p) => p.name.toLowerCase().includes(q) || p.tickers.some((t) => t.toLowerCase().includes(q))
-        );
-    }, [portfolios, search]);
-
-    const scopedActivity = useMemo(() => {
-        return allActivity.filter((t) => {
-            if (selectedPortfolioIds.size > 0 && (t.portfolio_id == null || !selectedPortfolioIds.has(t.portfolio_id))) return false;
-            if (agentFilter !== 'ALL' && t.agent_type !== agentFilter) return false;
-            return true;
-        });
-    }, [allActivity, selectedPortfolioIds, agentFilter]);
-
-    const kpis = useMemo(() => ({
-        portfolios: portfolios.length,
-        running: scopedActivity.filter((t) => matchesStatus(t.status, 'RUNNING')).length,
-        ready: scopedActivity.filter((t) => matchesStatus(t.status, 'READY')).length,
-        failed: scopedActivity.filter((t) => matchesStatus(t.status, 'FAILED')).length,
-    }), [portfolios, scopedActivity]);
-
-    const filteredActivity = useMemo(
-        () => scopedActivity.filter((t) => matchesStatus(t.status, statusFilter)),
-        [scopedActivity, statusFilter]
+    // a run ending changes counts, inbox and alerts: reload once (debounced)
+    const endedSignature = useMemo(
+        () => Object.values(liveById).filter((t) => t.status !== 'PENDING' && t.status !== 'RUNNING').map((t) => `${t.id}:${t.status}`).sort().join('|'),
+        [liveById],
     );
+    useEffect(() => {
+        if (!endedSignature) return;
+        const t = setTimeout(load, 1500);
+        return () => clearTimeout(t);
+    }, [endedSignature, load]);
 
-    const groupedActivity = useMemo(() => {
-        const groups = new Map<string, DashboardTaskSummary[]>();
-        for (const t of filteredActivity) {
-            const key = dateGroupFor(t.updated_at);
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key)!.push(t);
-        }
-        const order = ['Today', 'Yesterday', 'This week', 'Older', 'Undated'];
-        return order.filter((k) => groups.has(k)).map((k) => [k, groups.get(k)!] as const);
-    }, [filteredActivity]);
+    const running = useMemo(() => Object.values(liveById).filter((t) => t.status === 'PENDING' || t.status === 'RUNNING').length, [liveById]);
 
-    const activeFilterCount =
-        (selectedPortfolioIds.size > 0 ? 1 : 0) + (statusFilter !== 'ALL' ? 1 : 0) + (agentFilter !== 'ALL' ? 1 : 0);
+    const portfolioNames = useMemo(() => {
+        const m: Record<number, string> = {};
+        for (const p of overview?.portfolios ?? []) m[p.id] = p.name;
+        return m;
+    }, [overview]);
 
-    const clearAllFilters = () => {
-        setSelectedPortfolioIds(new Set());
-        setStatusFilter('ALL');
-        setAgentFilter('ALL');
-    };
-
-    const toggleKpiStatus = (filter: StatusFilter) => {
-        setStatusFilter((prev) => (prev === filter ? 'ALL' : filter));
-    };
-
-    const selectOnlyPortfolio = (portfolioId: number) => {
-        setSelectedPortfolioIds((prev) => (prev.size === 1 && prev.has(portfolioId) ? new Set() : new Set([portfolioId])));
-    };
-
-    const togglePortfolioMulti = (portfolioId: number, e: React.MouseEvent) => {
-        e.stopPropagation();
-        setSelectedPortfolioIds((prev) => {
-            const next = new Set(prev);
-            if (next.has(portfolioId)) next.delete(portfolioId);
-            else next.add(portfolioId);
-            return next;
-        });
-    };
-
-    const goToTask = (task: DashboardTaskSummary) => {
+    const openConversation = useCallback((task: AnalysisTask) => {
         if (task.portfolio_id == null) return;
-        setPendingNavigation({
-            portfolioId: String(task.portfolio_id),
-            tab: tabForTask(task),
-            sessionId: task.session_id ?? undefined,
-        });
+        setPendingNavigation({ portfolioId: String(task.portfolio_id), tab: tabForTask(task), sessionId: extractSessionId(task) });
+        navigate('/home');
+    }, [navigate, setPendingNavigation]);
+
+    const overlays = useRunOverlays({ portfolioNames, onOpenConversation: openConversation, onChanged: () => { setHistoryKey((k) => k + 1); load(); } });
+
+    // /dashboard/ticker/:ticker opens that company's timeline (shareable link)
+    const { openTimeline } = overlays;
+    useEffect(() => { if (tickerParam) openTimeline(tickerParam.toUpperCase()); }, [tickerParam, openTimeline]);
+
+    const openPortfolio = (portfolioId: number) => {
+        setPendingNavigation({ portfolioId: String(portfolioId), tab: 'Overview' });
         navigate('/home');
     };
 
-    const goToPortfolio = (portfolioId: number) => {
-        setPendingNavigation({ portfolioId: String(portfolioId), tab: 'Secondary Research' });
-        navigate('/home');
+    const onAlert = async (item: AttentionItem) => {
+        const key = attentionKey(item);
+        const a = item.action;
+        setNotice(null);
+        if (a.type === 'open_run') return overlays.openRun(a.task_id, item.portfolio_id);
+        if (a.type === 'compare') return overlays.openCompare(a.ticker, a.a, a.b);
+        if (a.type === 'ingest') {
+            if (item.portfolio_id != null) {
+                setPendingNavigation({ portfolioId: String(item.portfolio_id), tab: 'Secondary Research' });
+                navigate('/home');
+            }
+            return;
+        }
+        setBusyKey(key);
+        try {
+            const t = a.type === 'retry' ? await analysisTasksApi.retry(a.task_id) : await analysisTasksApi.rerunAlpha(item.portfolio_id!, [a.ticker]);
+            useAnalysisRunsStore.getState().upsertTask(t);
+            setNotice(a.type === 'retry' ? 'Retry started.' : `Started ALPHA on ${a.ticker}.`);
+        } catch (e) {
+            setNotice(e instanceof Error ? e.message : 'Could not start the run.');
+        } finally {
+            setBusyKey(null);
+        }
     };
 
+    const markAllReviewed = async () => {
+        await analysisTasksApi.markReviewed({});
+        load();
+        setHistoryKey((k) => k + 1);
+    };
+
+    const totals = overview?.totals;
     return (
-        <PageLayout className="xpf-page" mode="fill">
-            <PageHeader
-                title="Analysis Dashboard"
-                description="Every portfolio's research and quant activity in one place."
-            />
+        <PageLayout className="xpf-page" mode="scroll">
+            <PageHeader title="Analysis Dashboard" description="Every portfolio's research in one place: what to review, what moved, and what needs attention." />
 
-            {error && <p className="xpf-page__error">{error}</p>}
+            {error && <p className="ad-error" role="alert">{error} <button type="button" className="ad-link" onClick={load}>Try again</button></p>}
+            {notice && <p className="ad-notice" role="status">{notice}</p>}
 
-            <StatGrid label="Activity summary">
-                <StatTile label="Portfolios" value={kpis.portfolios} />
-                <StatTile label="Running" value={kpis.running} tone="running"
-                    onClick={() => toggleKpiStatus('RUNNING')} pressed={statusFilter === 'RUNNING'} />
-                <StatTile label="Ready to review" value={kpis.ready} tone="ready"
-                    onClick={() => toggleKpiStatus('READY')} pressed={statusFilter === 'READY'} />
-                <StatTile label="Failed" value={kpis.failed} tone="failed"
-                    onClick={() => toggleKpiStatus('FAILED')} pressed={statusFilter === 'FAILED'} />
-            </StatGrid>
+            {!overview && !error && (
+                <div aria-busy="true" aria-label="Loading dashboard">
+                    <div className="ad-skeleton ad-skeleton--tiles" />
+                    <div className="ad-skeleton ad-skeleton--block" />
+                </div>
+            )}
 
-                <div className="xpf-layout">
-                    <aside className="xpf-rail">
-                        <div className="xpf-rail__search-wrap">
-                            <span className="xpf-rail__search-icon">{ICONS.search}</span>
-                            <input
-                                className="xpf-rail__search"
-                                type="text"
-                                placeholder="Search portfolios or tickers…"
-                                value={search}
-                                onChange={(e) => setSearch(e.target.value)}
-                            />
-                        </div>
+            {overview && totals && (
+                <div className="ad-command">
+                    <StatGrid label="Across all portfolios">
+                        <StatTile label="Portfolios" value={overview.portfolios.length} />
+                        <StatTile label="To review" value={overview.inbox} tone="ready" />
+                        <StatTile label="Running now" value={running} tone="running" />
+                        <StatTile label="Failed (7 days)" value={totals.failed_7d} tone="failed" />
+                        <StatTile label="Coverage" value={`${totals.covered}/${totals.holdings}`} hint="Holdings with a current ALPHA" />
+                        <StatTile label="Spend this month" value={money(totals.spend_month_usd)} hint={`${totals.tokens_month.toLocaleString()} tokens · everything you ran (est.)`} />
+                    </StatGrid>
 
-                        {isLoading && <p className="analysis-dashboard__empty">Loading portfolios…</p>}
-                        {!isLoading && visiblePortfolios.length === 0 && (
-                            <div className="xpf-empty-state">
-                                <span className="xpf-empty-state__icon">{ICONS.inbox}</span>
-                                <p className="xpf-empty-state__text">
-                                    {portfolios.length === 0 ? 'No portfolios yet — create one from Home.' : 'No portfolios match your search.'}
-                                </p>
+                    <div className="ad-grid-2">
+                        <section className="ad-card" aria-label="Review inbox">
+                            <div className="ad-card__head">
+                                <h3 className="ad-card__title">Review inbox</h3>
+                                {overview.inbox > 0 && <button type="button" className="ad-btn ad-btn--ghost ad-btn--sm" onClick={markAllReviewed}>Mark all reviewed</button>}
                             </div>
-                        )}
+                            {inbox.length === 0 ? <p className="ad-empty ad-empty--ok">You're up to date: no finished runs waiting for review.</p> : (
+                                <ul className="ad-inbox">
+                                    {inbox.map((t) => (
+                                        <li key={t.id}>
+                                            <button type="button" className="ad-inbox__item" onClick={() => overlays.openRun(t.id, t.portfolio_id)}>
+                                                <StatusPill status={t.status} />
+                                                <span className="ad-inbox__main">
+                                                    <span className="ad-inbox__title">{runTitle(t)}</span>
+                                                    <span className="ad-muted">{t.portfolio_id != null ? portfolioNames[t.portfolio_id] ?? 'Portfolio' : 'Ad-hoc'} · {relativeTime(t.finished_at ?? t.updated_at)}</span>
+                                                </span>
+                                                {t.outcome?.stances && Object.keys(t.outcome.stances).length === 1 && <StanceBadge stance={Object.values(t.outcome.stances)[0]} />}
+                                            </button>
+                                        </li>
+                                    ))}
+                                    {overview.inbox > inbox.length && <li className="ad-muted ad-inbox__more">+{overview.inbox - inbox.length} more in the history below (filter: Not reviewed)</li>}
+                                </ul>
+                            )}
+                        </section>
 
-                        <ul className="xpf-rail__list">
-                            {visiblePortfolios.map((p) => {
-                                const latest = latestTaskByPortfolio.get(p.id);
-                                const meta = latest ? STATUS_META[latest.status] : null;
-                                const selected = selectedPortfolioIds.has(p.id);
-                                return (
-                                    <li
-                                        key={p.id}
-                                        className={`xpf-rail__row ${selected ? 'xpf-rail__row--selected' : ''}`}
-                                        onClick={() => selectOnlyPortfolio(p.id)}
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            className="xpf-rail__checkbox"
-                                            checked={selected}
-                                            onClick={(e) => togglePortfolioMulti(p.id, e)}
-                                            onChange={() => {}}
-                                            aria-label={`Include ${p.name} in filter`}
-                                        />
-                                        <span className="xpf-rail__avatar">
-                                            {initialsFor(p.name)}
-                                        </span>
-                                        <div className="xpf-rail__row-body">
-                                            <span className="xpf-rail__row-name">{p.name}</span>
-                                            <span className="xpf-rail__row-meta">
-                                                {meta ? (
-                                                    <span className={`run-pill ${meta.className}`}>{meta.label}</span>
-                                                ) : (
-                                                    <span className="xpf-rail__row-empty">No runs yet</span>
-                                                )}
-                                            </span>
+                        <section className="ad-card" aria-label="Book-wide conviction">
+                            <div className="ad-card__head"><h3 className="ad-card__title">Model stance across holdings</h3></div>
+                            {Object.keys(overview.conviction).length === 0 ? <p className="ad-empty">No ALPHA runs yet. Run ALPHA from a portfolio's Overview to fill this in.</p> : (
+                                <StanceMixBar mix={overview.conviction} />
+                            )}
+                            <h4 className="ad-card__subhead">Moved this week</h4>
+                            {overview.movers.length === 0 ? <p className="ad-muted">No stance changes in the last 7 days.</p> : (
+                                <ul className="ad-movers">
+                                    {overview.movers.map((m) => (
+                                        <li key={`${m.ticker}-${m.b}`}>
+                                            <button type="button" className="ad-movers__item" onClick={() => overlays.openCompare(m.ticker, m.a, m.b)}>
+                                                <strong>{m.ticker}</strong>
+                                                <StanceBadge stance={m.from} /><span aria-hidden="true">→</span><StanceBadge stance={m.to} />
+                                                <span className={m.change > 0 ? 'ad-pos' : 'ad-neg'}>{m.change > 0 ? '▲ Upgrade' : '▼ Downgrade'}</span>
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                            <p className="ad-footnote">Model stances are generated analysis, not investment advice.</p>
+                        </section>
+                    </div>
+
+                    <section className="ad-card" aria-label="Alerts">
+                        <div className="ad-card__head"><h3 className="ad-card__title">Alerts</h3>{overview.alerts.length > 0 && <span className="ad-count">{overview.alerts.length}</span>}</div>
+                        <AttentionList items={overview.alerts} onAction={onAlert} busyKey={busyKey} showPortfolio limit={6}
+                            emptyText="No alerts: no downgrades, new filings since the last analysis, or failed runs." />
+                    </section>
+
+                    <section aria-label="Portfolios">
+                        <h3 className="ad-section-title">Portfolios</h3>
+                        {overview.portfolios.length === 0 ? (
+                            <p className="ad-empty">No portfolios yet. <button type="button" className="ad-link" onClick={() => navigate('/home')}>Create one on Home</button></p>
+                        ) : (
+                            <ul className="ad-cards">
+                                {overview.portfolios.map((p) => (
+                                    <li key={p.id} className="ad-pcard">
+                                        <button type="button" className="ad-pcard__open" onClick={() => openPortfolio(p.id)} aria-label={`Open ${p.name}`} />
+                                        <div className="ad-pcard__head">
+                                            <span className="ad-pcard__name">{p.name}</span>
+                                            {p.high_alerts > 0 && <span className="ad-tag ad-tag--alert">{p.high_alerts} alert{p.high_alerts > 1 ? 's' : ''}</span>}
                                         </div>
-                                        <button
-                                            className="xpf-rail__open-btn"
-                                            onClick={(e) => { e.stopPropagation(); goToPortfolio(p.id); }}
-                                            title="Open in Home"
-                                        >
-                                            Open →
-                                        </button>
+                                        <TickerChips tickers={p.tickers} max={6} onClick={overlays.openTimeline} />
+                                        <StanceMixBar mix={p.stance_mix} total={p.holdings} showLegend={false} />
+                                        <dl className="ad-pcard__stats">
+                                            <div><dt>Coverage</dt><dd className="tabular">{p.coverage_pct}%</dd></div>
+                                            <div><dt>To review</dt><dd className="tabular">{p.unreviewed}</dd></div>
+                                            <div><dt>Running</dt><dd className="tabular">{p.running}</dd></div>
+                                            <div><dt>This month</dt><dd className="tabular">{money(p.spend_month_usd)}</dd></div>
+                                        </dl>
+                                        <span className="ad-muted ad-pcard__foot">Last activity {relativeTime(p.last_activity_at)}</span>
                                     </li>
-                                );
-                            })}
-                        </ul>
-                    </aside>
-
-                    <section className="xpf-panel">
-                        <div className="xpf-panel__filterbar">
-                            <select
-                                className="xpf-select"
-                                value={agentFilter}
-                                onChange={(e) => setAgentFilter(e.target.value as AgentFilter)}
-                            >
-                                <option value="ALL">All agents</option>
-                                <option value="rag">Secondary Research</option>
-                                <option value="quant">Quantitative Research</option>
-                            </select>
-                            <select
-                                className="xpf-select"
-                                value={statusFilter}
-                                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-                            >
-                                <option value="ALL">All statuses</option>
-                                <option value="RUNNING">Running</option>
-                                <option value="READY">Ready</option>
-                                <option value="FAILED">Failed</option>
-                            </select>
-
-                            {activeFilterCount > 0 && (
-                                <div className="xpf-active-filters">
-                                    {selectedPortfolioIds.size > 0 && (
-                                        <span className="xpf-filter-chip">
-                                            {selectedPortfolioIds.size} portfolio{selectedPortfolioIds.size > 1 ? 's' : ''}
-                                        </span>
-                                    )}
-                                    <button className="xpf-clear-btn" onClick={clearAllFilters}>Clear all</button>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="xpf-panel__scroll">
-                            {!isLoading && filteredActivity.length === 0 && (
-                                <div className="xpf-empty-state xpf-empty-state--panel">
-                                    <span className="xpf-empty-state__icon">{ICONS.inbox}</span>
-                                    <p className="xpf-empty-state__text">
-                                        {!hasActivity
-                                            ? "No analyses run yet across any portfolio. Kick one off from Home — it'll show up here immediately."
-                                            : 'No activity matches the current filters.'}
-                                    </p>
-                                </div>
-                            )}
-
-                            {groupedActivity.map(([group, tasks]) => (
-                                <div key={group} className="xpf-activity-group">
-                                    <h3 className="xpf-activity-group__heading">{group}</h3>
-                                    <div className="xpf-activity-list">
-                                        {tasks.map((task) => {
-                                            const meta = STATUS_META[task.status];
-                                            const clickable = task.status === 'COMPLETED';
-                                            return (
-                                                <div
-                                                    key={task.id}
-                                                    className={`xpf-activity-row xpf-activity-row--${task.status.toLowerCase()} ${clickable ? 'xpf-activity-row--clickable' : ''}`}
-                                                    onClick={clickable ? () => goToTask(task) : undefined}
-                                                    role={clickable ? 'button' : undefined}
-                                                    tabIndex={clickable ? 0 : undefined}
-                                                >
-                                                    <span className={`run-pill ${meta.className}`}>{meta.label}</span>
-                                                    <span className={`xpf-activity-row__agent-icon xpf-activity-row__agent-icon--${task.agent_type}`}>
-                                                        {task.agent_type === 'quant' ? ICONS.quant : ICONS.rag}
-                                                    </span>
-                                                    <div className="xpf-activity-row__main">
-                                                        <span className="xpf-activity-row__title">
-                                                            {task.portfolio_name ?? 'Unknown portfolio'} — {task.agent_type === 'quant' ? 'Quantitative Research' : 'Secondary Research'}
-                                                        </span>
-                                                        {task.progress_message && (
-                                                            <span className="xpf-activity-row__progress">{task.progress_message}</span>
-                                                        )}
-                                                    </div>
-                                                    <span className="xpf-activity-row__time">{relativeTime(task.updated_at)}</span>
-                                                    <span className={`xpf-activity-row__action ${clickable ? '' : 'xpf-activity-row__action--muted'}`}>
-                                                        {clickable ? 'View →' : '—'}
-                                                    </span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                            </ul>
+                        )}
                     </section>
                 </div>
+            )}
+
+            <RunHistory portfolioNames={portfolioNames} live={liveById} refreshKey={historyKey} title="All runs"
+                onOpen={(t) => overlays.openRun(t.id, t.portfolio_id)} onOpenTimeline={overlays.openTimeline} />
+
+            {overlays.element}
         </PageLayout>
     );
 };
