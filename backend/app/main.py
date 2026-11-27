@@ -154,6 +154,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     application.add_middleware(RequestLoggingMiddleware)
+    from app.core.usage_middleware import UsageMeterMiddleware
+    application.add_middleware(UsageMeterMiddleware)    # every signed-in request stores the model/embedding tokens it used
     for router in ROUTERS:
         application.include_router(router)
     application.add_api_route("/", root, methods=["GET"], tags=["Meta"])

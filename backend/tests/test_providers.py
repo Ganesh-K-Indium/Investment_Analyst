@@ -77,9 +77,11 @@ def test_url_guard(monkeypatch):
         urls.check("http://127.0.0.1:11434")
 
 
-def test_cost_estimates_only_for_known_prices():
-    from app.services import usage_ledger
-    assert usage_ledger.cost("gpt-4o", 1_000_000, 0) == 2.5 and usage_ledger.cost("anthropic:claude-sonnet-5-5", 1000, 1000) == 0.0
+def test_cost_estimates_for_every_provider_with_a_known_price():
+    from app.services import pricing, usage_ledger
+    assert usage_ledger.cost("gpt-4o", 1_000_000, 0) == 2.5
+    assert usage_ledger.cost("anthropic:claude-sonnet-5-5", 1_000_000, 1_000_000) == 12.0
+    assert pricing.cost("custom:some-unknown-model", 1000, 1000) is None        # unknown: counted, not costed
 
 
 # ---------------------------------------------------------------- API + storage

@@ -296,8 +296,26 @@ async def compare_runs(
         raise HTTPException(status_code=404, detail=f"Both runs need an ALPHA report for {ticker}")
     if first.created_at > second.created_at:
         first, second, old, new = second, first, new, old
-    return {"ticker": ticker, "a": AnalysisTaskService.to_summary(first), "b": AnalysisTaskService.to_summary(second),
-            **run_insights.diff_reports(old, new)}
+    diff = run_insights.diff_reports(old, new)
+    # Runs made with the structured ALPHA flow carry each pillar's own score and verdict: use them over the text reading.
+    from sqlalchemy import select
+    from app.database.models import TickerSignal
+    sigs = {s.task_id: s for s in (await db.execute(select(TickerSignal).where(
+        TickerSignal.task_id.in_([first.id, second.id]), TickerSignal.ticker == ticker))).scalars().all()}
+    before, after = sigs.get(first.id), sigs.get(second.id)
+    if before and after:
+        diff["stance"] = {"before": before.stance, "after": after.stance,
+                          "change": (after.stance_score - before.stance_score)
+                          if before.stance_score is not None and after.stance_score is not None else None}
+        for key in diff["pillars"]:
+            b_det = ((before.detail or {}).get("pillars") or {}).get(key) or {}
+            a_det = ((after.detail or {}).get("pillars") or {}).get(key) or {}
+            diff["pillars"][key] = {
+                "before": (before.pillars or {}).get(key), "after": (after.pillars or {}).get(key),
+                "before_score": b_det.get("score"), "after_score": a_det.get("score"),
+                "before_verdict": b_det.get("recommendation"), "after_verdict": a_det.get("recommendation"),
+            }
+    return {"ticker": ticker, "a": AnalysisTaskService.to_summary(first), "b": AnalysisTaskService.to_summary(second), **diff}
 
 
 @router.post("/reviewed")

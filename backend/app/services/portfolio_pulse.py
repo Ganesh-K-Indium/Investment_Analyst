@@ -27,7 +27,7 @@ def _status(t) -> str:
 
 def signal_dict(s: TickerSignal) -> dict:
     return {"task_id": s.task_id, "ticker": s.ticker, "stance": s.stance, "stance_score": s.stance_score, "pillars": s.pillars or {},
-            "fact_counts": s.fact_counts or {}, "key_risk": s.key_risk, "portfolio_id": s.portfolio_id,
+            "fact_counts": s.fact_counts or {}, "key_risk": s.key_risk, "portfolio_id": s.portfolio_id, "detail": s.detail or {},
             "created_at": to_iso_z(s.created_at)}
 
 

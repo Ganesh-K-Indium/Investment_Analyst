@@ -373,7 +373,7 @@ class AnalysisTaskService:
                         db.add(TickerSignal(
                             task_id=task.id, user_id=task.user_id, portfolio_id=task.portfolio_id, ticker=sig["ticker"],
                             stance=sig["stance"], stance_score=sig["stance_score"], pillars=sig["pillars"],
-                            fact_counts=sig["fact_counts"], key_risk=sig["key_risk"],
+                            fact_counts=sig["fact_counts"], key_risk=sig["key_risk"], detail=sig.get("detail"),
                             created_at=task.finished_at or task.updated_at or datetime.utcnow(),
                         ))
             except Exception as e:

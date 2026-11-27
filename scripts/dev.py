@@ -366,12 +366,20 @@ def cmd_backfill_insights(args) -> None:
     code = ("import asyncio\n"
             "from app.database.connection import SessionLocal, init_db\n"
             "from app.services.analysis_tasks import AnalysisTaskService\n"
+            "from app.services import usage_ledger\n"
             "async def main():\n"
             "    async with SessionLocal() as db:\n"
             "        print(f'{await AnalysisTaskService.backfill(db)} runs updated')\n"
+            "        print(f'{await usage_ledger.reprice(db)} usage records re-priced')\n"
             "init_db()\n"
             "asyncio.run(main())\n")
     run([py, "-c", code], cwd=BACKEND, env=backend_env())
+
+
+def cmd_alpha_eval(args) -> None:
+    """Live ALPHA evaluation (spends model budget): completeness, fact checks, revenue vs filings, stance stability."""
+    py = require_venv()
+    run([py, "scripts/alpha_eval.py", *args.rest], cwd=BACKEND, env=backend_env())
 
 
 def cmd_check(args) -> None:
@@ -670,7 +678,10 @@ def main() -> None:
     p.set_defaults(func=cmd_ocr)
 
     sub.add_parser("check", help="backend tests + web UI lint, type check and build").set_defaults(func=cmd_check)
-    sub.add_parser("backfill-insights", help="fill dashboard fields (stance, tickers, cost) of runs made before the revamp; no model calls").set_defaults(func=cmd_backfill_insights)
+    sub.add_parser("backfill-insights", help="fill dashboard fields of older runs and re-price stored usage; no model calls").set_defaults(func=cmd_backfill_insights)
+    p = sub.add_parser("alpha-eval", help="live ALPHA evaluation on real tickers (spends model budget); extra arguments go to scripts/alpha_eval.py")
+    p.add_argument("rest", nargs=argparse.REMAINDER)
+    p.set_defaults(func=cmd_alpha_eval)
 
     p = sub.add_parser("test", help="run the backend tests (extra arguments go to pytest)")
     p.add_argument("pytest_args", nargs=argparse.REMAINDER)

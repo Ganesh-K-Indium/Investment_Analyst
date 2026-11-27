@@ -230,6 +230,8 @@ class load_vector_database():
         """
         # Generate dense embeddings (OpenAI)
         dense_vector = await self.embeddings.aembed_query(query)
+        _q_tokens = len(_EMBEDDING_ENCODING.encode(query or ""))
+        record_usage(stage="embeddings.query", model="text-embedding-3-large", prompt_tokens=_q_tokens, total_tokens=_q_tokens)
         
         # Generate sparse vector if available
         sparse_vector = None

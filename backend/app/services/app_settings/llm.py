@@ -56,7 +56,8 @@ def get_llm(role: str, **overrides: Any):
     if role in ("router", "grader", "verifier", "rewriter", "macro_planner"):
         temperature = 0
     temperature = overrides.pop("temperature", temperature)
-    track = overrides.pop("track", True)  # False where the call site already records its own usage (ALPHA dimensions)
+    track = overrides.pop("track", True)  # False only where the call site records its own usage
+    label = overrides.pop("usage_label", None) or role  # e.g. "alpha.performance": which step spent the tokens
     return factory.build(spec, temperature=temperature, timeout=overrides.pop("timeout", m.get("request_timeout", 60)),
                          max_retries=overrides.pop("max_retries", m.get("max_retries", 2)),
-                         callbacks=[UsageCallback(role, spec)] if track else None, **overrides)
+                         callbacks=[UsageCallback(label, spec)] if track else None, **overrides)

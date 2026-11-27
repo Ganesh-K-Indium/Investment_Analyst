@@ -60,6 +60,47 @@ def _key(name: str, args: Any) -> str:
     return hashlib.sha1((name + json.dumps(args, sort_keys=True, default=str)).encode()).hexdigest()
 
 
+def _strip_usage_json(text: str, tool_name: str) -> str:
+    if '"_usage"' not in text:
+        return text
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(data, dict) or "_usage" not in data:
+        return text
+    from app.utils.usage_tracker import record_usage
+    for u in data.pop("_usage") or []:
+        try:
+            record_usage(f"tool.{tool_name}", str(u.get("model") or "unknown"),
+                         prompt_tokens=int(u.get("prompt_tokens") or 0), completion_tokens=int(u.get("completion_tokens") or 0))
+        except (TypeError, ValueError):
+            continue
+    return json.dumps(data, default=str)
+
+
+def _take_usage(out: Any, tool_name: str) -> Any:
+    """MCP tool servers that call models in their own process return the tokens they used under "_usage" (see
+    quant/research_mcp/server_mcp.py). Record them for the user and hand the agent the result without that key."""
+    try:
+        if isinstance(out, str):
+            return _strip_usage_json(out, tool_name)
+        if isinstance(out, tuple) and out and isinstance(out[0], (str, list)):
+            head = out[0]
+            if isinstance(head, str):
+                head = _strip_usage_json(head, tool_name)
+            else:
+                head = [{**b, "text": _strip_usage_json(b["text"], tool_name)} if isinstance(b, dict) and isinstance(b.get("text"), str) else b
+                        for b in head]
+            return (head, *out[1:])
+        if isinstance(out, list):
+            return [{**b, "text": _strip_usage_json(b["text"], tool_name)} if isinstance(b, dict) and isinstance(b.get("text"), str) else b
+                    for b in out]
+    except Exception:   # accounting must never break a tool result
+        logger.debug("could not read tool usage", exc_info=True)
+    return out
+
+
 def harden_tools(tools: List[Any], agent_name: str) -> List[Any]:
     """Wrap each tool's coroutine with the request's timeout and a TTL cache. Settings are read per call, so they follow the user."""
     for t in tools:
@@ -80,6 +121,7 @@ def harden_tools(tools: List[Any], agent_name: str) -> List[Any]:
                 except asyncio.TimeoutError:
                     logger.warning("[%s] tool %s timed out after %ss", agent_name, name, timeout)
                     raise RuntimeError(f"The {name} data source did not answer within {timeout}s. Try again, or ask for something narrower.")
+                out = _take_usage(out, name)
                 if k:
                     _CACHE[k] = (time.time(), out)
                     while len(_CACHE) > _CACHE_MAX:

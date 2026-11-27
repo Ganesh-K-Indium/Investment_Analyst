@@ -835,6 +835,25 @@ Does the document content contain sufficient information to answer the question?
 # ALPHA FRAMEWORK CHAINS - For Stock Buy Timing Analysis
 # ============================================================================
 
+# Rules every ALPHA pillar follows (appended to each pillar's own instructions). No braces: this text is part of a template.
+ALPHA_PILLAR_RULES = """
+
+**Sentiment tags (REQUIRED)**: in your analysis text, wrap EVERY sentence that states a concrete fact (a trade, share count,
+dollar amount, percentage, price level or other hard metric) in exactly one marker, with no other change to the sentence:
+  [[+|sentence]]  good for the stock      [[-|sentence]]  bad for the stock      [[~|sentence]]  neutral or purely factual
+Judge by what the sentence means for the stock in context, not by the number: a rising rate, falling margin or anything the
+sentence itself calls a headwind, pressure or risk is [[-|...]]. Sentences without a concrete fact stay untagged. Never nest
+markers or put two sentences in one marker.
+
+**Verdict (REQUIRED)**: give a one-line recommendation for this pillar alone, and a score from -2 to +2 that agrees with it:
++2 strongly supportive of owning the stock, +1 supportive, 0 neutral or mixed, -1 a concern, -2 a serious concern.
+Base both only on the facts in your analysis.
+
+**Evidence**: every figure must come from the documents supplied, or be calculated from figures that do (state the inputs).
+If the documents do not cover something, leave it out rather than estimate it.
+"""
+
+
 def get_alpha_alignment_chain(llm):
     """
     ALPHA - Alignment: Insider Trading + Governance/MD&A Sentiment
@@ -883,7 +902,7 @@ date, share class such as common shares vs. ADRs).
 """
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
+        ("system", SYSTEM_PROMPT + ALPHA_PILLAR_RULES),
         ("human", """Company: {company}
 Ticker: {ticker}
 
@@ -939,7 +958,7 @@ def get_alpha_liquidity_chain(llm):
 """
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
+        ("system", SYSTEM_PROMPT + ALPHA_PILLAR_RULES),
         ("human", """Company: {company}
 Ticker: {ticker}
 
@@ -999,13 +1018,15 @@ most recent fiscal year for which a 10-K actually exists. Do not assume a more r
 - Every trend claim needs its figures. Do not write "EBITDA margin is stable" or "operating cash flow exceeded net income" unless both years' values are quoted from the documents; otherwise omit the claim or say the figure is not in the documents.
 - If operating income, pre-tax income or margins fell, state the decline with its figures and name it as a concern. If one profit line falls while net income rises, look for the reconciling item in the documents: the income tax line (expense vs. benefit), and any one-off or discontinued item. State that item and its figures. If the documents do not contain it, say the reconciliation is not in the documents rather than presenting both lines as clean signals. A net income rise driven by a tax benefit or a one-off gain is a quality-of-earnings concern, not an operating improvement.
 
+- Any statement that a margin or ratio is stable, expanding or contracting must give its value for each year compared, computed from the figures you quote (for example "operating margin 27.4% (2023) → 32.0% (2025)"). A move of more than 1 percentage point is never "stable".
+
 **Output Requirements**:
 - Maximum 130 words — lead with the most important year-over-year fundamental signal- Include at least 2 specific numerical metrics with their year-over-year comparison from the documents
 - Tone: Quantitative, investment-grade precision
 """
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
+        ("system", SYSTEM_PROMPT + ALPHA_PILLAR_RULES),
         ("human", """Company: {company}
 Ticker: {ticker}
 
@@ -1057,7 +1078,7 @@ def get_alpha_horizon_chain(llm):
 """
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
+        ("system", SYSTEM_PROMPT + ALPHA_PILLAR_RULES),
         ("human", """Company: {company}
 Ticker: {ticker}
 
@@ -1108,7 +1129,7 @@ NEVER replace a number with a qualitative phrase — always state the actual val
 """
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
+        ("system", SYSTEM_PROMPT + ALPHA_PILLAR_RULES),
         ("human", """Company: {company}
 Ticker: {ticker}
 
@@ -1120,106 +1141,80 @@ Extract the exact values from the documents above and write the 4 sentences.""")
     return prompt | structured_llm
 
 
-def get_alpha_report_combiner_chain(llm, analyst_notes: bool = False):
-    """
-    Combines all 5 ALPHA dimensions into a final coherent report.
-    Renders each pillar with its Recommendation label and closes with ALPHA Summary.
-    """
+def get_alpha_summary_chain(llm, analyst_notes: bool = False):
+    """The closing summary of an ALPHA report. The overall stance is decided beforehand from the pillar scores
+    (rag/alpha/framework.py stance_from_scores); this chain explains it and names the main risk. It never picks a stance."""
+    from schemas.models import AlphaSummaryOutput
+    structured_llm = llm.with_structured_output(AlphaSummaryOutput)
     cur_year = _current_year()
-    SYSTEM_PROMPT = f"""You are a senior investment analyst at a top-tier equity research firm, producing an Indium's ALPHA Framework investment report.
+    SYSTEM_PROMPT = f"""You are a senior investment analyst writing the closing summary of an Indium's ALPHA Framework report.
 
-**Your Task**: Render the 5 Indium's ALPHA dimensions exactly as supplied — same wording, same
-facts, do not paraphrase or summarize them — then write a consolidated Indium's ALPHA Summary
-with an overall investment stance. The ONE change you make to the supplied dimension text is
-adding sentiment tags per the rule below; otherwise it must read identically to what was supplied.
-
-**Sentiment Tagging — THIS IS REQUIRED, NOT OPTIONAL**: As you render each dimension's text AND
-as you write the Summary, wrap EVERY sentence that states a concrete financial fact — a specific
-trade, share count, dollar amount, percentage, price level, or comparable hard metric — in this
-exact inline marker syntax, with no other change to the sentence itself:
-  [[+|sentence text]]  positive signal
-  [[-|sentence text]]  negative signal
-  [[~|sentence text]]  neutral/factual, no clear positive or negative direction
-
-Worked example — supplied dimension text: "Insiders sold 9,969 shares at $309.00. Revenue grew
-13.8% to $350.0B. The company's governance structure is generally considered sound."
-Correctly rendered: "[[-|Insiders sold 9,969 shares at $309.00.]] [[+|Revenue grew 13.8% to
-$350.0B.]] The company's governance structure is generally considered sound."
-(The third sentence has no number/fact, so it stays untagged — most sentences should remain
-untagged, only number/fact-bearing ones get wrapped.)
-
-For the Summary specifically, always tag the final stance sentence: [[+|...]] for
-Bullish/Cautiously Bullish, [[-|...]] for Bearish/Cautiously Bearish, [[~|...]] for Neutral.
-
-Choose the tag by what the sentence means FOR THE STOCK in context, not by the number: a rising
-rate, rising inflation, a falling margin or any figure the sentence itself calls a headwind, pressure or
-risk is [[-|...]]; a figure it calls a tailwind or strength is [[+|...]]; a plain ownership or
-status figure with no stated implication is [[~|...]].
-
-Never tag a partial sentence, never nest tags, never tag more than one sentence per marker, and
-never skip a sentence that does contain a concrete number/fact — every one must be wrapped.
-
-**Report Structure** (follow this markdown precisely):
-
-# Indium's ALPHA Framework Analysis: {{company}} ({{ticker}})
-
-## A — Alignment (Stakeholder & Insider Signals)
-{{alignment}}
-
-## L — Liquidity (Macro/Micro Operating Environment)
-{{liquidity}}
-
-## P — Performance (Earnings Quality & Fundamentals)
-{{performance}}
-
-## H — Horizon (Competitive Moat & Structural Opportunity)
-{{horizon}}
-
-## A — Action (Technical Timing & Valuation Context)
-{{action}}
-
----
-## Indium's ALPHA Summary — Overall Investment Stance
-[Write 4-5 sentences (about 90-110 words) synthesising all five dimension signals into a clear investment thesis. Reference each dimension's Recommendation signal explicitly. Name the single most important risk across the dimensions: if the Performance section reports a decline in operating income, pre-tax income or margins, state that decline by name and figure as the main concern, and do not describe performance as "strong" or "improving" while omitting it. Where the Performance section reports a decline in one profit line alongside growth in another, say so and note it needs reconciling. Conclude with an overall stance: **Bullish**, **Cautiously Bullish**, **Neutral**, **Cautiously Bearish**, or **Bearish** — with a one-sentence rationale that weighs that risk against the growth signals. Use {cur_year} context for recency framing. Apply the Sentiment Tagging rule above to this section too.]
-
----
-*Analysis based on SEC filings, publicly available financial data, and web-sourced market information. For informational purposes only — does not constitute investment advice or a solicitation to trade.*
-"""
-
+You are given each pillar's analysis, its one-line recommendation and its score (-2 to +2), and the OVERALL STANCE already
+computed from those scores. Write the summary in 4-5 sentences (about 90-110 words):
+- Reference each available pillar's verdict explicitly (e.g. "Alignment is a concern: ...").
+- Name the single most important risk across the pillars with its figure. If Performance reports a decline in operating income,
+  pre-tax income or margins, that decline is the main concern; never call performance "strong" while omitting it.
+- The last sentence states the overall stance EXACTLY as given ("Overall, the investment stance is <stance>, ...") with a
+  one-clause rationale. Do not choose, soften or change the stance. If no stance is given, say there is not enough data for one.
+- If some pillars are missing, say the stance rests on the remaining ones.
+- Use only facts that appear in the pillar analyses. Use {cur_year} context for recency.
+- Sentiment tags: wrap every sentence that states a concrete figure as [[+|...]], [[-|...]] or [[~|...]] (good, bad, neutral for
+  the stock). Tag the final stance sentence [[+|...]] for a bullish stance, [[-|...]] for a bearish one, [[~|...]] for Neutral.
+Also return key_risk: the main risk in one sentence, with its figure, untagged."""
     notes_system, notes_human = "", ""
-    if analyst_notes:  # only when the user has notes on this ticker: otherwise the prompt is exactly the one above
+    if analyst_notes:
         notes_system = """
 
-**The user's own analyst notes are supplied after the five analyses.** They are the user's views and estimates, NOT company disclosures and NOT part of the five dimensions. Do not change, reinterpret or add to any dimension text because of them, and do not let them move the overall stance. Immediately after the Summary's final stance sentence, and BEFORE the closing "---" line and the disclaimer, add one short paragraph beginning "**Your notes:**". In at most 3 sentences it must say whether the notes AGREE or DISAGREE with the overall stance you just gave and on what point (for example "Your note from 6 Apr 2026 agrees with a cautious stance: it ..."), attributing every point to the user's own note. Apply no sentiment tags inside that paragraph. If the notes say nothing relevant to this stock's stance, omit the paragraph."""
+The user's own analyst notes are supplied. They are the user's views, not company disclosures, and must not move the stance.
+In notes_view write one short paragraph beginning "**Your notes:**" (at most 3 sentences) saying whether the notes AGREE or
+DISAGREE with the stance and on what point, attributing every point to the user's note. No sentiment tags in it. If the
+notes say nothing relevant, leave notes_view empty."""
         notes_human = """
 
 The user's own analyst notes:
 {analyst_notes}"""
-
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT + notes_system),
         ("human", """Company: {company}
 Ticker: {ticker}
 
-Alignment Analysis:
-{alignment}
+OVERALL STANCE (decided from the pillar scores): {stance}
+Basis: {stance_basis}
 
-Liquidity Analysis:
-{liquidity}
+{pillars}""" + notes_human + """
 
-Performance Analysis:
-{performance}
-
-Horizon Analysis:
-{horizon}
-
-Action Analysis:
-{action}""" + notes_human + """
-
-Render the full Indium's ALPHA Framework report now.""")
+Write the summary and key_risk now.""")
     ])
+    return prompt | structured_llm
 
-    return prompt | llm | StrOutputParser()
+
+def get_alpha_revision_chain(llm, output_model):
+    """One pillar rewritten after a fact check: only the flagged statements change."""
+    structured_llm = llm.with_structured_output(output_model)
+    SYSTEM_PROMPT = """You are revising one section of an equity research report. Some statements failed a fact check against
+the source documents. Fix ONLY those: replace each figure with the value the documents give, or remove the claim if the
+documents do not support it; correct any trend word the figures contradict (state both years' values). Keep every other
+sentence exactly as written, keep the sentiment markers ([[+|...]], [[-|...]], [[~|...]]) on fact sentences, and keep the
+recommendation and score unless a correction changes the verdict."""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", """Section: {section}
+
+Current text:
+{analysis}
+
+Current recommendation: {recommendation}
+Current score: {score}
+
+Fact-check findings:
+{issues}
+
+Source documents:
+{documents}
+
+Return the corrected section.""")
+    ])
+    return prompt | structured_llm
 
 
 # ============================================================================

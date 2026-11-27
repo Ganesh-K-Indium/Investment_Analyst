@@ -217,19 +217,24 @@ def test_note_limit_scales_with_tickers_and_is_capped(monkeypatch):
     assert asyncio.run(nodes._analyst_note_documents({"configurable": {}}, ["aapl"], "q")) == [] and seen == {}  # no user: inert
 
 
-# ---- ALPHA: notes reach only the combiner, and only when they exist ------------
+# ---- ALPHA: notes reach only the summary, and only when they exist ------------
 
-def test_alpha_combiner_prompt_is_unchanged_without_notes():
-    plain = prompts.get_alpha_report_combiner_chain(RunnableLambda(lambda x: x))
-    explicit = prompts.get_alpha_report_combiner_chain(RunnableLambda(lambda x: x), analyst_notes=False)
-    render = lambda c, **kw: [m.content for m in c.first.format_messages(company="C", ticker="T", alignment="a", liquidity="l",
-                                                                          performance="p", horizon="h", action="x", **kw)]
+class _StructuredLLM:
+    def with_structured_output(self, schema):
+        return RunnableLambda(lambda x: x)
+
+
+def test_alpha_summary_prompt_is_unchanged_without_notes():
+    plain = prompts.get_alpha_summary_chain(_StructuredLLM())
+    explicit = prompts.get_alpha_summary_chain(_StructuredLLM(), analyst_notes=False)
+    render = lambda c, **kw: [m.content for m in c.first.format_messages(company="C", ticker="T", stance="Neutral", stance_basis="b",
+                                                                          pillars="p", **kw)]
     assert "analyst_notes" not in plain.first.input_variables and render(plain) == render(explicit)
-    with_notes = prompts.get_alpha_report_combiner_chain(RunnableLambda(lambda x: x), analyst_notes=True)
+    with_notes = prompts.get_alpha_summary_chain(_StructuredLLM(), analyst_notes=True)
     sys_p, human = render(with_notes, analyst_notes="NOTE-BODY")
     assert "analyst_notes" in with_notes.first.input_variables and "NOTE-BODY" in human
     assert "Your notes:" in sys_p and sys_p.startswith(render(plain)[0])  # the original prompt is intact, the rule only appended
-    assert human.startswith(render(plain)[1].rsplit("\n\nRender the full", 1)[0])
+    assert human.startswith(render(plain)[1].rsplit("\n\nWrite the summary", 1)[0])
 
 
 def _alpha_state(notes):
@@ -238,26 +243,27 @@ def _alpha_state(notes):
 
 
 def _run_alpha(monkeypatch, notes):
+    import asyncio
     seen = {}
-    dim_chain = lambda *a, **k: SimpleNamespace(invoke=lambda kw: SimpleNamespace(analysis="dim analysis", key_points=[], recommendation=""))
 
-    def combiner(llm, analyst_notes=False):
+    def summary(llm, analyst_notes=False):
         seen["flag"] = analyst_notes
-        return SimpleNamespace(invoke=lambda kw: seen.setdefault("inputs", kw) and "REPORT")
 
-    for name in ("alignment", "liquidity", "performance", "horizon", "action"):
-        monkeypatch.setattr(prompts, f"get_alpha_{name}_chain", dim_chain)
-    monkeypatch.setattr(prompts, "get_alpha_report_combiner_chain", combiner)
-    monkeypatch.setattr(nodes, "_fetch_verified_market_data", lambda t: "")
-    import langchain_openai
-    monkeypatch.setattr(langchain_openai, "ChatOpenAI", lambda *a, **k: object())
-    out = nodes.alpha_generate_report(_alpha_state(notes))
+        async def run(kw):
+            seen["inputs"] = kw
+            return SimpleNamespace(summary="REPORT", key_risk="", notes_view="")
+        return SimpleNamespace(ainvoke=run)
+
+    monkeypatch.setattr(prompts, "get_alpha_summary_chain", summary)
+    monkeypatch.setattr(nodes, "_verified_market_values", lambda t: {})
+    monkeypatch.setattr(nodes, "get_llm", lambda *a, **k: object())
+    out = asyncio.run(nodes.alpha_generate_report(_alpha_state(notes)))
     return out, seen
 
 
-def test_alpha_report_passes_the_notes_to_the_combiner_only_when_present(monkeypatch):
+def test_alpha_report_passes_the_notes_to_the_summary_only_when_present(monkeypatch):
     out, seen = _run_alpha(monkeypatch, [_note("[ANALYST NOTE] my thesis is X")])
-    assert seen["flag"] is True and "my thesis is X" in seen["inputs"]["analyst_notes"] and out["alpha_report"] == "REPORT"
+    assert seen["flag"] is True and "my thesis is X" in seen["inputs"]["analyst_notes"] and "REPORT" in out["alpha_report"]
     out, seen = _run_alpha(monkeypatch, [])
     assert seen["flag"] is False and "analyst_notes" not in seen["inputs"]  # exactly the call it made before
 

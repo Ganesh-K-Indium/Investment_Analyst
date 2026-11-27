@@ -81,7 +81,10 @@ export interface RunComparison {
     a: AnalysisTask;
     b: AnalysisTask;
     stance: { before: Stance | null; after: Stance | null; change: number | null };
-    pillars: Record<string, { before: PillarDirection; after: PillarDirection }>;
+    pillars: Record<string, {
+        before: PillarDirection; after: PillarDirection;
+        before_score?: number | null; after_score?: number | null; before_verdict?: string | null; after_verdict?: string | null;
+    }>;
     new_negatives: string[];
     new_positives: string[];
     dropped_negatives: string[];

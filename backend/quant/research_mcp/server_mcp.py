@@ -29,6 +29,42 @@ from app.core.logging_setup import configure_logging  # noqa: E402
 configure_logging()
 logger = logging.getLogger("quant.research_mcp.server_mcp")
 
+# ── Usage reporting ────────────────────────────────────────────────────────────────────────────────────────────────────
+# This server runs in its own process, so its model calls cannot reach the app's usage tracker directly. Each tool collects
+# the tokens its calls used and returns them under "_usage"; the app's tool wrapper (app/services/quant_runtime.harden_tools)
+# records them against the user and removes the key before the agent sees the result.
+import contextvars as _cv
+import functools as _ft
+
+_TOOL_USAGE: "_cv.ContextVar[Optional[list]]" = _cv.ContextVar("research_tool_usage", default=None)
+
+
+async def _completion(client, **kwargs):
+    response = await client.chat.completions.create(**kwargs)
+    bucket = _TOOL_USAGE.get()
+    usage = getattr(response, "usage", None)
+    if bucket is not None and usage is not None:
+        bucket.append({"model": kwargs.get("model") or getattr(response, "model", "unknown"),
+                       "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                       "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0)})
+    return response
+
+
+def _with_usage(fn):
+    @_ft.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        token = _TOOL_USAGE.set([])
+        try:
+            result = await fn(*args, **kwargs)
+            used = _TOOL_USAGE.get()
+            if used and isinstance(result, dict):
+                result = {**result, "_usage": used}
+            return result
+        finally:
+            _TOOL_USAGE.reset(token)
+    return wrapper
+
+
 # Initialize FastMCP server
 research_server = FastMCP(
     "research",
@@ -213,6 +249,7 @@ def determine_action(current_rating: str, previous_rating: Optional[str]) -> str
         dict - Search results with titles, URLs, content snippets, and scores
     """
 )
+@_with_usage
 async def web_search(
     query: str,
     max_results: int = 10,
@@ -416,6 +453,7 @@ async def _search_analyst_ratings_impl(
         dict - Analyst ratings search results from multiple financial sources
     """
 )
+@_with_usage
 async def search_analyst_ratings(
     symbol: str,
     company_name: Optional[str] = None,
@@ -494,7 +532,7 @@ Respond with a JSON object containing:
 
 Only include ratings you can clearly identify from the content. Do not make up data."""
 
-        response = await client.chat.completions.create(
+        response = await _completion(client, 
             model="gpt-4o",
             messages=[{"role": "user", "content": extraction_prompt}],
             response_format={"type": "json_object"},
@@ -606,6 +644,7 @@ Only include ratings you can clearly identify from the content. Do not make up d
         dict - Aggregated ratings with consensus, average target price, and individual ratings
     """
 )
+@_with_usage
 async def aggregate_ratings(
     symbol: str,
     search_results: Optional[List[Dict[str, Any]]] = None
@@ -676,6 +715,7 @@ async def _analyze_sentiment_impl(
         dict - Sentiment analysis with polarity, subjectivity, and classification
     """
 )
+@_with_usage
 async def analyze_sentiment(
     text: str,
     symbol: Optional[str] = None
@@ -726,7 +766,7 @@ Respond with a JSON object:
     "notable_events": ["Event 1", ...]
 }}"""
 
-        response = await client.chat.completions.create(
+        response = await _completion(client, 
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
@@ -769,6 +809,7 @@ Respond with a JSON object:
         dict - Summarized content with key points
     """
 )
+@_with_usage
 async def summarize_content(
     content: str,
     symbol: str,
@@ -875,7 +916,7 @@ Respond with a detailed JSON object:
 
 Be specific, data-driven, and balanced in your analysis. Probabilities should sum to 100%."""
 
-        response = await client.chat.completions.create(
+        response = await _completion(client, 
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
@@ -926,6 +967,7 @@ Be specific, data-driven, and balanced in your analysis. Probabilities should su
         dict - Bull and bear scenarios with catalysts, risks, probabilities, and price targets
     """
 )
+@_with_usage
 async def generate_scenarios(
     symbol: str,
     company_name: Optional[str] = None,
@@ -955,6 +997,7 @@ async def generate_scenarios(
         dict - Cached data if available, or indication that cache is empty
     """
 )
+@_with_usage
 async def get_cached_research(
     symbol: str,
     data_type: str = "all"
@@ -1161,7 +1204,7 @@ Search Results:
 Extract ONLY the MD&A/management commentary text. If you find multiple sections, combine them.
 Preserve important quotes and key statements. Do not add your own analysis."""
 
-        response = await client.chat.completions.create(
+        response = await _completion(client, 
             model="gpt-4o",
             messages=[{"role": "user", "content": extraction_prompt}],
             temperature=0.1
@@ -1270,7 +1313,7 @@ Respond with a JSON object:
     "overall_sentiment": "very_positive" | "positive" | "neutral" | "cautious" | "negative"
 }}"""
 
-        current_response = await client.chat.completions.create(
+        current_response = await _completion(client, 
             model="gpt-4o",
             messages=[{"role": "user", "content": current_analysis_prompt}],
             response_format={"type": "json_object"},
@@ -1323,7 +1366,7 @@ MD&A Text (Previous Quarter{' - ' + previous_quarter_date if previous_quarter_da
 
 Respond with the same JSON structure as before."""
 
-            previous_response = await client.chat.completions.create(
+            previous_response = await _completion(client, 
                 model="gpt-4o",
                 messages=[{"role": "user", "content": previous_analysis_prompt}],
                 response_format={"type": "json_object"},
@@ -1401,7 +1444,7 @@ Provide a brief 2-3 paragraph summary highlighting:
 
 Keep it concise and actionable."""
 
-            summary_response = await client.chat.completions.create(
+            summary_response = await _completion(client, 
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": comparison_summary_prompt}],
                 temperature=0.3
@@ -1454,6 +1497,7 @@ Keep it concise and actionable."""
             - Sources used for extraction (if auto-extracted)
     """
 )
+@_with_usage
 async def analyze_mda_sentiment(
     symbol: str,
     current_quarter_text: Optional[str] = None,
@@ -1493,6 +1537,7 @@ async def analyze_mda_sentiment(
         dict - Complete research package with ratings, sentiment, and scenarios
     """
 )
+@_with_usage
 async def comprehensive_research(
     symbol: str,
     company_name: Optional[str] = None,

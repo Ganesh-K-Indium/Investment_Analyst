@@ -148,6 +148,7 @@ class Settings(BaseSettings):
     worker_interactive_job_timeout: int = Field(1800, ge=60, description="Longest an interactive job may run (seconds).")
     worker_batch_max_jobs: int = Field(5, ge=1, description="Concurrent jobs per batch worker (multi-ticker ALPHA runs).")
     worker_batch_job_timeout: int = Field(7200, ge=60, description="Longest a batch job may run (seconds).")
+    model_prices: Dict[str, List[float]] = Field(default_factory=dict, description="Your own model prices, USD per 1M tokens as [input, output], keyed by model spec or name, e.g. {\"custom:*\": [0, 0], \"anthropic:claude-sonnet-5-5\": [2, 10]}. Overrides the built-in list prices; a model with no known price is counted in tokens only.")
     analysis_stale_days: int = Field(30, ge=1, description="A holding whose last ALPHA run is older than this many days is flagged as stale on the dashboards.")
     analysis_insider_alert_usd: float = Field(5_000_000, ge=0, description="Net open-market insider buying or selling (USD) since the last analysis that raises a dashboard alert.")
     analysis_schedules_allowed: bool = Field(True, description="Let users set up scheduled or new-filing ALPHA re-runs. Each schedule starts switched off; nothing runs until its owner turns it on.")
@@ -426,7 +427,7 @@ def example_yaml() -> str:
         out += ["", f"# ── {title} " + "─" * max(3, 100 - len(title))]
         for name in names:
             info = Settings.model_fields[name]
-            default = info.default
+            default = info.get_default(call_default_factory=True)
             shown = "" if default is None else default
             value = json.dumps(str(shown)) if isinstance(shown, (str, Path)) else json.dumps(shown)
             desc = f"  # {info.description}" if info.description else ""

@@ -225,7 +225,8 @@ export const RunDetail: React.FC<RunDetailProps> = ({ taskId, portfolioName, onC
                                         <tr key={s.ticker}>
                                             <th scope="row">{s.ticker}</th>
                                             <td><StanceBadge stance={s.stance} /></td>
-                                            {PILLARS.map((p) => <td key={p.key}><DirectionCell direction={s.pillars?.[p.key] ?? null} label={`${s.ticker} ${p.label}`} /></td>)}
+                                            {PILLARS.map((p) => <td key={p.key}><DirectionCell direction={s.pillars?.[p.key] ?? null} label={`${s.ticker} ${p.label}`}
+                                                score={s.detail?.pillars?.[p.key]?.score} verdict={s.detail?.pillars?.[p.key]?.recommendation} /></td>)}
                                             <td><button type="button" className="ad-link" onClick={() => onCompare(s.ticker, task.id)}>Compare…</button></td>
                                         </tr>
                                     ))}
@@ -234,6 +235,26 @@ export const RunDetail: React.FC<RunDetailProps> = ({ taskId, portfolioName, onC
                             {task.signals.filter((s) => s.key_risk).map((s) => (
                                 <p key={s.ticker} className="ad-risk"><strong>{s.ticker} main risk:</strong> {s.key_risk}</p>
                             ))}
+                            {task.signals.filter((s) => s.detail?.partial).map((s) => (
+                                <p key={`${s.ticker}-partial`} className="ad-risk">
+                                    <strong>{s.ticker}:</strong> partial analysis, {(s.detail?.missing ?? []).map((m) => PILLARS.find((p) => p.key === m)?.label ?? m).join(', ')} could not be completed{s.stance ? '; the stance uses the other pillars' : ', so no stance was given'}.
+                                </p>
+                            ))}
+                            {task.signals.some((s) => s.detail?.pillars) && (
+                                <ul className="ad-verdicts">
+                                    {task.signals.flatMap((s) => PILLARS.map((p) => {
+                                        const d = s.detail?.pillars?.[p.key];
+                                        if (!d?.recommendation) return null;
+                                        return (
+                                            <li key={`${s.ticker}-${p.key}`}>
+                                                <strong>{task.signals!.length > 1 ? `${s.ticker} · ` : ''}{p.label}</strong>
+                                                {' '}({d.score != null && d.score > 0 ? '+' : ''}{d.score ?? '—'}){d.source === 'market_data' ? ' · from live market data' : ''}: {d.recommendation}
+                                                {d.issues ? <span className="ad-muted"> · {d.issues} figure{d.issues > 1 ? 's' : ''} unconfirmed</span> : null}
+                                            </li>
+                                        );
+                                    }))}
+                                </ul>
+                            )}
                         </div>
                     )}
 

@@ -211,13 +211,20 @@ class DuplicateDocument(Exception):
 
 def start(doc_id: str, user_id: str, settings: Dict[str, Dict[str, Any]], known_entities: Optional[List[str]] = None, force_vision_pages: Optional[List[int]] = None) -> None:
     """Run the ingestion in the background (this process). A job per document; one document never blocks another."""
-    task = asyncio.create_task(_run(doc_id, settings, known_entities or [], force_vision_pages or []))
+    task = asyncio.create_task(_metered_run(doc_id, user_id, settings, known_entities or [], force_vision_pages or []))
     _jobs[doc_id] = task
     task.add_done_callback(lambda t: _jobs.pop(doc_id, None))
 
 
 def is_running(doc_id: str) -> bool:
     return doc_id in _jobs
+
+
+async def _metered_run(doc_id: str, user_id: str, settings: Dict[str, Dict[str, Any]], known: List[str], force_vision: List[int]) -> None:
+    """Reading a document (OCR, vision models, handwriting, embeddings) is counted against its owner, whatever provider it uses."""
+    from app.services import usage_ledger
+    async with usage_ledger.metered(user_id, f"user_doc:{doc_id}", detached=True):
+        await _run(doc_id, settings, known, force_vision)
 
 
 async def _run(doc_id: str, settings: Dict[str, Dict[str, Any]], known: List[str], force_vision: List[int]) -> None:

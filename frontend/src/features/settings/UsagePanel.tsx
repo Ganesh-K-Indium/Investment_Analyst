@@ -21,11 +21,28 @@ export const UsagePanel: React.FC = () => {
                 </div>
             )}
             {u.over_budget && <p className="set-error" role="alert">You are over your monthly token budget of {fmt(u.budget)}. Answers still run; raise the budget below or switch to cheaper models.</p>}
+            {(u.unpriced_tokens ?? 0) > 0 && (
+                <p className="set-usage__note">
+                    {fmt(u.unpriced_tokens!)} tokens are from models with no known price and are not in the cost above.
+                    An administrator can set their prices with the <code>model_prices</code> setting.
+                </p>
+            )}
+            {(u.by_model?.length ?? 0) > 0 && (
+                <ul className="set-usage__roles" aria-label="By model">
+                    {u.by_model!.slice(0, 8).map((m) => (
+                        <li key={`${m.model}-${m.priced}`}>
+                            <span>{m.model}</span>
+                            <span>{fmt(m.tokens)} · {m.priced ? `≈ $${m.cost_usd.toFixed(2)}` : 'price unknown'}</span>
+                        </li>
+                    ))}
+                </ul>
+            )}
             {roles.length > 0 && (
-                <ul className="set-usage__roles">
+                <ul className="set-usage__roles" aria-label="By task">
                     {roles.slice(0, 6).map(([r, v]) => <li key={r}><span>{r.replace(/[._]/g, ' ')}</span><span>{fmt(v.tokens)}</span></li>)}
                 </ul>
             )}
+            {u.prices_as_of && <p className="set-usage__note">Costs are estimates from list prices checked {u.prices_as_of}.</p>}
         </div>
     );
 };

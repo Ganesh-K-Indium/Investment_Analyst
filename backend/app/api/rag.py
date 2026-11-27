@@ -19,7 +19,7 @@ from app.database.models import AgentType, MessageRole, User, ChatSession
 from app.services.documents.quotes import pick_quote
 from app.auth.deps import get_current_user, verify_user_id_matches, verify_owner
 from app.services.vectordb_manager import get_vectordb_manager
-from app.utils.company_mapping import get_ticker
+from app.utils.company_mapping import get_company_name, get_ticker
 from app.utils.time import to_iso_z
 from app.utils import run_progress
 from app.utils.usage_tracker import track_usage
@@ -82,7 +82,7 @@ async def _run_agent_tracked(agent, inputs: dict, config: dict, run_label: str, 
         # where no role reported (a node still using a model built outside the registry): recording both would count every token twice.
         if not any(e.stage != "graph_total" for e in tracker.entries):
             tracker.record(
-                stage="graph_total", model="gpt-4o/gpt-4o-mini (all nodes)",
+                stage="graph_total", model=app_settings.model_for("generator"),
                 prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
                 total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - start,
             )
@@ -772,8 +772,9 @@ async def alpha_core(
 
         resolved_tickers = []
         for t in payload.tickers:
-            ticker = get_ticker(t) or t.upper()
-            resolved_tickers.append(ticker)
+            ticker = (get_ticker(t) or t).strip().upper()
+            if ticker and ticker not in resolved_tickers:
+                resolved_tickers.append(ticker)
 
         chat_session = await ChatService.create_or_get_chat_session(
             db=db,
@@ -829,6 +830,7 @@ async def alpha_core(
                     "alpha_mode": True,
                     "alpha_pillar": None,
                     "ticker": ticker,
+                    "company_name": get_company_name(ticker),
                     "alpha_dimensions": {},
                     "alpha_report": "",
                     "chart_url": None,
@@ -842,7 +844,7 @@ async def alpha_core(
                 if on_ticker_done is not None:
                     await on_ticker_done(ticker, index, total)
 
-                return {"ticker": ticker, "report": report, "usage": usage_summary}
+                return {"ticker": ticker, "report": report, "usage": usage_summary, "signal": result.get("alpha_result")}
 
         async def _run_one(index: int, ticker: str) -> dict:
             # Steps reported while this ticker runs belong to its own lane (live progress; no-ops without a background run).
@@ -871,6 +873,7 @@ async def alpha_core(
                     "portfolio_name": portfolio.name,
                     "ticker": item["ticker"],
                     "alpha_pillar": None,
+                    "alpha_signal": item.get("signal"),
                     "usage": item["usage"]
                 },
                 token_count=item["usage"]["total_tokens"]

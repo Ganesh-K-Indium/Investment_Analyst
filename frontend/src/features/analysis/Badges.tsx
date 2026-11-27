@@ -32,14 +32,20 @@ export const TickerChips: React.FC<{ tickers?: string[] | null; max?: number; on
     );
 };
 
-export const DirectionCell: React.FC<{ direction: PillarDirection; previous?: PillarDirection; label: string }> = ({ direction, previous, label }) => {
+export const DirectionCell: React.FC<{
+    direction: PillarDirection; previous?: PillarDirection; label: string;
+    /** The pillar's own score (-2..+2) and one-line verdict, when the run recorded them. */
+    score?: number | null; verdict?: string | null;
+}> = ({ direction, previous, label, score, verdict }) => {
     const changed = previous !== undefined && previous !== null && direction !== null && previous !== direction;
     const rank = (d: PillarDirection) => (d === 'positive' ? 1 : d === 'negative' ? -1 : 0);
     const arrow = changed ? (rank(direction) > rank(previous ?? null) ? '▲' : '▼') : null;
-    const text = direction ? DIRECTION_LABEL[direction] : 'Not stated';
+    const text = direction ? DIRECTION_LABEL[direction] : 'Not available';
+    const shown = score != null ? (score > 0 ? `+${score}` : score < 0 ? `−${Math.abs(score)}` : '0') : directionSymbol(direction);
     return (
-        <span className={`ad-dir ad-dir--${direction ?? 'none'}`} aria-label={`${label}: ${text}${changed ? `, was ${DIRECTION_LABEL[previous!]}` : ''}`}>
-            <span aria-hidden="true">{directionSymbol(direction)}</span>
+        <span className={`ad-dir ad-dir--${direction ?? 'none'}`} title={verdict ?? undefined}
+            aria-label={`${label}: ${text}${score != null ? ` (${score > 0 ? '+' : ''}${score})` : ''}${verdict ? `. ${verdict}` : ''}${changed ? `, was ${DIRECTION_LABEL[previous!]}` : ''}`}>
+            <span aria-hidden="true">{shown}</span>
             {arrow && <span className="ad-dir__arrow" aria-hidden="true">{arrow}</span>}
         </span>
     );

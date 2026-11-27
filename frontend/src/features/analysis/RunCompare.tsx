@@ -91,10 +91,10 @@ export const RunCompare: React.FC<RunCompareProps> = ({ ticker, a, b, portfolioI
                                     {PILLARS.map((p) => {
                                         const d = current.pillars[p.key];
                                         return (
-                                            <tr key={p.key} className={d && d.before !== d.after ? 'is-changed' : undefined}>
+                                            <tr key={p.key} className={d && (d.before !== d.after || (d.before_score ?? null) !== (d.after_score ?? null)) ? 'is-changed' : undefined}>
                                                 <th scope="row">{p.label}</th>
-                                                <td><DirectionCell direction={d?.before ?? null} label={`${p.label} before`} /></td>
-                                                <td><DirectionCell direction={d?.after ?? null} previous={d?.before ?? null} label={`${p.label} after`} /></td>
+                                                <td><DirectionCell direction={d?.before ?? null} label={`${p.label} before`} score={d?.before_score} verdict={d?.before_verdict} /></td>
+                                                <td><DirectionCell direction={d?.after ?? null} previous={d?.before ?? null} label={`${p.label} after`} score={d?.after_score} verdict={d?.after_verdict} /></td>
                                             </tr>
                                         );
                                     })}

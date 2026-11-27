@@ -219,6 +219,14 @@ class AlphaDimensionOutput(BaseModel):
         default="",
         description="One-line recommendation based on this dimension's findings (e.g. 'Positive', 'Neutral', 'Negative — monitor closely', or a specific action signal)"
     )
+    score: int | None = Field(
+        default=None,
+        description=(
+            "This pillar's verdict as an integer from -2 to +2: +2 strongly supportive of owning the stock, +1 supportive, "
+            "0 neutral or mixed, -1 a concern, -2 a serious concern. It must agree with the recommendation and with the "
+            "facts you tagged."
+        )
+    )
 
 
 class AlphaActionOutput(BaseModel):
@@ -283,6 +291,32 @@ class AlphaAlignmentOutput(BaseModel):
     recommendation: str = Field(
         default="",
         description="One-line recommendation based on insider trading and governance signals (e.g. 'Positive — net insider buying signals conviction', 'Neutral', 'Negative — insider selling warrants caution')"
+    )
+    score: int | None = Field(
+        default=None,
+        description=(
+            "This pillar's verdict as an integer from -2 to +2: +2 strongly supportive of owning the stock, +1 supportive, "
+            "0 neutral or mixed, -1 a concern, -2 a serious concern. It must agree with the recommendation and with the "
+            "facts you tagged."
+        )
+    )
+
+
+class AlphaSummaryOutput(BaseModel):
+    """The closing summary of an ALPHA report. The stance is decided from the pillar scores before this is written."""
+    summary: str = Field(
+        description=(
+            "4-5 sentences (about 90-110 words) explaining the given overall stance from the pillars' own verdicts. "
+            "Fact-bearing sentences carry sentiment tags; the last sentence states the given stance."
+        )
+    )
+    key_risk: str = Field(
+        default="",
+        description="The single most important risk across the pillars, in one sentence with its figure."
+    )
+    notes_view: str = Field(
+        default="",
+        description="Only when the user's own notes are supplied: one short paragraph beginning '**Your notes:**'. Otherwise empty."
     )
 
 

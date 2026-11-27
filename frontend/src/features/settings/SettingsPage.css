@@ -204,3 +204,5 @@ body.sidebar-collapsed .set-bar { left: var(--sidebar-width-collapsed); }
 .mcp-tools li { display: inline-flex; gap: 6px; align-items: center; padding: 2px 8px; border: 1px solid var(--color-border); border-radius: 6px; font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
 .mcp-tools code { color: var(--color-text-primary); }
 .mcp-check { display: flex; gap: 8px; align-items: center; font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.set-usage__note { margin: 0; font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+.set-usage__roles[aria-label="By model"] { text-transform: none; }

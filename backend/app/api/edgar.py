@@ -103,16 +103,18 @@ async def ingest_edgar_filings(
         main_queue = asyncio.Queue()
 
         async def run_ingestion():
+            from app.services import usage_ledger
             try:
-                async for event in SecEdgarService.fetch_filings_stream(
-                    ticker=ticker,
-                    form_types=request.form_types or list(DEFAULT_FORM_TYPES),
-                    start_date=request.start_date,
-                    end_date=request.end_date,
-                    accession_filter=set(request.accessions) if request.accessions else None,
-                    ingest=True,
-                ):
-                    await main_queue.put(event)
+                async with usage_ledger.metered(str(current_user.id), f"sec_ingest:{ticker}", detached=True):
+                    async for event in SecEdgarService.fetch_filings_stream(
+                        ticker=ticker,
+                        form_types=request.form_types or list(DEFAULT_FORM_TYPES),
+                        start_date=request.start_date,
+                        end_date=request.end_date,
+                        accession_filter=set(request.accessions) if request.accessions else None,
+                        ingest=True,
+                    ):
+                        await main_queue.put(event)
             except ValueError as exc:
                 await main_queue.put({"event": "error", "data": {"detail": str(exc)}})
             except Exception as exc:

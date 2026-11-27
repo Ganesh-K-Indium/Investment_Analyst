@@ -67,6 +67,8 @@ class GraphState(TypedDict):
     alpha_pillar: Optional[str]  # Sub-category or single pillar for alpha analysis
     alpha_dimensions: Dict[str, Any]  # Retrieved data for each ALPHA dimension
     alpha_report: str  # Final ALPHA report combining all dimensions
+    alpha_result: Dict[str, Any]  # Structured outcome of an ALPHA run: stance, pillar scores, checks (rag/alpha/framework.py)
+    company_name: str  # Display name of the company an ALPHA run is about
     # Scenario Framework fields (Bull / Bear / Base)
     scenario_mode: bool  # Whether this is a Bull/Bear/Base scenario query
     scenario_data: Dict[str, Any]  # Web-collected data buckets for scenario analysis

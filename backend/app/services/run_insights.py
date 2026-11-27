@@ -1,6 +1,8 @@
 """What a background run was and what came out of it, read from the request and the stored response. No model calls.
 
-ALPHA reports carry their own markers (app: rag/prompts/prompts.py, get_alpha_report_combiner_chain): one "## <letter> — <Pillar>"
+ALPHA runs return a structured result per ticker (rag/alpha/framework.py signal_record: stance from the pillar scores, each
+pillar's score and verdict, fact-check findings); that is used when present. Reports from before it existed are read from their
+own markers: one "## <letter> — <Pillar>"
 section per pillar, every fact-bearing sentence wrapped as [[+|...]] / [[-|...]] / [[~|...]], and a closing summary whose
 final sentence names the stance. A pillar's direction is the balance of its tagged facts; the stance is the last stance
 phrase in the summary. Anything that cannot be read is left empty (None), never guessed."""
@@ -197,6 +199,17 @@ def describe_result(task_type: str, agent_type: str, response: Dict[str, Any]) -
                 continue
             ticker = str(item["ticker"]).upper()
             parsed = parse_alpha_report(item.get("report") or "")
+            sig = item.get("signal") if isinstance(item.get("signal"), dict) else None
+            if sig:
+                parsed.update({
+                    "stance": sig.get("stance"), "stance_score": sig.get("stance_score"),
+                    "pillars": {p: (sig.get("pillars") or {}).get(p) for p in PILLARS},
+                    "fact_counts": sig.get("fact_counts") or parsed["fact_counts"],
+                    "key_risk": sig.get("key_risk") or parsed["key_risk"],
+                    "detail": {"pillars": sig.get("pillar_detail") or {}, "partial": bool(sig.get("partial")),
+                               "missing": sig.get("missing") or [], "mean_score": sig.get("mean_score"),
+                               "fact_issues": sig.get("fact_issues", 0), "company": sig.get("company")},
+                })
             stances[ticker] = parsed["stance"]
             out["signals"].append({"ticker": ticker, **parsed})
         out["tickers"] = _upper(response.get("tickers") or list(stances))

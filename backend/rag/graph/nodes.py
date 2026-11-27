@@ -1633,25 +1633,24 @@ def grade_documents(state):
     }
 
 
-def _fetch_verified_market_data(ticker: str) -> str:
-    """Live price / SMA200 / RSI14 / P/E / EBITDA from yfinance (authoritative over web snippets)."""
+def _verified_market_values(ticker: str) -> dict:
+    """Live price / 200-day SMA / RSI-14 / trailing P/E / EBITDA and the company's name from yfinance ({} when unavailable).
+    These are authoritative over web snippets; the ALPHA Action pillar is written from them directly when present."""
     try:
         import yfinance as yf
         t = yf.Ticker(ticker)
         close = t.history(period="2y")["Close"].dropna()
-        if len(close) < 200:
-            return ""
-        price = float(close.iloc[-1])
-        sma200 = float(close.tail(200).mean())
-        delta = close.diff()
-        gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
-        loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
-        rsi = float(100 - 100 / (1 + gain.iloc[-1] / loss.iloc[-1]))
         try:
             info = t.info or {}
         except Exception:
             info = {}
-        pe = info.get("trailingPE")
+        out = {"long_name": info.get("longName") or info.get("shortName")}
+        if len(close) < 200:
+            return out
+        delta = close.diff()
+        gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+        rsi = float(100 - 100 / (1 + gain.iloc[-1] / loss.iloc[-1])) if loss.iloc[-1] else 100.0
         ebitda = info.get("ebitda")
         if not ebitda:
             # Fallbacks: TTM from last 4 quarters, then latest annual EBITDA
@@ -1665,20 +1664,37 @@ def _fetch_verified_market_data(ticker: str) -> str:
                             break
                 except Exception:
                     continue
-        fin_cur = info.get("financialCurrency") or info.get("currency") or "USD"
-        sym = {"USD": "$", "EUR": "€", "GBP": "£"}.get(fin_cur, fin_cur + " ")
-        lines = [
-            f"Quote date: {close.index[-1].date()} ({info.get('currency', 'USD')})",
-            f"Current stock price: ${price:.2f}" if info.get("currency", "USD") == "USD" else f"Current stock price: {price:.2f} {info.get('currency')}",
-            f"200-day SMA: {sma200:.2f}",
-            f"RSI(14): {rsi:.2f}",
-            f"Trailing P/E: {pe:.2f}" if pe else "Trailing P/E: N/A",
-            f"EBITDA (TTM, reported in {fin_cur}): {sym}{ebitda/1e9:.2f}B" if ebitda else "EBITDA: N/A",
-        ]
-        return "\n".join(lines)
+        cur = info.get("currency") or "USD"
+        fin_cur = info.get("financialCurrency") or cur
+        symbols = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥"}
+        pe = info.get("trailingPE")
+        out.update({
+            "price": float(close.iloc[-1]), "sma200": float(close.tail(200).mean()), "rsi": rsi,
+            "pe": float(pe) if isinstance(pe, (int, float)) and pe > 0 else None,
+            "ebitda": float(ebitda) if ebitda else None,
+            "as_of": str(close.index[-1].date()), "currency": cur, "financial_currency": fin_cur,
+            "price_symbol": symbols.get(cur, cur + " "), "financial_symbol": symbols.get(fin_cur, fin_cur + " "),
+        })
+        return out
     except Exception as e:
         logger.warning(f"    yfinance market data unavailable for {ticker}: {e}")
+        return {}
+
+
+def _fetch_verified_market_data(ticker: str, values: dict = None) -> str:
+    """The same market data as a text block for a model prompt ("" when unavailable)."""
+    v = values if values is not None else _verified_market_values(ticker)
+    if v.get("price") is None:
         return ""
+    lines = [
+        f"Quote date: {v['as_of']} ({v['currency']})",
+        f"Current stock price: {v['price_symbol']}{v['price']:.2f}",
+        f"200-day SMA: {v['sma200']:.2f}",
+        f"RSI(14): {v['rsi']:.2f}",
+        f"Trailing P/E: {v['pe']:.2f}" if v.get("pe") else "Trailing P/E: N/A",
+        f"EBITDA (TTM, reported in {v['financial_currency']}): {v['financial_symbol']}{v['ebitda']/1e9:.2f}B" if v.get("ebitda") else "EBITDA: N/A",
+    ]
+    return "\n".join(lines)
 
 
 def web_search(state):
@@ -2916,6 +2932,7 @@ async def alpha_dimension_retrieve(state, config=None):
     vectordb_mgr = get_vectordb_manager()
     from app.utils.company_mapping import get_most_recent_filed_fiscal_year
     _cur_yr = get_most_recent_filed_fiscal_year(ticker)
+    company_name = state.get("company_name") or ""
     # All web searches restricted to trusted financial domains, capped to the last 1 year
     web_search = TavilySearch(max_results=3, include_domains=TRUSTED_FINANCIAL_DOMAINS, time_range="year")
     # Trends / notable trends (Horizon) fetched exclusively from SeekingAlpha, capped to the last 1 year
@@ -2925,446 +2942,468 @@ async def alpha_dimension_retrieve(state, config=None):
 
     alpha_dimensions = {}
 
-    # -------------------------------------------------------------------------
-    # ALIGNMENT: VectorDB (MD&A, Governance) + Form4 Insider Trading
-    # -------------------------------------------------------------------------
-    run_progress.start("read.alignment")
-    logger.info(" [1/5] Alignment (Stakeholder Interests) - VectorDB + Form4 Insider Data")
+    # Who the searches are about: the company's name as well as its ticker, so web results match the right company.
+    _who = f"{company_name} ({ticker})" if company_name and company_name.upper() != ticker else ticker
     try:
         db_instance = vectordb_mgr.get_instance(ticker, create_if_missing=False)
+    except Exception as _e:
+        logger.error(f"    Vector store unavailable for {ticker}: {_e}")
+        db_instance = None
 
-        # Query for MD&A and governance documents — latest filing only
-        from app.utils.company_mapping import is_foreign_private_issuer, form4_exemption_message
-        _foreign_issuer = is_foreign_private_issuer(ticker)
-
-        alignment_queries = [
-            f"{ticker} management discussion analysis MD&A latest fiscal year {_cur_yr}",
-            f"{ticker} governance board independence proxy statement latest {_cur_yr}",
-            f"{ticker} related party transactions latest {_cur_yr}"
-        ]
-        if _foreign_issuer:
-            # 20-F stands in for the missing Form 4 data: Item 6 (directors, senior
-            # management, share ownership) and Item 7 (major shareholders, related parties).
-            # Runs FIRST: only the first 5 docs survive the slice below, and the exemption
-            # note takes slot 0, so the ownership chunks must lead the retrieved ones.
-            alignment_queries.insert(0,
-                f"{ticker} share ownership of directors and senior management major shareholders "
-                f"Item 6 Item 7 related party transactions latest {_cur_yr}"
-            )
-            # A 20-F has no "MD&A" heading; its MD&A is Item 5 (Operating and Financial Review).
-            alignment_queries.append(
-                f"{ticker} operating and financial review and prospects Item 5 management tone "
-                f"outlook risks latest {_cur_yr}"
-            )
-
-        alignment_docs = []
-        _seen_align = set()
-        for query in alignment_queries:
-            results = await _alpha_vdb_search(db_instance, query, 3, _cur_yr)
-            for point in results:
-                if hasattr(point, 'payload'):
-                    meta = point.payload.get('metadata', {})
-                    content = point.payload.get('page_content', '')
-                    _k = _doc_key(meta, content)
-                    if _k in _seen_align:
-                        continue
-                    _seen_align.add(_k)
-                    alignment_docs.append(Document(page_content=content, metadata=meta))
-
-        # ── Form 4 insider trading advisory data ──────────────────────────────
-        logger.info("    Fetching Form 4 insider trading data…")
+    async def _read_alignment():
+        # -------------------------------------------------------------------------
+        # ALIGNMENT: VectorDB (MD&A, Governance) + Form4 Insider Trading
+        # -------------------------------------------------------------------------
+        run_progress.start("read.alignment")
+        logger.info(" [1/5] Alignment (Stakeholder Interests) - VectorDB + Form4 Insider Data")
         try:
-            from rag.utils.form4_insights.advisory_hub import get_advisory_report
+            db_instance = vectordb_mgr.get_instance(ticker, create_if_missing=False)
 
-            # Foreign private issuers file no Form 4 — skip the DB lookup and tell the
-            # analysis why insider data is absent and what stands in for it.
-            form4_report = None if _foreign_issuer else await get_advisory_report(ticker)
+            # Query for MD&A and governance documents — latest filing only
+            from app.utils.company_mapping import is_foreign_private_issuer, form4_exemption_message
+            _foreign_issuer = is_foreign_private_issuer(ticker)
 
+            alignment_queries = [
+                f"{ticker} management discussion analysis MD&A latest fiscal year {_cur_yr}",
+                f"{ticker} governance board independence proxy statement latest {_cur_yr}",
+                f"{ticker} related party transactions latest {_cur_yr}"
+            ]
             if _foreign_issuer:
-                alignment_docs.insert(0, Document(
-                    page_content=(
-                        f"INSIDER TRADING DATA — {ticker}\n\n{form4_exemption_message(ticker)} "
-                        f"Assess alignment from the 20-F ownership and related-party disclosures "
-                        f"below, and state that insider buying/selling data is not available for "
-                        f"this issuer by regulation (not because data is missing)."
-                    ),
-                    metadata={"source": "form4_exemption_note", "company": ticker, "content_type": "insider_trading"}
-                ))
-                logger.info(f"    {ticker} is a foreign private issuer — added Form 4 exemption note instead of insider data")
-            elif form4_report and "status" not in form4_report and "error" not in form4_report:
-                lines = [f"INSIDER TRADING ANALYSIS (SEC Form 4) — {ticker}\n"]
-                for issuer_name, detail in form4_report.items():
-                    if issuer_name in ("error", "status", "message", "ticker"):
-                        continue
-                    lines.append(f"\nAnalyst Insight:\n{detail.get('Reason', 'No analysis available')}\n")
-
-                insider_doc = Document(
-                    page_content="\n".join(lines),
-                    metadata={"source": "form4_insider_trading", "company": ticker, "content_type": "insider_trading"}
+                # 20-F stands in for the missing Form 4 data: Item 6 (directors, senior
+                # management, share ownership) and Item 7 (major shareholders, related parties).
+                # Runs FIRST: only the first 5 docs survive the slice below, and the exemption
+                # note takes slot 0, so the ownership chunks must lead the retrieved ones.
+                alignment_queries.insert(0,
+                    f"{ticker} share ownership of directors and senior management major shareholders "
+                    f"Item 6 Item 7 related party transactions latest {_cur_yr}"
                 )
-                # Insert first so it's never cut off by the docs[:5] slice in format_docs
-                alignment_docs.insert(0, insider_doc)
-                logger.info(f"    Form4 insider doc added ({len(form4_report)} issuer(s))")
-            else:
-                logger.warning(f"    No Form4 data in DB for {ticker} — skipping insider doc")
-        except Exception as form4_err:
-            logger.error(f"    Form4 fetch error (non-fatal): {form4_err}")
-        # ─────────────────────────────────────────────────────────────────────
-
-        alpha_dimensions['alignment'] = {
-            'source': 'vectordb+form4',
-            'documents': alignment_docs,  # Form4/exemption doc at [0]; no count cap — a [:N] slice dropped the last query (Item 5)
-            'query_count': len(alignment_queries)
-        }
-        logger.info(f"    Total alignment docs: {len(alignment_docs)}")
-
-    except Exception as e:
-        logger.error(f"    Error: {e}")
-        alpha_dimensions['alignment'] = {'source': 'vectordb+form4', 'documents': [], 'query_count': 0}
-    
-    run_progress.finish("read.alignment", detail=_alpha_sources_detail(alpha_dimensions, 'alignment'))
-
-    # -------------------------------------------------------------------------
-    # LIQUIDITY: VectorDB (risk factors) + Web (latest FDIC / govt macro data)
-    # -------------------------------------------------------------------------
-    run_progress.start("read.liquidity")
-    logger.info(" [2/5] Liquidity (Macro/Micro Environment) - VectorDB + Govt Sources")
-    try:
-        # VectorDB: Risk factors, commodity exposure
-        liquidity_docs = []
-        vdb_queries = [
-            f"{ticker} risk factors competitive pressures",
-            f"{ticker} commodity input cost exposure raw materials"
-        ]
-
-        _seen_liq = set()
-        for query in vdb_queries:
-            results = await _alpha_vdb_search(db_instance, query, 2, _cur_yr)
-            for point in results:
-                if hasattr(point, 'payload'):
-                    meta = point.payload.get('metadata', {})
-                    content = point.payload.get('page_content', '')
-                    _k = _doc_key(meta, content)
-                    if _k in _seen_liq:
-                        continue
-                    _seen_liq.add(_k)
-                    liquidity_docs.append(Document(page_content=content, metadata=meta))
-
-        # Macro context depends on where the issuer is based. FRED/BLS is U.S.-only, so a
-        # domestic filer gets the dated U.S. snapshot and govt-site searches. A foreign
-        # issuer gets its HOME-MARKET policy rate and inflation from its own central bank
-        # and statistics office, and the U.S. snapshot is left out.
-        from app.utils.company_mapping import get_fpi_home_market
-        _home = get_fpi_home_market(ticker)
-        if _home is None:
-            # Dated, authoritative U.S. figures from the local FRED/BLS store. The web
-            # excerpts below carry no date, so they must never be the source of a rate.
-            from app.utils.macro_utils import get_macro_snapshot_text
-            _macro_snapshot = get_macro_snapshot_text()
-            if _macro_snapshot:
-                liquidity_docs.insert(0, Document(
-                    page_content=_macro_snapshot,
-                    metadata={'source': 'macro_snapshot', 'title': 'MACRO SNAPSHOT — FRED / BLS (dated, authoritative)'}
-                ))
-            # Web: Latest macro/liquidity conditions straight from FDIC and other govt sources
-            web_jobs = [
-                (f"{ticker} industry sector credit availability and financing conditions outlook", web_search_govt, 'govt_source'),
-                (f"{ticker} industry supply chain input costs trade policy tariffs outlook", web_search_govt, 'govt_source'),
-            ]
-        else:
-            market = _home['market'] or "home country"
-            rate_label = _home.get('rate') or "central bank policy rate"
-            inflation_label = _home.get('inflation') or "inflation rate"
-            if _home['domains']:
-                home_search = TavilySearch(max_results=3, include_domains=_home['domains'], time_range="year")
-            else:
-                home_search = TavilySearch(max_results=3, time_range="year")
-            web_jobs = [
-                (f"{ticker} {market} {rate_label} latest {_cur_yr}", home_search, 'home_market_source'),
-                (f"{market} {inflation_label} latest official statistics {_cur_yr}", home_search, 'home_market_source'),
-            ]
-            logger.info(f"    {ticker} is a foreign private issuer — home-market macro from {market}; U.S. snapshot omitted")
-
-        for query, search_tool, source_label in web_jobs:
-            web_results = await asyncio.to_thread(search_tool.invoke, {"query": query})
-            # Parse Tavily response using helper
-            sources = _parse_tavily_response(web_results, query)
-            for source in sources:
-                doc = Document(
-                    page_content=source['content'],
-                    metadata={'source': source_label, 'url': source['url'], 'title': source['title']}
+                # A 20-F has no "MD&A" heading; its MD&A is Item 5 (Operating and Financial Review).
+                alignment_queries.append(
+                    f"{ticker} operating and financial review and prospects Item 5 management tone "
+                    f"outlook risks latest {_cur_yr}"
                 )
-                liquidity_docs.append(doc)
 
-        alpha_dimensions['liquidity'] = {
-            'source': 'vectordb+govt' if _home is None else 'vectordb+home_market',
-            'documents': liquidity_docs,
-            'query_count': len(vdb_queries) + len(web_jobs)
-        }
-        logger.info(f"    Retrieved {len(liquidity_docs)} chunks (vectordb + govt sources)")
-
-    except Exception as e:
-        logger.error(f"    Error: {e}")
-        alpha_dimensions['liquidity'] = {'source': 'vectordb+govt', 'documents': [], 'query_count': 0}
-    
-    run_progress.finish("read.liquidity", detail=_alpha_sources_detail(alpha_dimensions, 'liquidity'))
-
-    # -------------------------------------------------------------------------
-    # PERFORMANCE: VectorDB only (current year 10-K vs prior 2 years for comparison)
-    # -------------------------------------------------------------------------
-    run_progress.start("read.performance")
-    logger.info(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
-    try:
-        _prior_yr, _prior_yr2 = _cur_yr - 1, _cur_yr - 2
-        performance_queries = [
-            f"{ticker} revenue net income annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2} financial results comparison",
-            f"{ticker} operating cash flow free cash flow income statement annual {_cur_yr} {_prior_yr} {_prior_yr2}",
-            f"{ticker} EBITDA margins ROE profitability metrics annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2}",
-            # MD&A: the drivers behind the numbers. Foreign private issuers (20-F) call it
-            # "Item 5. Operating and Financial Review and Prospects", not MD&A.
-            f"{ticker} management discussion analysis results of operations drivers of revenue and net income {_cur_yr} {_prior_yr} {_prior_yr2}",
-            f"{ticker} operating and financial review and prospects Item 5 results of operations {_cur_yr} {_prior_yr} {_prior_yr2}",
-            # Specific MD&A passages the broad queries above miss: operating income before
-            # the financial result, the financial result, income tax, and the cash-flow table.
-            f"{ticker} operating income before financial result operating margin decreased increased {_cur_yr} {_prior_yr}",
-            f"{ticker} financial result financial income financial expenses income before income tax {_cur_yr} {_prior_yr}",
-            f"{ticker} income tax expense benefit income for the year attributable to controlling interests {_cur_yr} {_prior_yr}",
-            f"{ticker} net cash provided by operating activities cash flow data {_cur_yr} {_prior_yr} {_prior_yr2}",
-        ]
-
-        performance_docs = []
-        _seen_perf = set()
-        for query in performance_queries:
-            results = await _alpha_vdb_search(db_instance, query, 4, _cur_yr)
-            for point in results:
-                if hasattr(point, 'payload'):
-                    meta = point.payload.get('metadata', {})
-                    content = point.payload.get('page_content', '')
-                    # Several queries hit the same page; keep each page once.
-                    _key = _doc_key(meta, content)
-                    if _key in _seen_perf:
-                        continue
-                    _seen_perf.add(_key)
-                    performance_docs.append(Document(page_content=content, metadata=meta))
-
-        alpha_dimensions['performance'] = {
-            'source': 'vectordb',
-            'documents': performance_docs,
-            'query_count': len(performance_queries)
-        }
-        logger.info(f"    Retrieved {len(performance_docs)} unique chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
-
-    except Exception as e:
-        logger.error(f"    Error: {e}")
-        alpha_dimensions['performance'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
-    
-    run_progress.finish("read.performance", detail=_alpha_sources_detail(alpha_dimensions, 'performance'))
-
-    # -------------------------------------------------------------------------
-    # HORIZON: SeekingAlpha only (trends, competitive positioning, moat)
-    # -------------------------------------------------------------------------
-    run_progress.start("read.horizon")
-    logger.info(" [4/5] Horizon (Structural Opportunity & Moat) - SeekingAlpha")
-    try:
-        horizon_queries = [
-            f"{ticker} operating margins vs industry average pricing power",
-            f"{ticker} R&D expenditure vs peers innovation",
-            f"{ticker} market share trends competitive positioning",
-            f"{ticker} competitive moat network effects switching costs"
-        ]
-
-        horizon_docs = []
-        for query in horizon_queries:
-            # All trends and notable trends fetched exclusively from SeekingAlpha
-            web_results = await asyncio.to_thread(web_search_seekingalpha.invoke, {"query": query})
-            sources = _parse_tavily_response(web_results, query)
-            for source in sources:
-                doc = Document(
-                    page_content=source['content'],
-                    metadata={'source': 'seekingalpha', 'url': source['url'], 'title': source['title']}
-                )
-                horizon_docs.append(doc)
-
-        # Web commentary alone let this dimension assert margin/R&D trends no source
-        # backed (and contradict the Performance section). Anchor it in the company's
-        # own latest annual report: business/competition, R&D, and the operating result.
-        horizon_filing_queries = [
-            f"{ticker} competition competitive position market share customers business overview",
-            f"{ticker} research and development expenditure innovation investment",
-            f"{ticker} operating income operating margin results of operations {_cur_yr} {_cur_yr - 1}",
-        ]
-        horizon_filing_docs = []
-        _seen_hz = set()
-        try:
-            for query in horizon_filing_queries:
-                for point in await _alpha_vdb_search(db_instance, query, 3, _cur_yr):
+            alignment_docs = []
+            _seen_align = set()
+            for query in alignment_queries:
+                results = await _alpha_vdb_search(db_instance, query, 3, _cur_yr)
+                for point in results:
                     if hasattr(point, 'payload'):
                         meta = point.payload.get('metadata', {})
                         content = point.payload.get('page_content', '')
                         _k = _doc_key(meta, content)
-                        if _k in _seen_hz:
+                        if _k in _seen_align:
                             continue
-                        _seen_hz.add(_k)
-                        horizon_filing_docs.append(Document(page_content=content, metadata=meta))
-        except Exception as hz_err:
-            logger.error(f"    Horizon filing retrieval error (non-fatal): {hz_err}")
-        horizon_docs = horizon_filing_docs + horizon_docs
+                        _seen_align.add(_k)
+                        alignment_docs.append(Document(page_content=content, metadata=meta))
 
-        alpha_dimensions['horizon'] = {
-            'source': 'filing+seekingalpha',
-            'documents': horizon_docs,
-            'query_count': len(horizon_queries) + len(horizon_filing_queries)
-        }
-        logger.info(f"    Retrieved {len(horizon_docs)} chunks ({len(horizon_filing_docs)} filing + {len(horizon_docs) - len(horizon_filing_docs)} SeekingAlpha)")
+            # ── Form 4 insider trading advisory data ──────────────────────────────
+            logger.info("    Fetching Form 4 insider trading data…")
+            try:
+                from rag.utils.form4_insights.advisory_hub import get_advisory_report
 
-    except Exception as e:
-        logger.error(f"    Error: {e}")
-        alpha_dimensions['horizon'] = {'source': 'seekingalpha', 'documents': [], 'query_count': 0}
+                # Foreign private issuers file no Form 4 — skip the DB lookup and tell the
+                # analysis why insider data is absent and what stands in for it.
+                form4_report = None if _foreign_issuer else await get_advisory_report(ticker)
+
+                if _foreign_issuer:
+                    alignment_docs.insert(0, Document(
+                        page_content=(
+                            f"INSIDER TRADING DATA — {ticker}\n\n{form4_exemption_message(ticker)} "
+                            f"Assess alignment from the 20-F ownership and related-party disclosures "
+                            f"below, and state that insider buying/selling data is not available for "
+                            f"this issuer by regulation (not because data is missing)."
+                        ),
+                        metadata={"source": "form4_exemption_note", "company": ticker, "content_type": "insider_trading"}
+                    ))
+                    logger.info(f"    {ticker} is a foreign private issuer — added Form 4 exemption note instead of insider data")
+                elif form4_report and "status" not in form4_report and "error" not in form4_report:
+                    lines = [f"INSIDER TRADING ANALYSIS (SEC Form 4) — {ticker}\n"]
+                    for issuer_name, detail in form4_report.items():
+                        if issuer_name in ("error", "status", "message", "ticker"):
+                            continue
+                        lines.append(f"\nAnalyst Insight:\n{detail.get('Reason', 'No analysis available')}\n")
+
+                    insider_doc = Document(
+                        page_content="\n".join(lines),
+                        metadata={"source": "form4_insider_trading", "company": ticker, "content_type": "insider_trading"}
+                    )
+                    # Insert first so it's never cut off by the docs[:5] slice in format_docs
+                    alignment_docs.insert(0, insider_doc)
+                    logger.info(f"    Form4 insider doc added ({len(form4_report)} issuer(s))")
+                else:
+                    logger.warning(f"    No Form4 data in DB for {ticker} — skipping insider doc")
+            except Exception as form4_err:
+                logger.error(f"    Form4 fetch error (non-fatal): {form4_err}")
+            # ─────────────────────────────────────────────────────────────────────
+
+            alpha_dimensions['alignment'] = {
+                'source': 'vectordb+form4',
+                'documents': alignment_docs,  # Form4/exemption doc at [0]; no count cap — a [:N] slice dropped the last query (Item 5)
+                'query_count': len(alignment_queries)
+            }
+            logger.info(f"    Total alignment docs: {len(alignment_docs)}")
+
+        except Exception as e:
+            logger.error(f"    Error: {e}")
+            alpha_dimensions['alignment'] = {'source': 'vectordb+form4', 'documents': [], 'query_count': 0}
     
-    run_progress.finish("read.horizon", detail=_alpha_sources_detail(alpha_dimensions, 'horizon'))
+        run_progress.finish("read.alignment", detail=_alpha_sources_detail(alpha_dimensions, 'alignment'))
 
-    # -------------------------------------------------------------------------
-    # ACTION: Web (RSI, SMA200, price, P/E, EBITDA) — all from trusted sources
-    # -------------------------------------------------------------------------
-    run_progress.start("read.action")
-    logger.info(" [5/5] Action (RSI / SMA200 / Price / P/E / EBITDA) - Web")
-    try:
-        action_docs = []
-
-        # Domains that reliably display live technical indicators, capped to the last 1 year
-        web_search_technical = TavilySearch(
-            max_results=3,
-            include_domains=TRUSTED_FINANCIAL_DOMAINS,
-            time_range="year"
-        )
-
-        web_search_technical_stock_price = TavilySearch(
-            max_results=5,
-            include_domains=TRUSTED_FINANCIAL_DOMAINS,
-            time_range="year"
-        )
-
-        # -- RSI(14) and current price from web --------------------------------
-        logger.info("    Fetching RSI(14) and current price from web...")
+    async def _read_liquidity():
+        # -------------------------------------------------------------------------
+        # LIQUIDITY: VectorDB (risk factors) + Web (latest FDIC / govt macro data)
+        # -------------------------------------------------------------------------
+        run_progress.start("read.liquidity")
+        logger.info(" [2/5] Liquidity (Macro/Micro Environment) - VectorDB + Govt Sources")
         try:
-            rsi_query = f"{ticker} RSI 14 relative strength index current technical indicators"
-            rsi_results = await asyncio.to_thread(web_search_technical.invoke, {"query": rsi_query})
-            rsi_sources = _parse_tavily_response(rsi_results, rsi_query)
-            for source in rsi_sources:
-                doc = Document(
-                    page_content=source['content'],
-                    metadata={
-                        'source': 'web_search',
-                        'url': source['url'],
-                        'title': source['title'],
-                        'data_type': 'technical'
-                    }
-                )
-                action_docs.append(doc)
-            logger.info(f"    Retrieved {len(rsi_sources)} RSI/price docs from web")
-        except Exception as rsi_err:
-            logger.error(f"    RSI web search error (non-fatal): {rsi_err}")
+            # VectorDB: Risk factors, commodity exposure
+            liquidity_docs = []
+            vdb_queries = [
+                f"{ticker} risk factors competitive pressures",
+                f"{ticker} commodity input cost exposure raw materials"
+            ]
 
-        # -- SMA200 from web ---------------------------------------------------
-        logger.info("    Fetching SMA200 from web...")
+            _seen_liq = set()
+            for query in vdb_queries:
+                results = await _alpha_vdb_search(db_instance, query, 2, _cur_yr)
+                for point in results:
+                    if hasattr(point, 'payload'):
+                        meta = point.payload.get('metadata', {})
+                        content = point.payload.get('page_content', '')
+                        _k = _doc_key(meta, content)
+                        if _k in _seen_liq:
+                            continue
+                        _seen_liq.add(_k)
+                        liquidity_docs.append(Document(page_content=content, metadata=meta))
+
+            # Macro context depends on where the issuer is based. FRED/BLS is U.S.-only, so a
+            # domestic filer gets the dated U.S. snapshot and govt-site searches. A foreign
+            # issuer gets its HOME-MARKET policy rate and inflation from its own central bank
+            # and statistics office, and the U.S. snapshot is left out.
+            from app.utils.company_mapping import get_fpi_home_market
+            _home = get_fpi_home_market(ticker)
+            if _home is None:
+                # Dated, authoritative U.S. figures from the local FRED/BLS store. The web
+                # excerpts below carry no date, so they must never be the source of a rate.
+                from app.utils.macro_utils import get_macro_snapshot_text
+                _macro_snapshot = get_macro_snapshot_text()
+                if _macro_snapshot:
+                    liquidity_docs.insert(0, Document(
+                        page_content=_macro_snapshot,
+                        metadata={'source': 'macro_snapshot', 'title': 'MACRO SNAPSHOT — FRED / BLS (dated, authoritative)'}
+                    ))
+                # Web: Latest macro/liquidity conditions straight from FDIC and other govt sources
+                web_jobs = [
+                    (f"{_who} industry sector credit availability and financing conditions outlook", web_search_govt, 'govt_source'),
+                    (f"{_who} industry supply chain input costs trade policy tariffs outlook", web_search_govt, 'govt_source'),
+                ]
+            else:
+                market = _home['market'] or "home country"
+                rate_label = _home.get('rate') or "central bank policy rate"
+                inflation_label = _home.get('inflation') or "inflation rate"
+                if _home['domains']:
+                    home_search = TavilySearch(max_results=3, include_domains=_home['domains'], time_range="year")
+                else:
+                    home_search = TavilySearch(max_results=3, time_range="year")
+                web_jobs = [
+                    (f"{_who} {market} {rate_label} latest {_cur_yr}", home_search, 'home_market_source'),
+                    (f"{market} {inflation_label} latest official statistics {_cur_yr}", home_search, 'home_market_source'),
+                ]
+                logger.info(f"    {ticker} is a foreign private issuer — home-market macro from {market}; U.S. snapshot omitted")
+
+            for query, search_tool, source_label in web_jobs:
+                web_results = await asyncio.to_thread(search_tool.invoke, {"query": query})
+                # Parse Tavily response using helper
+                sources = _parse_tavily_response(web_results, query)
+                for source in sources:
+                    doc = Document(
+                        page_content=source['content'],
+                        metadata={'source': source_label, 'url': source['url'], 'title': source['title']}
+                    )
+                    liquidity_docs.append(doc)
+
+            alpha_dimensions['liquidity'] = {
+                'source': 'vectordb+govt' if _home is None else 'vectordb+home_market',
+                'documents': liquidity_docs,
+                'query_count': len(vdb_queries) + len(web_jobs)
+            }
+            logger.info(f"    Retrieved {len(liquidity_docs)} chunks (vectordb + govt sources)")
+
+        except Exception as e:
+            logger.error(f"    Error: {e}")
+            alpha_dimensions['liquidity'] = {'source': 'vectordb+govt', 'documents': [], 'query_count': 0}
+    
+        run_progress.finish("read.liquidity", detail=_alpha_sources_detail(alpha_dimensions, 'liquidity'))
+
+    async def _read_performance():
+        # -------------------------------------------------------------------------
+        # PERFORMANCE: VectorDB only (current year 10-K vs prior 2 years for comparison)
+        # -------------------------------------------------------------------------
+        run_progress.start("read.performance")
+        logger.info(" [3/5] Performance (Earnings & Fundamentals) - VectorDB")
         try:
-            sma_query = f"{ticker} 200 day moving average SMA200 current stock price technical"
-            sma_results = await asyncio.to_thread(web_search_technical.invoke, {"query": sma_query})
-            sma_sources = _parse_tavily_response(sma_results, sma_query)
-            for source in sma_sources:
-                doc = Document(
-                    page_content=source['content'],
-                    metadata={
-                        'source': 'web_search',
-                        'url': source['url'],
-                        'title': source['title'],
-                        'data_type': 'technical'
-                    }
-                )
-                action_docs.append(doc)
-            logger.info(f"    Retrieved {len(sma_sources)} SMA200 docs from web")
-        except Exception as sma_err:
-            logger.error(f"    SMA200 web search error (non-fatal): {sma_err}")
+            _prior_yr, _prior_yr2 = _cur_yr - 1, _cur_yr - 2
+            performance_queries = [
+                f"{ticker} revenue net income annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2} financial results comparison",
+                f"{ticker} operating cash flow free cash flow income statement annual {_cur_yr} {_prior_yr} {_prior_yr2}",
+                f"{ticker} EBITDA margins ROE profitability metrics annual fiscal year {_cur_yr} {_prior_yr} {_prior_yr2}",
+                # MD&A: the drivers behind the numbers. Foreign private issuers (20-F) call it
+                # "Item 5. Operating and Financial Review and Prospects", not MD&A.
+                f"{ticker} management discussion analysis results of operations drivers of revenue and net income {_cur_yr} {_prior_yr} {_prior_yr2}",
+                f"{ticker} operating and financial review and prospects Item 5 results of operations {_cur_yr} {_prior_yr} {_prior_yr2}",
+                # Specific MD&A passages the broad queries above miss: operating income before
+                # the financial result, the financial result, income tax, and the cash-flow table.
+                f"{ticker} operating income before financial result operating margin decreased increased {_cur_yr} {_prior_yr}",
+                f"{ticker} financial result financial income financial expenses income before income tax {_cur_yr} {_prior_yr}",
+                f"{ticker} income tax expense benefit income for the year attributable to controlling interests {_cur_yr} {_prior_yr}",
+                f"{ticker} net cash provided by operating activities cash flow data {_cur_yr} {_prior_yr} {_prior_yr2}",
+            ]
+
+            performance_docs = []
+            _seen_perf = set()
+            for query in performance_queries:
+                results = await _alpha_vdb_search(db_instance, query, 4, _cur_yr)
+                for point in results:
+                    if hasattr(point, 'payload'):
+                        meta = point.payload.get('metadata', {})
+                        content = point.payload.get('page_content', '')
+                        # Several queries hit the same page; keep each page once.
+                        _key = _doc_key(meta, content)
+                        if _key in _seen_perf:
+                            continue
+                        _seen_perf.add(_key)
+                        performance_docs.append(Document(page_content=content, metadata=meta))
+
+            alpha_dimensions['performance'] = {
+                'source': 'vectordb',
+                'documents': performance_docs,
+                'query_count': len(performance_queries)
+            }
+            logger.info(f"    Retrieved {len(performance_docs)} unique chunks ({_cur_yr}/{_prior_yr}/{_prior_yr2} comparison)")
+
+        except Exception as e:
+            logger.error(f"    Error: {e}")
+            alpha_dimensions['performance'] = {'source': 'vectordb', 'documents': [], 'query_count': 0}
+    
+        run_progress.finish("read.performance", detail=_alpha_sources_detail(alpha_dimensions, 'performance'))
+
+    async def _read_horizon():
+        # -------------------------------------------------------------------------
+        # HORIZON: SeekingAlpha only (trends, competitive positioning, moat)
+        # -------------------------------------------------------------------------
+        run_progress.start("read.horizon")
+        logger.info(" [4/5] Horizon (Structural Opportunity & Moat) - SeekingAlpha")
+        try:
+            horizon_queries = [
+                f"{_who} operating margins vs industry average pricing power",
+                f"{_who} R&D expenditure vs peers innovation",
+                f"{_who} market share trends competitive positioning",
+                f"{_who} competitive moat network effects switching costs"
+            ]
+
+            horizon_docs = []
+            for query in horizon_queries:
+                # All trends and notable trends fetched exclusively from SeekingAlpha
+                web_results = await asyncio.to_thread(web_search_seekingalpha.invoke, {"query": query})
+                sources = _parse_tavily_response(web_results, query)
+                for source in sources:
+                    doc = Document(
+                        page_content=source['content'],
+                        metadata={'source': 'seekingalpha', 'url': source['url'], 'title': source['title']}
+                    )
+                    horizon_docs.append(doc)
+
+            # Web commentary alone let this dimension assert margin/R&D trends no source
+            # backed (and contradict the Performance section). Anchor it in the company's
+            # own latest annual report: business/competition, R&D, and the operating result.
+            horizon_filing_queries = [
+                f"{ticker} competition competitive position market share customers business overview",
+                f"{ticker} research and development expenditure innovation investment",
+                f"{ticker} operating income operating margin results of operations {_cur_yr} {_cur_yr - 1}",
+            ]
+            horizon_filing_docs = []
+            _seen_hz = set()
+            try:
+                for query in horizon_filing_queries:
+                    for point in await _alpha_vdb_search(db_instance, query, 3, _cur_yr):
+                        if hasattr(point, 'payload'):
+                            meta = point.payload.get('metadata', {})
+                            content = point.payload.get('page_content', '')
+                            _k = _doc_key(meta, content)
+                            if _k in _seen_hz:
+                                continue
+                            _seen_hz.add(_k)
+                            horizon_filing_docs.append(Document(page_content=content, metadata=meta))
+            except Exception as hz_err:
+                logger.error(f"    Horizon filing retrieval error (non-fatal): {hz_err}")
+            horizon_docs = horizon_filing_docs + horizon_docs
+
+            alpha_dimensions['horizon'] = {
+                'source': 'filing+seekingalpha',
+                'documents': horizon_docs,
+                'query_count': len(horizon_queries) + len(horizon_filing_queries)
+            }
+            logger.info(f"    Retrieved {len(horizon_docs)} chunks ({len(horizon_filing_docs)} filing + {len(horizon_docs) - len(horizon_filing_docs)} SeekingAlpha)")
+
+        except Exception as e:
+            logger.error(f"    Error: {e}")
+            alpha_dimensions['horizon'] = {'source': 'seekingalpha', 'documents': [], 'query_count': 0}
+    
+        run_progress.finish("read.horizon", detail=_alpha_sources_detail(alpha_dimensions, 'horizon'))
+
+    async def _read_action():
+        # -------------------------------------------------------------------------
+        # ACTION: Web (RSI, SMA200, price, P/E, EBITDA) — all from trusted sources
+        # -------------------------------------------------------------------------
+        run_progress.start("read.action")
+        logger.info(" [5/5] Action (RSI / SMA200 / Price / P/E / EBITDA) - Web")
+        try:
+            action_docs = []
+
+            # Domains that reliably display live technical indicators, capped to the last 1 year
+            web_search_technical = TavilySearch(
+                max_results=3,
+                include_domains=TRUSTED_FINANCIAL_DOMAINS,
+                time_range="year"
+            )
+
+            web_search_technical_stock_price = TavilySearch(
+                max_results=5,
+                include_domains=TRUSTED_FINANCIAL_DOMAINS,
+                time_range="year"
+            )
+
+            # -- RSI(14) and current price from web --------------------------------
+            logger.info("    Fetching RSI(14) and current price from web...")
+            try:
+                rsi_query = f"{_who} RSI 14 relative strength index current technical indicators"
+                rsi_results = await asyncio.to_thread(web_search_technical.invoke, {"query": rsi_query})
+                rsi_sources = _parse_tavily_response(rsi_results, rsi_query)
+                for source in rsi_sources:
+                    doc = Document(
+                        page_content=source['content'],
+                        metadata={
+                            'source': 'web_search',
+                            'url': source['url'],
+                            'title': source['title'],
+                            'data_type': 'technical'
+                        }
+                    )
+                    action_docs.append(doc)
+                logger.info(f"    Retrieved {len(rsi_sources)} RSI/price docs from web")
+            except Exception as rsi_err:
+                logger.error(f"    RSI web search error (non-fatal): {rsi_err}")
+
+            # -- SMA200 from web ---------------------------------------------------
+            logger.info("    Fetching SMA200 from web...")
+            try:
+                sma_query = f"{_who} 200 day moving average SMA200 current stock price technical"
+                sma_results = await asyncio.to_thread(web_search_technical.invoke, {"query": sma_query})
+                sma_sources = _parse_tavily_response(sma_results, sma_query)
+                for source in sma_sources:
+                    doc = Document(
+                        page_content=source['content'],
+                        metadata={
+                            'source': 'web_search',
+                            'url': source['url'],
+                            'title': source['title'],
+                            'data_type': 'technical'
+                        }
+                    )
+                    action_docs.append(doc)
+                logger.info(f"    Retrieved {len(sma_sources)} SMA200 docs from web")
+            except Exception as sma_err:
+                logger.error(f"    SMA200 web search error (non-fatal): {sma_err}")
         
-        # -- Current Stock Price from web ---------------------------------------------------
-        logger.info("    Fetching Current Stock Price from web...")
-        try:
-            sma_query = f"{ticker} today's stock price current stock price"
-            sma_results = await asyncio.to_thread(web_search_technical_stock_price.invoke, {"query": sma_query})
-            sma_sources = _parse_tavily_response(sma_results, sma_query)
-            for source in sma_sources:
-                doc = Document(
-                    page_content=source['content'],
-                    metadata={
-                        'source': 'web_search',
-                        'url': source['url'],
-                        'title': source['title'],
-                        'data_type': 'technical'
-                    }
-                )
-                action_docs.append(doc)
-            logger.info(f"    Retrieved {len(sma_sources)} Current Stock Price docs from web")
-        except Exception as sma_err:
-            logger.error(f"    Current Stock Price web search error (non-fatal): {sma_err}")
+            # -- Current Stock Price from web ---------------------------------------------------
+            logger.info("    Fetching Current Stock Price from web...")
+            try:
+                sma_query = f"{_who} today's stock price current stock price"
+                sma_results = await asyncio.to_thread(web_search_technical_stock_price.invoke, {"query": sma_query})
+                sma_sources = _parse_tavily_response(sma_results, sma_query)
+                for source in sma_sources:
+                    doc = Document(
+                        page_content=source['content'],
+                        metadata={
+                            'source': 'web_search',
+                            'url': source['url'],
+                            'title': source['title'],
+                            'data_type': 'technical'
+                        }
+                    )
+                    action_docs.append(doc)
+                logger.info(f"    Retrieved {len(sma_sources)} Current Stock Price docs from web")
+            except Exception as sma_err:
+                logger.error(f"    Current Stock Price web search error (non-fatal): {sma_err}")
 
-        # -- EBITDA from web search (trusted financial domains) ---------------
-        logger.info("    Fetching EBITDA from web (trusted domains)...")
-        try:
-            ebitda_query = f"{ticker} EBITDA annual earnings current"
-            ebitda_results = await asyncio.to_thread(web_search.invoke, {"query": ebitda_query})
-            ebitda_sources = _parse_tavily_response(ebitda_results, ebitda_query)
-            for source in ebitda_sources:
-                doc = Document(
-                    page_content=source['content'],
-                    metadata={
-                        'source': 'web_search',
-                        'url': source['url'],
-                        'title': source['title'],
-                        'data_type': 'ebitda'
-                    }
-                )
-                action_docs.append(doc)
-            logger.info(f"    Retrieved {len(ebitda_sources)} EBITDA docs from web")
-        except Exception as ebitda_err:
-            logger.error(f"    EBITDA web search error (non-fatal): {ebitda_err}")
+            # -- EBITDA from web search (trusted financial domains) ---------------
+            logger.info("    Fetching EBITDA from web (trusted domains)...")
+            try:
+                ebitda_query = f"{_who} EBITDA annual earnings current"
+                ebitda_results = await asyncio.to_thread(web_search.invoke, {"query": ebitda_query})
+                ebitda_sources = _parse_tavily_response(ebitda_results, ebitda_query)
+                for source in ebitda_sources:
+                    doc = Document(
+                        page_content=source['content'],
+                        metadata={
+                            'source': 'web_search',
+                            'url': source['url'],
+                            'title': source['title'],
+                            'data_type': 'ebitda'
+                        }
+                    )
+                    action_docs.append(doc)
+                logger.info(f"    Retrieved {len(ebitda_sources)} EBITDA docs from web")
+            except Exception as ebitda_err:
+                logger.error(f"    EBITDA web search error (non-fatal): {ebitda_err}")
 
-        # -- P/E ratio from web search (trusted financial domains) ------------
-        logger.info("    Fetching P/E ratio from web (trusted domains)...")
-        try:
-            pe_query = f"{ticker} P/E ratio price to earnings current valuation"
-            pe_results = await asyncio.to_thread(web_search.invoke, {"query": pe_query})
-            pe_sources = _parse_tavily_response(pe_results, pe_query)
-            for source in pe_sources:
-                doc = Document(
-                    page_content=source['content'],
-                    metadata={
-                        'source': 'web_search',
-                        'url': source['url'],
-                        'title': source['title'],
-                        'data_type': 'pe_ratio'
-                    }
-                )
-                action_docs.append(doc)
-            logger.info(f"    Retrieved {len(pe_sources)} P/E docs from web")
-        except Exception as pe_err:
-            logger.error(f"    P/E web search error (non-fatal): {pe_err}")
+            # -- P/E ratio from web search (trusted financial domains) ------------
+            logger.info("    Fetching P/E ratio from web (trusted domains)...")
+            try:
+                pe_query = f"{_who} P/E ratio price to earnings current valuation"
+                pe_results = await asyncio.to_thread(web_search.invoke, {"query": pe_query})
+                pe_sources = _parse_tavily_response(pe_results, pe_query)
+                for source in pe_sources:
+                    doc = Document(
+                        page_content=source['content'],
+                        metadata={
+                            'source': 'web_search',
+                            'url': source['url'],
+                            'title': source['title'],
+                            'data_type': 'pe_ratio'
+                        }
+                    )
+                    action_docs.append(doc)
+                logger.info(f"    Retrieved {len(pe_sources)} P/E docs from web")
+            except Exception as pe_err:
+                logger.error(f"    P/E web search error (non-fatal): {pe_err}")
 
-        alpha_dimensions['action'] = {
-            'source': 'web',
-            'documents': action_docs,
-            'query_count': 5
-        }
-        logger.info(f"    Total action docs: {len(action_docs)}")
+            alpha_dimensions['action'] = {
+                'source': 'web',
+                'documents': action_docs,
+                'query_count': 5
+            }
+            logger.info(f"    Total action docs: {len(action_docs)}")
 
-    except Exception as e:
-        logger.error(f"    Error: {e}")
-        alpha_dimensions['action'] = {
-            'source': 'web',
-            'documents': [],
-            'query_count': 0
-        }
+        except Exception as e:
+            logger.error(f"    Error: {e}")
+            alpha_dimensions['action'] = {
+                'source': 'web',
+                'documents': [],
+                'query_count': 0
+            }
     
-    run_progress.finish("read.action", detail=_alpha_sources_detail(alpha_dimensions, 'action'))
+        run_progress.finish("read.action", detail=_alpha_sources_detail(alpha_dimensions, 'action'))
+
+    # The five reads are independent of one another, so they run together (web searches run in threads).
+    _reads = await asyncio.gather(_read_alignment(), _read_liquidity(), _read_performance(), _read_horizon(), _read_action(),
+                                  return_exceptions=True)
+    for _key, _res in zip(("alignment", "liquidity", "performance", "horizon", "action"), _reads):
+        if isinstance(_res, BaseException):
+            logger.error(f"    {_key} read failed: {_res}")
+            alpha_dimensions.setdefault(_key, {'source': 'error', 'documents': [], 'query_count': 0})
+            run_progress.finish(f"read.{_key}", detail="Failed", ok=False)
 
     logger.info("\n" + "="*80)
     logger.info(f" RETRIEVAL COMPLETE: {sum(len(d.get('documents', [])) for d in alpha_dimensions.values())} total chunks")
@@ -3382,180 +3421,192 @@ def _analyst_notes_text(state) -> str:
     return "\n\n".join(d.page_content for d in (state.get("analyst_notes") or []) if getattr(d, "page_content", ""))
 
 
-def alpha_generate_report(state):
+async def alpha_generate_report(state):
     """
-    Generate ALPHA Framework report from dimensional analysis.
-    Creates <100 word summaries for each dimension and combines into final report.
+    Write the ALPHA report from the retrieved data (see rag/alpha/framework.py for the whole method):
+    pillars in parallel, each fact-checked against its own sources and revised once if needed; Action from live market data
+    when available; the stance computed from the pillar scores; a summary that explains that stance; the report assembled
+    in code. Every model call goes through the model registry, so its tokens are counted for whichever provider is used.
     """
-    logger.info("="*80)
-    logger.info(" ALPHA REPORT GENERATION")
-    logger.info("="*80 + "\n")
-    
-    ticker = state.get("ticker", "UNKNOWN")
-    alpha_dimensions = state.get("alpha_dimensions", {})
-    
-    import time
-    from langchain_openai import ChatOpenAI
-    from langchain_community.callbacks import get_openai_callback
-    from app.utils.usage_tracker import record_usage
+    from rag.alpha import framework as fw
     from rag.prompts.prompts import (
-        get_alpha_alignment_chain,
-        get_alpha_liquidity_chain,
-        get_alpha_performance_chain,
-        get_alpha_horizon_chain,
-        get_alpha_action_chain,
-        get_alpha_report_combiner_chain
+        get_alpha_alignment_chain, get_alpha_liquidity_chain, get_alpha_performance_chain, get_alpha_horizon_chain,
+        get_alpha_action_chain, get_alpha_summary_chain, get_alpha_revision_chain,
     )
+    from schemas.models import AlphaAlignmentOutput, AlphaDimensionOutput
+    from app.utils.company_mapping import get_company_name
 
-    llm = get_llm("analysis", timeout=90, track=False)  # this node records usage per dimension itself
-    
-    # Helper to format documents
+    ticker = (state.get("ticker") or "UNKNOWN").upper()
+    alpha_dimensions = state.get("alpha_dimensions", {}) or {}
+    logger.info("=" * 80)
+    logger.info(f" ALPHA REPORT GENERATION — {ticker}")
+    logger.info("=" * 80)
+
+    market = await asyncio.to_thread(_verified_market_values, ticker)
+    company = fw.display_name(ticker, market.get("long_name") or state.get("company_name"), get_company_name(ticker))
+
+    def llm_for(dim_key: str):
+        return get_llm("analysis", timeout=90, usage_label=f"alpha.{dim_key}")
+
     def format_docs(docs):
         return _format_alpha_docs(docs, ticker)
 
-    dimension_outputs = {}
-    
-    # Generate each dimension
-    dimensions = [
-        ('alignment', get_alpha_alignment_chain, "Alignment"),
-        ('liquidity', get_alpha_liquidity_chain, "Liquidity"),
-        ('performance', get_alpha_performance_chain, "Performance"),
-        ('horizon', get_alpha_horizon_chain, "Horizon"),
-        ('action', get_alpha_action_chain, "Action")
-    ]
-    
-    for dim_key, chain_func, dim_name in dimensions:
-        logger.info(f" Generating {dim_name}...")
+    pillars: dict = {}
+
+    def _result_dict(result) -> dict:
+        score = fw.clamp_score(getattr(result, "score", None))
+        rec = getattr(result, "recommendation", "") or ""
+        return {"analysis": result.analysis or "", "key_points": list(getattr(result, "key_points", []) or []),
+                "recommendation": rec, "score": score if score is not None else fw.score_from_text(rec)}
+
+    async def write(dim_key: str, chain, kwargs: dict, sources: list, output_model) -> None:
+        """One pillar: write it, check it against its sources, revise it once if the check finds problems."""
         run_progress.start(f"write.{dim_key}")
-
-        dim_data = alpha_dimensions.get(dim_key, {})
-        docs = dim_data.get('documents', [])
-
-        if dim_key == 'action':
-            technical_docs = [d for d in docs if d.metadata.get('data_type') == 'technical']
-            pe_docs        = [d for d in docs if d.metadata.get('data_type') == 'pe_ratio']
-            ebitda_docs    = [d for d in docs if d.metadata.get('data_type') == 'ebitda']
-            logger.info(f"    ACTION docs → {len(technical_docs)} technical, {len(pe_docs)} P/E, {len(ebitda_docs)} EBITDA")
-
-            verified = _fetch_verified_market_data(ticker)
-            action_document = (
-                (f"=== VERIFIED LIVE MARKET DATA (authoritative — use these values; ignore conflicting web figures) ===\n{verified}\n\n" if verified else "")
-                + f"=== TECHNICAL INDICATORS (web-sourced: RSI-14, SMA200, current price) ===\n"
-                f"{format_docs(technical_docs)}\n\n"
-                f"=== P/E RATIO (web-sourced) ===\n"
-                f"{format_docs(pe_docs)}\n\n"
-                f"=== EBITDA (web-sourced) ===\n"
-                f"{format_docs(ebitda_docs)}"
-            )
-            invoke_kwargs = {
-                "company": ticker,
-                "ticker": ticker,
-                "documents": action_document
-            }
-        else:
-            # For alignment: pass Form4 content as a dedicated variable so the
-            # LLM receives full data, while governance/MD&A docs go in {documents}.
-            invoke_kwargs = {
-                "company": ticker,
-                "ticker": ticker,
-                "documents": format_docs(
-                    [d for d in docs if d.metadata.get('content_type') != 'insider_trading'],
-                )
-            }
-            if dim_key == 'horizon':
-                # Horizon must not contradict what the Performance analysis reported.
-                invoke_kwargs['reported_fundamentals'] = (
-                    dimension_outputs.get('performance', {}).get('analysis')
-                    or "Not available."
-                )
-            if dim_key == 'alignment':
-                form4_doc = next(
-                    (d for d in docs if d.metadata.get('content_type') == 'insider_trading'),
-                    None
-                )
-                invoke_kwargs['form4_analysis'] = (
-                    form4_doc.page_content if form4_doc
-                    else "No SEC Form 4 insider trading data available for this ticker."
-                )
-
         try:
-            chain = chain_func(llm, ticker=ticker) if dim_key == 'performance' else chain_func(llm)
-            _dim_start = time.perf_counter()
-            with get_openai_callback() as cb:
-                result = chain.invoke(invoke_kwargs)
-            record_usage(
-                stage=f"alpha.{dim_key}", model="gpt-4o",
-                prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
-                total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - _dim_start,
-                detail=f"ticker={ticker}",
-            )
-
-            analysis = result.analysis
-
-            dimension_outputs[dim_key] = {
-                'analysis': analysis,
-                'key_points': result.key_points,
-                'recommendation': getattr(result, 'recommendation', '')
-            }
-            logger.info(f"    ✓ {dim_name}: {len(analysis)} chars, {len(result.key_points)} points")
-
+            result = await chain.ainvoke(kwargs)
+            out = _result_dict(result)
+            if not out["analysis"].strip():
+                raise ValueError("the model returned no analysis")
+            issues = fw.check_section(out["analysis"], sources)
+            revised = False
+            if issues:
+                logger.info(f"    {dim_key}: {len(issues)} fact-check finding(s); revising once")
+                try:
+                    fix = await get_alpha_revision_chain(llm_for(dim_key + ".revise"), output_model).ainvoke({
+                        "section": fw.PILLAR_NAMES[dim_key], "analysis": out["analysis"], "recommendation": out["recommendation"],
+                        "score": out["score"], "documents": "\n\n".join(sources)[:60000],
+                        "issues": "\n".join(f"- {i['text']}: {i['detail']}" for i in issues),
+                    })
+                    candidate = _result_dict(fix)
+                    if candidate["analysis"].strip():
+                        out, revised = candidate, True
+                        issues = fw.check_section(out["analysis"], sources)
+                except Exception as e:
+                    logger.warning(f"    {dim_key}: revision failed ({e}); keeping the first draft with its findings shown")
+            pillars[dim_key] = {**out, "status": "ok", "issues": issues, "revised": revised, "source": "model"}
+            run_progress.finish(f"write.{dim_key}", detail=(f"{len(issues)} figure(s) unconfirmed" if issues else "checked"))
         except Exception as e:
-            logger.error(f"    ✗ Error: {e}")
-            dimension_outputs[dim_key] = {
-                'analysis': f"Analysis unavailable due to insufficient data.",
-                'key_points': [],
-                'recommendation': ''
-            }
-            run_progress.finish(f"write.{dim_key}", detail="Not enough data", ok=False)
-        else:
-            run_progress.finish(f"write.{dim_key}")
-    
-    # Combine into final report
-    logger.info("\n Combining dimensions into final report...")
+            logger.error(f"    ✗ {dim_key}: {e}")
+            pillars[dim_key] = {"status": "failed", "reason": f"the analysis could not be written ({type(e).__name__})"}
+            run_progress.finish(f"write.{dim_key}", detail="Not available", ok=False)
 
+    def docs_of(key: str, exclude_insider: bool = False) -> list:
+        docs = (alpha_dimensions.get(key) or {}).get("documents", []) or []
+        return [d for d in docs if not (exclude_insider and d.metadata.get("content_type") == "insider_trading")]
+
+    def no_data(dim_key: str) -> None:
+        run_progress.start(f"write.{dim_key}")
+        pillars[dim_key] = {"status": "no_data", "reason": "no source data was found for this pillar"}
+        run_progress.finish(f"write.{dim_key}", detail="No data", ok=False)
+
+    # Alignment: Form 4 insider data + governance / MD&A
+    async def alignment():
+        all_docs = docs_of("alignment")
+        form4 = next((d for d in all_docs if d.metadata.get("content_type") == "insider_trading"), None)
+        gov = [d for d in all_docs if d.metadata.get("content_type") != "insider_trading"]
+        if not form4 and not gov:
+            return no_data("alignment")
+        form4_text = form4.page_content if form4 else "No SEC Form 4 insider trading data available for this ticker."
+        gov_text = format_docs(gov)
+        await write("alignment", get_alpha_alignment_chain(llm_for("alignment")),
+                    {"company": company, "ticker": ticker, "form4_analysis": form4_text, "documents": gov_text},
+                    [form4_text, gov_text], AlphaAlignmentOutput)
+
+    async def liquidity():
+        docs = docs_of("liquidity")
+        if not docs:
+            return no_data("liquidity")
+        text = format_docs(docs)
+        await write("liquidity", get_alpha_liquidity_chain(llm_for("liquidity")), {"company": company, "ticker": ticker, "documents": text},
+                    [text], AlphaDimensionOutput)
+
+    async def performance():
+        docs = docs_of("performance")
+        if not docs:
+            return no_data("performance")
+        text = format_docs(docs)
+        await write("performance", get_alpha_performance_chain(llm_for("performance"), ticker=ticker),
+                    {"company": company, "ticker": ticker, "documents": text}, [text], AlphaDimensionOutput)
+
+    async def horizon(perf_task):
+        await perf_task          # Horizon must not contradict what Performance reported
+        docs = docs_of("horizon")
+        if not docs:
+            return no_data("horizon")
+        text = format_docs(docs)
+        reported = (pillars.get("performance") or {}).get("analysis") or "Not available."
+        await write("horizon", get_alpha_horizon_chain(llm_for("horizon")),
+                    {"company": company, "ticker": ticker, "documents": text, "reported_fundamentals": reported},
+                    [text, fw.strip_tags(reported)], AlphaDimensionOutput)
+
+    async def action():
+        from_market = fw.action_from_market_data(ticker, market)
+        if from_market:
+            run_progress.start("write.action")
+            pillars["action"] = {**from_market, "status": "ok", "issues": [], "revised": False}
+            run_progress.finish("write.action", detail="live market data")
+            return
+        docs = docs_of("action")
+        if not docs:
+            return no_data("action")
+        technical = [d for d in docs if d.metadata.get("data_type") == "technical"]
+        pe_docs = [d for d in docs if d.metadata.get("data_type") == "pe_ratio"]
+        ebitda_docs = [d for d in docs if d.metadata.get("data_type") == "ebitda"]
+        verified_text = _fetch_verified_market_data(ticker, market)
+        text = ((f"=== VERIFIED LIVE MARKET DATA (authoritative — use these values; ignore conflicting web figures) ===\n{verified_text}\n\n" if verified_text else "")
+                + f"=== TECHNICAL INDICATORS (web-sourced: RSI-14, SMA200, current price) ===\n{format_docs(technical)}\n\n"
+                + f"=== P/E RATIO (web-sourced) ===\n{format_docs(pe_docs)}\n\n=== EBITDA (web-sourced) ===\n{format_docs(ebitda_docs)}")
+        await write("action", get_alpha_action_chain(llm_for("action")), {"company": company, "ticker": ticker, "documents": text},
+                    [text], AlphaDimensionOutput)
+
+    perf_task = asyncio.ensure_future(performance())
+    await asyncio.gather(alignment(), liquidity(), perf_task, horizon(perf_task), action(), return_exceptions=False)
+
+    # Stance from the pillar scores, then the summary that explains it
+    stance = fw.stance_from_scores({k: (p.get("score") if p.get("status") == "ok" else None) for k, p in pillars.items()})
     run_progress.start("combine")
+    notes_text = _analyst_notes_text(state)
+    pillar_block = "\n\n".join(
+        f"{fw.PILLAR_NAMES[k]} — score {p['score']:+d}, verdict: {p.get('recommendation') or 'n/a'}\n{fw.strip_tags(p['analysis'])}"
+        if p.get("status") == "ok" else f"{fw.PILLAR_NAMES[k]} — not available ({p.get('reason')})"
+        for k, _, _ in fw.PILLARS for p in [pillars.get(k, {"status": "failed", "reason": "not run"})])
+    basis = (f"mean pillar score {stance['mean']:+.2f} across {len(stance['used'])} pillars "
+             f"(bands: ≥1.25 Bullish, ≥0.5 Cautiously Bullish, above -0.5 Neutral, above -1.25 Cautiously Bearish, else Bearish)"
+             if stance["stance"] else f"only {len(stance['used'])} pillars available; at least {fw.MIN_PILLARS_FOR_STANCE} are needed")
+    if stance["missing"]:
+        basis += "; missing: " + ", ".join(fw.PILLAR_NAMES[k] for k in stance["missing"])
+    key_risk, notes_view = None, None
     try:
-        notes_text = _analyst_notes_text(state)
-        combiner_chain = get_alpha_report_combiner_chain(llm, analyst_notes=bool(notes_text))
-        combiner_inputs = {
-            "company": ticker,
-            "ticker": ticker,
-            "alignment": dimension_outputs.get('alignment', {}).get('analysis', 'N/A'),
-            "liquidity": dimension_outputs.get('liquidity', {}).get('analysis', 'N/A'),
-            "performance": dimension_outputs.get('performance', {}).get('analysis', 'N/A'),
-            "horizon": dimension_outputs.get('horizon', {}).get('analysis', 'N/A'),
-            "action": dimension_outputs.get('action', {}).get('analysis', 'N/A')
-        }
+        inputs = {"company": company, "ticker": ticker, "stance": stance["stance"] or "none (not enough data)",
+                  "stance_basis": basis, "pillars": pillar_block}
         if notes_text:
-            combiner_inputs["analyst_notes"] = notes_text
-        _combiner_start = time.perf_counter()
-        with get_openai_callback() as cb:
-            final_report = combiner_chain.invoke(combiner_inputs)
-        record_usage(
-            stage="alpha.combiner", model="gpt-4o",
-            prompt_tokens=cb.prompt_tokens, completion_tokens=cb.completion_tokens,
-            total_tokens=cb.total_tokens, duration_seconds=time.perf_counter() - _combiner_start,
-            detail=f"ticker={ticker}",
-        )
-        logger.info(f"    ✓ Final report: {len(final_report)} chars")
+            inputs["analyst_notes"] = notes_text
+        out = await get_alpha_summary_chain(llm_for("summary"), analyst_notes=bool(notes_text)).ainvoke(inputs)
+        summary = out.summary or fw.fallback_summary(company, stance, pillars)
+        if stance["stance"] and stance["stance"].lower() not in summary.lower():
+            # the summary must carry the computed stance; never leave a contradicting one in place
+            tag = "+" if stance["stance_score"] > 0 else "-" if stance["stance_score"] < 0 else "~"
+            summary += f" [[{tag}|Overall, the investment stance is {stance['stance']}.]]"
+        key_risk = (out.key_risk or "").strip() or None
+        notes_view = (out.notes_view or "").strip() or None
         run_progress.finish("combine")
-
     except Exception as e:
-        logger.error(f"    ✗ Error: {e}")
-        final_report = f"# ALPHA Framework Analysis: {ticker}\n\nError generating report: {str(e)}"
-        run_progress.finish("combine", ok=False)
-    
-    logger.info("\n" + "="*80)
-    logger.info(" ALPHA REPORT COMPLETE")
-    logger.info("="*80 + "\n")
-    
-    # Return final report as AIMessage
-    from langchain_core.messages import AIMessage
+        logger.error(f"    ✗ summary: {e}")
+        summary = fw.fallback_summary(company, stance, pillars)
+        run_progress.finish("combine", detail="Summary written from the pillar verdicts")
 
+    report = fw.assemble_report(company, ticker, pillars, stance, summary, notes_view)
+    signal = fw.signal_record(stance, pillars, key_risk)
+    signal["company"] = company
+    logger.info(f" ALPHA REPORT COMPLETE — {ticker}: {stance['stance']} (mean {stance['mean']}), "
+                f"{signal['fact_issues']} unconfirmed figure(s), missing {stance['missing'] or 'none'}")
+
+    from langchain_core.messages import AIMessage
     return {
-        "messages": [AIMessage(content=final_report)],
-        "alpha_report": final_report,
-        "Intermediate_message": final_report  # For compatibility with show_result node
+        "messages": [AIMessage(content=report)],
+        "alpha_report": report,
+        "alpha_result": signal,
+        "Intermediate_message": report  # For compatibility with show_result node
     }
 
 

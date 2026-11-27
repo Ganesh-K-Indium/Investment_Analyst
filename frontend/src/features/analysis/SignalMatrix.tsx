@@ -59,13 +59,21 @@ export const SignalMatrix: React.FC<SignalMatrixProps> = ({ rows, staleDays, onO
                                                 </span>
                                             )}
                                         </button>
-                                    ) : <span className="ad-muted">Not analysed</span>}
+                                    ) : null}
+                                    {latest?.detail?.partial ? (
+                                        <span className="ad-tag ad-tag--warn" title={`Not available: ${(latest.detail.missing ?? []).join(', ')}`}>partial</span>
+                                    ) : null}
+                                    {latest?.detail?.fact_issues ? (
+                                        <span className="ad-tag" title="Figures in the report that could not be confirmed in its sources">{latest.detail.fact_issues} unconfirmed</span>
+                                    ) : null}
+                                    {!latest && <span className="ad-muted">Not analysed</span>}
                                 </td>
                                 {PILLARS.map((p) => (
                                     <td key={p.key} className="ad-matrix__cell">
                                         {latest ? (
                                             <DirectionCell direction={latest.pillars?.[p.key] ?? null} previous={prev ? prev.pillars?.[p.key] ?? null : undefined}
-                                                label={`${r.ticker} ${p.label}`} />
+                                                label={`${r.ticker} ${p.label}`} score={latest.detail?.pillars?.[p.key]?.score}
+                                                verdict={latest.detail?.pillars?.[p.key]?.recommendation} />
                                         ) : <span className="ad-muted" aria-hidden="true">·</span>}
                                     </td>
                                 ))}
@@ -92,8 +100,8 @@ export const SignalMatrix: React.FC<SignalMatrixProps> = ({ rows, staleDays, onO
                 </tbody>
             </table>
             <p className="ad-footnote">
-                Pillar marks come from the facts each ALPHA report tags as positive or negative: <span className="ad-dir ad-dir--positive">+</span> supportive,
-                {' '}<span className="ad-dir ad-dir--mixed">±</span> mixed, <span className="ad-dir ad-dir--negative">−</span> weak. ▲▼ show a change since the run before.
+                Each pillar shows its own score from −2 (serious concern) to +2 (strongly supportive); hover it for the pillar&apos;s verdict.
+                The stance is the average of the available pillar scores. ▲▼ show a change since the run before.
                 Model stances are generated analysis, not investment advice.
             </p>
         </div>

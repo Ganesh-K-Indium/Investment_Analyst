@@ -41,6 +41,10 @@ export interface Usage {
     budget: number;
     over_budget: boolean;
     by_role: Record<string, { tokens: number; cost_usd: number }>;
+    /** Tokens of models with no known price (counted, not costed). Set prices in config: model_prices. */
+    unpriced_tokens?: number;
+    prices_as_of?: string;
+    by_model?: { model: string; priced: boolean; tokens: number; cost_usd: number }[];
 }
 
 export interface EditablePrompt {

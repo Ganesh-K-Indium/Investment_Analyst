@@ -334,6 +334,7 @@ class TickerSignal(Base):
     pillars = Column(JSON, nullable=True)             # {"alignment": "negative", "liquidity": "mixed", ...}
     fact_counts = Column(JSON, nullable=True)         # {"pos": 14, "neg": 6, "neutral": 9}
     key_risk = Column(Text, nullable=True)
+    detail = Column(JSON, nullable=True)              # {"pillars": {key: {score, recommendation, issues, ...}}, "partial", "missing", ...}
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     __table_args__ = (Index("idx_ticker_signals_user_ticker", "user_id", "ticker", "created_at"),)
@@ -444,6 +445,7 @@ class UsageEvent(Base):
     cost_usd    = Column(Float, nullable=False, default=0.0)
     task_id     = Column(String, nullable=True, index=True)   # the background run that spent it, when there is one
     portfolio_id = Column(Integer, nullable=True, index=True)  # the portfolio it was spent in (no FK: spend history outlives it)
+    priced      = Column(Boolean, nullable=False, default=True, server_default="true")  # False: the model's price is unknown
     created_at  = Column(DateTime, default=datetime.utcnow, index=True)
 
 

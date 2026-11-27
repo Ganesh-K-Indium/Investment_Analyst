@@ -45,6 +45,7 @@ class UsageTracker:
     run_label: str
     entries: list = field(default_factory=list)
     start_time: float = field(default_factory=time.time)
+    persisted: bool = False   # stored by app/services/usage_ledger.persist: an enclosing tracker must not count it again
 
     def record(self, stage: str, model: str, prompt_tokens: int = 0,
                completion_tokens: int = 0, total_tokens: int = 0,
@@ -125,20 +126,30 @@ def record_usage(stage: str, model: str, prompt_tokens: int = 0,
 class track_usage:
     """Context manager (sync and async) that makes a fresh UsageTracker the
     active one for `run_label` for the duration of the block, and logs a
-    full summary on exit — success or failure."""
+    full summary on exit — success or failure.
 
-    def __init__(self, run_label: str):
+    Trackers nest: when one is opened inside another (an ingestion file inside a metered request), what the inner one recorded
+    is handed to the outer one on exit, unless it was already stored (persisted) or the inner one is `detached` (a background
+    job that stores its own usage). So no token is lost and none is counted twice."""
+
+    def __init__(self, run_label: str, detached: bool = False):
         self.run_label = run_label
         self.tracker = UsageTracker(run_label=run_label)
+        self.detached = detached
         self._token = None
+        self._parent: Optional[UsageTracker] = None
 
     def __enter__(self) -> UsageTracker:
+        self._parent = _current_tracker.get()
         self._token = _current_tracker.set(self.tracker)
         return self.tracker
 
     def __exit__(self, exc_type, exc, tb):
-        self.tracker.log_summary()
+        if self.tracker.entries:
+            self.tracker.log_summary()
         _current_tracker.reset(self._token)
+        if self._parent is not None and not self.detached and not self.tracker.persisted and self._parent is not self.tracker:
+            self._parent.entries.extend(self.tracker.entries)
         return False
 
     async def __aenter__(self) -> UsageTracker:

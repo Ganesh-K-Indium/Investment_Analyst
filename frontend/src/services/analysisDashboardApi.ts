@@ -13,6 +13,26 @@ export interface TickerSignal {
     key_risk: string | null;
     portfolio_id: number | null;
     created_at: string | null;
+    /** Per-pillar verdicts of runs made with the structured ALPHA flow (empty for older runs). */
+    detail?: SignalDetail;
+}
+
+export interface PillarDetail {
+    status: 'ok' | 'failed' | 'no_data' | null;
+    score: number | null;
+    recommendation: string | null;
+    source?: 'model' | 'market_data' | null;
+    issues?: number;
+    revised?: boolean;
+}
+
+export interface SignalDetail {
+    pillars?: Partial<Record<PillarKey, PillarDetail>>;
+    partial?: boolean;
+    missing?: PillarKey[];
+    mean_score?: number | null;
+    fact_issues?: number;
+    company?: string;
 }
 
 export type PillarKey = 'alignment' | 'liquidity' | 'performance' | 'horizon' | 'action';
