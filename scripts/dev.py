@@ -219,6 +219,12 @@ def cmd_services(args) -> None:
         die("Docker is not available. Install Docker Desktop, or point DATABASE_URL / REDIS_URL / QDRANT_URL at your own services.")
     if args.action == "up":
         run(compose + ["up", "-d", "postgres", "redis", "qdrant"], cwd=ROOT)
+        unreachable = [name for name, port in SERVICES.items() if not wait_port(port, 30)]
+        if unreachable:
+            # A container can be running without its port published on this machine (e.g. it started while another
+            # project's container held the port). Recreating it publishes the port again; data lives in volumes.
+            say(f"{', '.join(unreachable)} running but not reachable on this machine: recreating", "warn")
+            run(compose + ["up", "-d", "--force-recreate", *unreachable], cwd=ROOT)
         for name, port in SERVICES.items():
             say(f"{name} on :{port}", "ok" if wait_port(port, 30) else "warn")
     else:

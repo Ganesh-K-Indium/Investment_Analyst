@@ -91,4 +91,13 @@ if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else "interactive"
     if name not in WORKERS:
         raise SystemExit(f"usage: python -m app.worker [{' | '.join(WORKERS)}]")
+
+    # Fail fast with a plain message instead of arq's five retries and a traceback when Redis is not reachable.
+    import redis
+    url = get_settings().redis_url
+    try:
+        redis.Redis.from_url(url, socket_connect_timeout=2).ping()
+    except redis.exceptions.RedisError as e:
+        raise SystemExit(f"Cannot reach Redis at {url} ({e.__class__.__name__}). Start it with "
+                         f"`python scripts/dev.py services up` (or `docker compose up -d redis`), or fix REDIS_URL in .env.")
     run_worker(WORKERS[name])
