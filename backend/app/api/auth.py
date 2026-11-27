@@ -179,13 +179,14 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     return await _issue_tokens(db, user, request, response)
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=TokenResponse, responses={204: {"description": "No sign-in in this browser"}})
 async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db_session)):
     """Exchange the httpOnly refresh cookie for a new access token and a new refresh token (rotation). Each refresh token
     works once; one presented again after its grace window revokes that whole sign-in, since it must have been copied."""
     raw = request.cookies.get(REFRESH_COOKIE_NAME)
     if not raw:
-        raise HTTPException(status_code=401, detail="No refresh token")
+        # Not signed in in this browser: a normal answer for every page load of a signed-out tab, not an error.
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     data = decode_token(raw)
     if not data or data.get("type") != "refresh" or not data.get("jti"):

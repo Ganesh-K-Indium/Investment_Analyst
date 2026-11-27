@@ -63,10 +63,7 @@ export const authApi = {
             body: JSON.stringify({ email, username, password, full_name, role }),
         }),
 
-    // No argument: the refresh token travels as an httpOnly cookie the
-    // browser attaches automatically, never touched by JS.
-    refresh: () =>
-        request<TokenResponse>('/refresh', { method: 'POST' }),
+    // Refreshing lives in services/authInterceptor.ts (refreshSession): one refresh at a time, across tabs.
 
     me: (token: string) =>
         request<UserProfile>('/me', {

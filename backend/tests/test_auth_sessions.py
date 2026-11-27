@@ -103,7 +103,7 @@ def test_logout_needs_no_access_token_and_only_ends_this_browser(env):
     r = laptop.post("/auth/logout")                                    # no bearer header at all
     assert r.status_code == 200 and not laptop.cookies.get(COOKIE)
     laptop.cookies.clear()
-    assert laptop.post("/auth/refresh").status_code == 401
+    assert laptop.post("/auth/refresh").status_code == 204          # signed out: "no session", not an error
     assert phone.post("/auth/refresh").status_code == 200             # the other device is still signed in
 
 

@@ -33,7 +33,7 @@ function hasAuthHeader(init: RequestInit | undefined): boolean {
 async function doRefresh(): Promise<RefreshResult> {
     try {
         const res = await baseFetch(`${AUTH_BASE}/refresh`, { method: 'POST', credentials: 'include' });
-        if (res.status === 401 || res.status === 403) return false;
+        if (res.status === 204 || res.status === 401 || res.status === 403) return false;   // 204: not signed in here
         if (!res.ok) return null;
         const tokens = await res.json();
         setAccessToken(tokens.access_token);
