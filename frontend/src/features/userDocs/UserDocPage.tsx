@@ -4,7 +4,8 @@ import { Sidebar } from '../../components/layout/Sidebar';
 import { Header } from '../../components/layout/Header';
 import { Button } from '../../components/ui/Button';
 import { ReviewPanel } from './ReviewPanel';
-import { PdfViewer } from '../documents/PdfViewer';
+import { PageNav } from './PageNav';
+import { PdfViewer, type PdfViewerHandle } from '../documents/PdfViewer';
 import { API_BASE } from '../documents/documentsApi';
 import { STATUS_LABEL, userDocsApi, type DocContent, type DocTypes, type UserDoc } from './userDocsApi';
 import '../documents/DocumentsPage.css';
@@ -28,6 +29,7 @@ export const UserDocPage: React.FC = () => {
     const [edit, setEdit] = useState<{ doc_type: string; entity: string; period: string; tags: string; label: string } | null>(null);
     const [busy, setBusy] = useState(false);
     const columnRef = useRef<HTMLDivElement>(null);
+    const viewer = useRef<PdfViewerHandle>(null);
     const [visible, setVisible] = useState(1);
     const [pdfError, setPdfError] = useState<string | null>(null);
     const tab = (params.get('tab') as Tab) || 'content';
@@ -61,10 +63,36 @@ export const UserDocPage: React.FC = () => {
         setBusy(true);
         try { setDoc(await userDocsApi.approve(id)); setError(null); } catch (e) { setError(e instanceof Error ? e.message : 'Could not approve'); } finally { setBusy(false); }
     };
+    // Keep the text column on the page being viewed. With a PDF the original leads; without one the text column is the only scroller.
+    const textDriven = useRef(false);
     useEffect(() => {
+        if (textDriven.current) { textDriven.current = false; return; }
         const col = columnRef.current, el = document.getElementById(`ud-page-${visible}`);
         if (col && el) col.scrollTo({ top: el.offsetTop - col.offsetTop - 8, behavior: 'smooth' });
     }, [visible]);
+    const pageNums = content?.pages.map(p => p.page) ?? [];
+    const pos = pageNums.indexOf(visible);
+    const goPage = (n: number | undefined) => {
+        if (n === undefined) return;
+        if (doc?.has_pdf) viewer.current?.scrollToPage(n);
+        setVisible(n);
+    };
+    const onTextScroll = () => {
+        if (doc?.has_pdf) return;
+        const col = columnRef.current;
+        if (!col || !content) return;
+        const probe = col.scrollTop + col.clientHeight / 3;
+        let current = content.pages[0]?.page ?? 1;
+        for (const p of content.pages) {
+            const el = document.getElementById(`ud-page-${p.page}`);
+            if (el && el.offsetTop - col.offsetTop <= probe) current = p.page;
+        }
+        if (current !== visible) { textDriven.current = true; setVisible(current); }
+    };
+    const onPagesKey = (e: React.KeyboardEvent) => {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); goPage(pageNums[pos - 1]); }
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); goPage(pageNums[pos + 1]); }
+    };
 
     const saveDetails = async () => {
         if (!edit) return;
@@ -120,26 +148,39 @@ export const UserDocPage: React.FC = () => {
 
                 {tab === 'content' && (
                     content ? (
+                        <div className="ud-read">
+                        <div className="ud-review__side" role="tablist" aria-label="Pages" onKeyDown={onPagesKey}>
+                            {content.pages.map(p => (
+                                <button key={p.page} role="tab" aria-selected={visible === p.page} tabIndex={visible === p.page ? 0 : -1} className={`ud-pagebtn${visible === p.page ? ' ud-pagebtn--on' : ''}`} onClick={() => goPage(p.page)}>
+                                    <span>Page {p.page}</span>
+                                    {pagePreview(p) && <span className="ud-pagebtn__state ud-pagebtn__preview" title={pagePreview(p) ?? undefined}>{pagePreview(p)}</span>}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="ud-read__main">
+                        <PageNav page={visible} total={doc.pages || pageNums.length} hasPrev={pos > 0} hasNext={pos >= 0 && pos < pageNums.length - 1} onPrev={() => goPage(pageNums[pos - 1])} onNext={() => goPage(pageNums[pos + 1])} />
                         <div className={`ud-split${doc.has_pdf ? ' ud-split--pdf' : ''}`}>
                             {doc.has_pdf && (
                                 <div className="ud-orig" aria-label="Original document">
-                                    <PdfViewer key={doc.id} url={`${API_BASE}/user-documents/${doc.id}/pdf`} scale={1} overlays={NO_OVERLAYS} onPageCount={() => undefined} onVisiblePage={onVisible} onError={setPdfError} />
+                                    <PdfViewer ref={viewer} key={doc.id} url={`${API_BASE}/user-documents/${doc.id}/pdf`} scale={1} overlays={NO_OVERLAYS} onPageCount={() => undefined} onVisiblePage={onVisible} onError={setPdfError} />
                                     {pdfError && <div className="docs-error" role="alert">{pdfError}</div>}
                                 </div>
                             )}
-                            <div className="ud-content" ref={columnRef}>
+                            <div className="ud-content" ref={columnRef} onScroll={onTextScroll}>
                                 {content.pages.map(p => (
-                                    <section key={p.page} id={`ud-page-${p.page}`} className={`ud-pagecard${doc.has_pdf && p.page === visible ? ' ud-pagecard--on' : ''}`} aria-label={`Page ${p.page}`}>
-                                        <h3>Page {p.page}{p.label ? <span className="ud-sub"> · {p.label}</span> : null}</h3>
+                                    <section key={p.page} id={`ud-page-${p.page}`} className={`ud-pagecard${p.page === visible ? ' ud-pagecard--on' : ''}`} aria-label={`Page ${p.page}`}>
+                                        <h3>Page {p.page}</h3>
                                         {p.blocks.length ? p.blocks.map((b, i) => <Block key={i} b={b} />) : <pre className="ud-pre">{p.text}</pre>}
                                     </section>
                                 ))}
                             </div>
                         </div>
+                        </div>
+                        </div>
                     ) : !BUSY.has(doc.status) && doc.status !== 'failed' ? <p className="ud-empty">Loading content…</p> : null
                 )}
 
-                {tab === 'review' && doc.owner && <ReviewPanel doc={doc} onChanged={setDoc} />}
+                {tab === 'review' && doc.owner && <ReviewPanel doc={doc} content={content} onChanged={setDoc} />}
 
                 {tab === 'details' && (
                     <div className="ud-details">
@@ -181,6 +222,14 @@ export const UserDocPage: React.FC = () => {
         </div>
     );
 };
+
+/** A page's own words for the page list: its first heading, else its first line of text. Never the page-type guess, which can repeat. */
+function pagePreview(p: DocContent['pages'][number]): string | null {
+    const heading = p.blocks.find(b => b.type === 'heading' && b.text?.trim())?.text;
+    const line = heading ?? p.blocks.find(b => b.text?.trim())?.text ?? p.text;
+    const first = (line ?? '').split('\n').map(l => l.trim()).find(Boolean);
+    return first ? (first.length > 40 ? `${first.slice(0, 40)}…` : first) : null;
+}
 
 const Block: React.FC<{ b: DocContent['pages'][number]['blocks'][number] }> = ({ b }) => {
     if (b.type === 'heading') return <h4 className="ud-h">{b.text}</h4>;

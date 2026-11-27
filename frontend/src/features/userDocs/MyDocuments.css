@@ -76,11 +76,18 @@
 .ud-dl dd { margin: 0; color: var(--color-text-primary); }
 .ud-dl--tight { grid-template-columns: 160px minmax(0, 1fr); margin-bottom: var(--space-3); }
 
-.ud-review { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--space-5); align-items: start; }
-.ud-review__side { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
+.ud-review { display: grid; grid-template-columns: 150px minmax(320px, 1fr) minmax(0, 1.1fr); gap: var(--space-4); align-items: start; }
+.ud-review__side { display: flex; flex-direction: column; gap: 2px; position: sticky; top: var(--space-4); max-height: calc(100vh - 300px); overflow-y: auto; }
+.ud-review__nav { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-border-light); }
+.ud-review__pos { padding: 0 var(--space-2); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+.ud-review__next { margin-left: auto; }
+.ud-review__orig { position: sticky; top: var(--space-4); height: calc(100vh - 300px); min-height: 360px; display: flex; flex-direction: column; overflow: auto; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-bg-secondary); }
+.ud-review__orig .pdfv-scroll { flex: 1; min-height: 0; }
+.ud-review__text { margin: var(--space-3); }
 .ud-pagebtn { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 8px var(--space-3); border: 0; border-radius: var(--radius-lg); background: transparent; font: inherit; font-size: var(--font-size-sm); color: var(--color-text-secondary); cursor: pointer; text-align: left; }
 .ud-pagebtn--on { background: var(--color-primary-light); color: var(--color-primary); }
 .ud-pagebtn__state { font-size: 11px; color: var(--color-text-tertiary); }
+.ud-pagebtn__preview { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ud-pagebtn__state--pending { color: var(--color-warning-dark); font-weight: var(--font-weight-semibold); }
 .ud-review__main { background: var(--color-bg-primary); border: 1px solid var(--color-border); border-radius: 10px; padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 .ud-review__head { display: flex; justify-content: space-between; gap: var(--space-4); align-items: flex-start; flex-wrap: wrap; }
@@ -99,12 +106,17 @@
 
 .ud-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 10px 18px; border-radius: var(--radius-lg); background: var(--color-text-primary); color: var(--color-text-inverse); font-size: var(--font-size-sm); z-index: 40; }
 
-@media (max-width: 800px) { .ud-review { grid-template-columns: 1fr; } .ud-review__side { flex-direction: row; flex-wrap: wrap; max-height: none; } .ud-dl { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .ud-review { grid-template-columns: 150px minmax(0, 1fr); } .ud-review__orig { grid-column: 1 / -1; position: static; height: 70vh; } }
+@media (max-width: 800px) { .ud-review, .ud-read { grid-template-columns: 1fr; } .ud-review__side { position: static; } .ud-review__side { flex-direction: row; flex-wrap: wrap; max-height: none; } .ud-dl { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .ud-progress__bar, .ud-drop { transition: none; } }
 
+.ud-read { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+.ud-read__main { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.ud-read .ud-review__nav { border-bottom: 0; padding-bottom: 0; }
+.ud-read .ud-content { height: calc(100vh - 340px); min-height: 360px; overflow: auto; position: relative; }
 .ud-split { display: block; }
 .ud-split--pdf { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
-.ud-split--pdf .ud-orig, .ud-split--pdf .ud-content { height: calc(100vh - 300px); min-height: 360px; overflow: auto; position: relative; }
+.ud-split--pdf .ud-orig, .ud-split--pdf .ud-content { height: calc(100vh - 340px); min-height: 360px; overflow: auto; position: relative; }
 .ud-orig { display: flex; flex-direction: column; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-bg-secondary); }
 .ud-orig .pdfv-scroll { flex: 1; min-height: 0; }
 .ud-pagecard--on { border-color: var(--color-primary); }

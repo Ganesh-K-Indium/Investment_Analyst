@@ -1,17 +1,23 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../../components/ui/Button';
-import { userDocsApi, type ReviewItem, type ReviewState, type UserDoc } from './userDocsApi';
+import { PdfViewer, type PdfViewerHandle } from '../documents/PdfViewer';
+import { PageNav } from './PageNav';
+import { API_BASE } from '../documents/documentsApi';
+import { userDocsApi, type DocContent, type ReviewItem, type ReviewState, type UserDoc } from './userDocsApi';
 
 interface Props {
     doc: UserDoc;
+    content: DocContent | null;
     onChanged: (d: UserDoc) => void;
 }
+
+const NO_OVERLAYS: never[] = [];
 
 /**
  * What the readers were not sure of. Nothing doubtful is searchable until you confirm or correct it (your setting "Index low-confidence
  * text"): confirm a value as it is, pick another reading, or type the right one; a page opens up for search once nothing on it is left.
  */
-export const ReviewPanel: React.FC<Props> = ({ doc, onChanged }) => {
+export const ReviewPanel: React.FC<Props> = ({ doc, content, onChanged }) => {
     const [state, setState] = useState<ReviewState | null>(null);
     const [page, setPage] = useState<number | null>(null);
     const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -34,6 +40,41 @@ export const ReviewPanel: React.FC<Props> = ({ doc, onChanged }) => {
     const items = useMemo(() => (state?.items ?? []).filter(i => i.page === page && (showDone || !i.resolved)), [state, page, showDone]);
     const pending = state?.pending ?? 0;
     const thisPage = state?.pages.find(p => p.page === page);
+    const pageList = state?.pages ?? [];
+    const idx = pageList.findIndex(p => p.page === page);
+    const nextToCheck = pageList.slice(idx + 1).concat(pageList.slice(0, Math.max(idx, 0))).find(p => p.pending > 0 && !p.skipped)?.page ?? null;
+
+    // The original page sits beside the values: picking a page scrolls the PDF, and scrolling the PDF picks the page.
+    const viewer = useRef<PdfViewerHandle>(null);
+    const pdfReady = useRef(false);
+    const fromPdf = useRef(false);
+    const pageRef = useRef(page);
+    useEffect(() => { pageRef.current = page; }, [page]);
+    const [pdfError, setPdfError] = useState<string | null>(null);
+    useEffect(() => {
+        if (fromPdf.current) { fromPdf.current = false; return; }
+        if (page !== null && pdfReady.current) viewer.current?.scrollToPage(page);
+    }, [page]);
+    const onPageCount = useCallback(() => {
+        // Pages lay out on the next frame; jump to the selected page once they have.
+        window.requestAnimationFrame(() => {
+            if (pageRef.current !== null) viewer.current?.scrollToPage(pageRef.current);
+            pdfReady.current = true;
+        });
+    }, []);
+    const onVisiblePage = useCallback((n: number) => {
+        if (!pdfReady.current || n === pageRef.current) return;
+        fromPdf.current = true;
+        setPage(n);
+    }, []);
+    const go = (n: number | null | undefined) => { if (n != null) setPage(n); };
+    const onKey = (e: React.KeyboardEvent) => {
+        const t = e.target as HTMLElement;
+        if (t.closest('input, textarea, select, [contenteditable="true"]')) return;
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); go(pageList[idx - 1]?.page); }
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); go(pageList[idx + 1]?.page); }
+    };
+    const pageText = content?.pages.find(p => p.page === page);
 
     const submit = async (key: string, body: { edits?: Record<string, string>; confirm?: string[]; confirm_pages?: number[]; skip_pages?: number[]; unskip_pages?: number[] }) => {
         setBusy(key); setError(null);
@@ -80,15 +121,20 @@ export const ReviewPanel: React.FC<Props> = ({ doc, onChanged }) => {
 
     return (
         <div className="ud-review">
-            <div className="ud-review__side" role="tablist" aria-label="Pages">
+            <div className="ud-review__side" role="tablist" aria-label="Pages" onKeyDown={onKey}>
                 {state.pages.map(p => (
-                    <button key={p.page} role="tab" aria-selected={page === p.page} className={`ud-pagebtn${page === p.page ? ' ud-pagebtn--on' : ''}`} onClick={() => setPage(p.page)}>
+                    <button key={p.page} role="tab" aria-selected={page === p.page} tabIndex={page === p.page ? 0 : -1} className={`ud-pagebtn${page === p.page ? ' ud-pagebtn--on' : ''}`} onClick={() => setPage(p.page)}>
                         <span>Page {p.page}</span>
                         <span className={`ud-pagebtn__state${p.pending || p.unreadable ? ' ud-pagebtn__state--pending' : ''}`}>{p.skipped ? 'left out' : p.unreadable ? 'unreadable' : p.pending ? `${p.pending} to check` : p.indexed ? 'searchable' : 'clear'}</span>
                     </button>
                 ))}
             </div>
             <div className="ud-review__main">
+                <PageNav page={page} total={doc.pages || pageList.length} hasPrev={idx > 0} hasNext={idx >= 0 && idx < pageList.length - 1} onPrev={() => go(pageList[idx - 1]?.page)} onNext={() => go(pageList[idx + 1]?.page)}>
+                    {nextToCheck !== null && nextToCheck !== page && (
+                        <Button size="sm" className="ud-review__next" variant={(thisPage?.pending ?? 0) === 0 ? 'primary' : 'ghost'} onClick={() => go(nextToCheck)}>Next page to check: {nextToCheck}</Button>
+                    )}
+                </PageNav>
                 <div className="ud-review__head">
                     <div>
                         <strong>{pending === 0 ? 'Everything is checked' : `${pending} value${pending === 1 ? '' : 's'} to check`}</strong>
@@ -122,6 +168,19 @@ export const ReviewPanel: React.FC<Props> = ({ doc, onChanged }) => {
                     </div>
                 )}
                 {thisPage?.unreadable || thisPage?.skipped ? null : items.length === 0 ? <p className="ud-empty">{showDone ? 'No items on this page.' : 'Nothing left to check on this page.'}</p> : <ul className="ud-items">{items.map(row)}</ul>}
+            </div>
+            <div className="ud-review__orig" aria-label={`Original, page ${page ?? ''}`}>
+                {doc.has_pdf ? (
+                    <>
+                        <PdfViewer ref={viewer} key={doc.id} url={`${API_BASE}/user-documents/${doc.id}/pdf`} scale={1} overlays={NO_OVERLAYS} onPageCount={onPageCount} onVisiblePage={onVisiblePage} onError={setPdfError} />
+                        {pdfError && <div className="docs-error" role="alert">{pdfError}</div>}
+                    </>
+                ) : pageText ? (
+                    <section className="ud-pagecard ud-review__text" aria-label={`Page ${pageText.page} as read`}>
+                        <h3>Page {pageText.page} as read</h3>
+                        <pre className="ud-pre">{pageText.text}</pre>
+                    </section>
+                ) : <p className="ud-empty">No preview for this page.</p>}
             </div>
         </div>
     );
